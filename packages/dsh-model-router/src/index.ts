@@ -32,6 +32,7 @@ import {
 import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, skipTo, startStep, unmetCondition } from './router.ts'
 import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
 import { conditionSkipNotice, failoverNotice, skipNotice } from './notice.ts'
+import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
 
 export const name = 'model-router'
 export const inject = ['llm']
@@ -63,19 +64,24 @@ export function apply(ctx: Context, config: Config): void {
   // after this plugin loads are not visible here.
   warnUnregisteredProviders(ctx, readConfig(config))
 
+  // The durable failover ledger. Registered through an inject intercept (the
+  // llm-pi-ai pattern for an optional service): the child fiber waits for the
+  // projection registry instead of reading it once at apply time, so this
+  // plugin loads and routes even in a composition without the registry — the
+  // child simply stays pending there and only the history view degrades.
+  // The durable failover ledger. The registry is a core service in every real
+  // profile; read it through `ctx.get` (the optional-service rule) so a
+  // composition without it still routes — only the history view degrades.
+  const projections = ctx.get('sessionProjections') as ProjectionRegistryFace | undefined
+  projections?.register(failoverHistoryProjection)
+
   // Failure observation. `session/event` is the sanctioned post-commit feed;
   // `agent/request-error` records synchronously for delegated failures. Both
   // write the same fact, and the notice reads whichever arrived.
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     if (event.type !== 'assistant/attempt') return
-    const data = event.data as { turn: number; step: number; stream: readonly { chunk: { type: string; reason?: { kind: string; failure?: { code: string } } } }[] }
-    for (let i = data.stream.length - 1; i >= 0; i -= 1) {
-      const chunk = data.stream[i]!.chunk
-      if (chunk.type !== 'finish') continue
-      const failure = chunk.reason?.failure
-      if (failure !== undefined) states.noteFailure(session, data.turn, data.step, failure.code)
-      break
-    }
+    const failure = failureCodeOfStream(event.data.stream)
+    if (failure !== undefined) states.noteFailure(session, event.data.turn, event.data.step, failure)
   })
 
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
@@ -240,6 +246,11 @@ function warnUnregisteredProviders(ctx: Context, config: { profiles: readonly Pr
 /** The projection registry's read face this plugin uses; structurally typed to keep the service optional. */
 interface ProjectionReadFace {
   snapshot(session: Session): { values: Record<string, unknown> }
+}
+
+/** The projection registry's write face: one namespaced unit, disposed with this fiber. */
+interface ProjectionRegistryFace {
+  register(definition: unknown): () => void
 }
 
 /**

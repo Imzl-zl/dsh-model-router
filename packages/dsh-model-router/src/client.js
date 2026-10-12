@@ -28,6 +28,7 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
     var React = require('react')
+    var ReactDOM = require('react-dom')
     var h = React.createElement
     var prim = require('@deepseek-ai/dsh-client-ui-primitives')
     var clientStore = require('@deepseek-ai/dsh-client-store')
@@ -133,6 +134,22 @@ window.__ModuleLoader__.load({
       close: '关闭',
       cancel: '取消',
       defaultProfileNotActive: '未启用',
+      failoverHistoryButton: '故障转移历史',
+      failoverHistoryDrawerTitle: '最近故障转移历史',
+      failoverHistoryEmpty: '暂无故障转移记录',
+      failoverHistoryLoading: '正在加载...',
+      failoverHistoryError: '加载失败',
+      failoverHistoryRetry: '重试',
+      failoverHistoryHint: '仅显示最近 20 个会话的记录',
+      failoverEntrySettled: '已成功',
+      failoverEntryUnsettled: '未完成',
+      failoverSessionLabel: '会话',
+      codeRATE_LIMIT: '限流',
+      codeSERVER: '服务端错误',
+      codeTIMEOUT: '超时',
+      codeTRANSPORT: '网络传输中断',
+      codeEMPTY_RESPONSE: '空回复',
+      codeINVALID_REQUEST: '请求被拒绝',
       problemsTitle: '配置有问题，保存已被阻止：',
       problemDuplicateId: '规则 ID 重复：{id}',
       problemEmptyChain: '规则 {id} 的候选链为空',
@@ -235,6 +252,22 @@ window.__ModuleLoader__.load({
       close: 'Close',
       cancel: 'Cancel',
       defaultProfileNotActive: 'Disabled',
+      failoverHistoryButton: 'Failover History',
+      failoverHistoryDrawerTitle: 'Recent Failover History',
+      failoverHistoryEmpty: 'No failover records yet',
+      failoverHistoryLoading: 'Loading...',
+      failoverHistoryError: 'Failed to load',
+      failoverHistoryRetry: 'Retry',
+      failoverHistoryHint: 'Showing the 20 most recent sessions',
+      failoverEntrySettled: 'completed',
+      failoverEntryUnsettled: 'unfinished',
+      failoverSessionLabel: 'Session',
+      codeRATE_LIMIT: 'rate limit',
+      codeSERVER: 'server error',
+      codeTIMEOUT: 'timeout',
+      codeTRANSPORT: 'transport failure',
+      codeEMPTY_RESPONSE: 'empty response',
+      codeINVALID_REQUEST: 'request rejected',
       problemsTitle: 'Configuration problems block the save:',
       problemDuplicateId: 'Duplicate profile id: {id}',
       problemEmptyChain: 'Profile {id} has no candidates',
@@ -347,6 +380,15 @@ window.__ModuleLoader__.load({
       needHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
       needHint: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.4 },
       needInput: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 4, color: 'var(--dsw-alias-label-primary)', padding: '3px 6px', fontSize: 11.5, outline: 'none', width: 120 },
+      drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 250 },
+      drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 460, maxWidth: '90vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 32px rgba(0,0,0,0.4)', zIndex: 251, display: 'flex', flexDirection: 'column' },
+      drawerHeader: { padding: '18px 24px', borderBottom: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+      drawerBody: { padding: '16px 24px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 },
+      drawerHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', margin: 0 },
+      drawerSession: { fontSize: 11, fontWeight: 600, color: 'var(--dsw-alias-label-tertiary)', textTransform: 'uppercase', letterSpacing: 0.5 },
+      drawerEntry: { borderLeft: '2px solid var(--dsw-alias-brand-primary)', paddingLeft: 12, display: 'flex', flexDirection: 'column', gap: 3 },
+      drawerEntryTime: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' },
+      drawerEntryText: { fontSize: 12.5, color: 'var(--dsw-alias-label-primary)', lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
     }
 
     // ---------- helpers ----------
@@ -409,7 +451,7 @@ window.__ModuleLoader__.load({
       var host = seed()
       var draft = seed()
       var autoActive = true
-      var ui = { activeId: null, modal: null, riskAck: false, catalog: null, catalogFailed: false }
+      var ui = { activeId: null, modal: null, riskAck: false, catalog: null, catalogFailed: false, catalogLoading: false, drawerOpen: false, drawerLoading: false, drawerError: false, drawerRows: [] }
       var saving = false
       var failed = false
 
@@ -433,12 +475,36 @@ window.__ModuleLoader__.load({
             riskAck: ui.riskAck,
             catalog: ui.catalog,
             catalogFailed: ui.catalogFailed,
+            catalogLoading: ui.catalogLoading,
+            drawerOpen: ui.drawerOpen,
+            drawerLoading: ui.drawerLoading,
+            drawerError: ui.drawerError,
+            drawerRows: ui.drawerRows,
           },
           catalog: ui.catalog,
         }
       }
       var store = createSnapshotStore(project())
       function publish() { store.set(project()) }
+
+      /** Load the model catalog on first use; the modals render the loading state. */
+      function ensureCatalog() {
+        if (ui.catalog !== null || ui.catalogLoading) return
+        ui.catalogLoading = true
+        publish()
+        ctx.remote.session.modelCatalog().then(function (result) {
+          // Remote calls resolve to the `{ ok, value }` envelope, not the bare
+          // value (the ui-settings-models / ui-model-selection precedent).
+          if (!result.ok) throw new Error(result.error?.message ?? 'model catalog refused')
+          ui.catalog = result.value
+          ui.catalogLoading = false
+          publish()
+        }).catch(function () {
+          ui.catalogFailed = true
+          ui.catalogLoading = false
+          publish()
+        })
+      }
 
       scope.subscribe(function () {
         host = seed()
@@ -467,15 +533,6 @@ window.__ModuleLoader__.load({
 
       var controller = {
         store: store,
-        loadCatalog: function () {
-          ctx.remote.session.modelCatalog().then(function (catalog) {
-            ui.catalog = catalog
-            publish()
-          }).catch(function () {
-            ui.catalogFailed = true
-            publish()
-          })
-        },
         setEnabled: function (value) { draft.enabled = value; publish() },
         setActive: function (id) { ui.activeId = id; autoActive = false; publish() },
         discard: function () {
@@ -587,9 +644,50 @@ window.__ModuleLoader__.load({
           publish()
         },
         setDefaultEnabled: function (value) { draft.default.enabled = value; publish() },
-        openModal: function (modal) { ui.modal = modal; ui.riskAck = false; publish() },
+        openModal: function (modal) {
+          ui.modal = modal
+          ui.riskAck = false
+          // The catalog is loaded lazily: at apply time the host may still be
+          // registering adapters, and an early read caches an empty catalog
+          // forever.
+          if (modal.kind === 'new-profile' || modal.kind === 'catalog') ensureCatalog()
+          publish()
+        },
         closeModal: function () { ui.modal = null; ui.riskAck = false; publish() },
         setRiskAck: function (value) { ui.riskAck = value; publish() },
+        /** Open the drawer and load the recent failover ledger across sessions. */
+        openDrawer: function () {
+          ui.drawerOpen = true
+          ui.drawerLoading = true
+          ui.drawerError = false
+          ui.drawerRows = []
+          publish()
+          ctx.remote.session.list({}).then(function (result) {
+            if (!result.ok) throw new Error('session list refused')
+            var sessions = (result.value?.items ?? []).slice()
+              .sort(function (a, b) { return (b.updatedAt ?? 0) - (a.updatedAt ?? 0) })
+              .slice(0, 20)
+            return Promise.all(sessions.map(function (session) {
+              return ctx.remote.session.projections({ sessionId: session.sessionId }).then(function (read) {
+                // The live read is `{ asOfSeq, values }`; a migration-required
+                // read carries cached values only. Either way the key is read
+                // straight out of `values` — no `kind` gate (the wire payload
+                // does not carry one).
+                var values = read.ok && read.value !== null ? (read.value.values ?? {}) : {}
+                return { sessionId: session.sessionId, entries: values['router/failover-history'] ?? [] }
+              })
+            }))
+          }).then(function (rows) {
+            ui.drawerRows = rows.filter(function (row) { return row.entries.length > 0 })
+            ui.drawerLoading = false
+            publish()
+          }).catch(function () {
+            ui.drawerError = true
+            ui.drawerLoading = false
+            publish()
+          })
+        },
+        closeDrawer: function () { ui.drawerOpen = false; publish() },
       }
       return controller
     }
@@ -704,6 +802,47 @@ window.__ModuleLoader__.load({
                   },
                 }),
                 h('span', { style: S.needHint }, t('needContextHint'))))) : null))
+    }
+
+    /** The failure-code labels live in the dictionaries; the drawer shows the code verbatim when a key is missing. */
+    function codeLabel(t, code) {
+      return t('code' + code)
+    }
+
+    /** The failover-history drawer: a body-portaled panel over the plugin page. */
+    function FailoverDrawer(props) {
+      var t = props.t
+      var ui = props.state.ui
+      var rows = ui.drawerRows
+      var body = []
+      if (ui.drawerLoading) body.push(h('p', { key: 'loading', style: S.drawerHint }, t('failoverHistoryLoading')))
+      else if (ui.drawerError) body.push(h('button', { key: 'retry', type: 'button', style: S.manualBtn, onClick: props.onReload }, t('failoverHistoryRetry')))
+      else if (rows.length === 0) body.push(h('p', { key: 'empty', style: S.drawerHint }, t('failoverHistoryEmpty')))
+      else {
+        rows.forEach(function (row, rowIndex) {
+          if (rowIndex > 0) body.push(h('div', { key: 'sep' + rowIndex, style: { height: 1, background: 'var(--dsw-alias-border-l2)', margin: '12px 0' } }))
+          body.push(h('div', { key: 's' + rowIndex, style: S.drawerSession }, t('failoverSessionLabel') + ' ' + String(row.sessionId).slice(0, 8)))
+          row.entries.forEach(function (entry, index) {
+            body.push(h('div', { key: 'e' + rowIndex + '_' + index, style: S.drawerEntry },
+              h('div', { style: S.drawerEntryTime }, new Date(entry.time).toLocaleString()),
+              h('div', { style: S.drawerEntryText },
+                '主模型 ' + entry.from + ' 失败（' + codeLabel(t, entry.code) + '），切换至 ' + entry.to,
+                h('span', { style: Object.assign({}, S.failoverTag, entry.settled ? null : { color: 'var(--dsw-alias-state-warn)' }) },
+                  entry.settled ? t('failoverEntrySettled') : t('failoverEntryUnsettled')))))
+          })
+        })
+      }
+      return ReactDOM.createPortal(
+        h('div', { style: S.drawerOverlay },
+          h('div', { style: S.drawerPanel, role: 'dialog', 'aria-label': t('failoverHistoryDrawerTitle') },
+            h('div', { style: S.drawerHeader },
+              h('h3', { style: { fontSize: 15, fontWeight: 600, margin: 0 } }, t('failoverHistoryDrawerTitle')),
+              h('button', { type: 'button', style: S.iconBtn, 'aria-label': t('close'), onClick: props.onClose }, h(Icon, { d: ICON_CLOSE }))),
+            h('div', { style: S.drawerBody },
+              h('p', { style: S.drawerHint }, t('failoverHistoryHint')),
+              body))),
+        document.body,
+      )
     }
 
     /** The failover connector between two nodes. */
@@ -1154,6 +1293,8 @@ window.__ModuleLoader__.load({
               title: t('globalSwitchDesc'),
               onChange: function (next) { props.onEnabled(next) },
             }))),
+        h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 12 } },
+          h('button', { type: 'button', style: S.catalogBtn, onClick: props.onOpenDrawer }, t('failoverHistoryButton'))),
         h(SettingsForm, {
           labels: {
             unavailable: t('formUnavailable'),
@@ -1248,6 +1389,7 @@ window.__ModuleLoader__.load({
         modal !== null && modal.kind === 'new-profile' ? h(NewProfileModal, {
           t: t,
           catalog: state.catalog,
+          catalogLoading: state.ui.catalogLoading,
           profiles: draft.profiles,
           configured: draft.profiles.map(function (profile) { return profile.when.provider + '/' + profile.when.model }),
           onClose: props.onCloseModal,
@@ -1262,11 +1404,11 @@ window.__ModuleLoader__.load({
         modal !== null && modal.kind === 'catalog' ? h(CatalogPickerModal, {
           t: t,
           catalog: state.catalog,
+          catalogLoading: state.ui.catalogLoading,
           onClose: props.onCloseModal,
           onAdd: function (entries) { props.onAddCandidates(modal.profileId, entries, modal.isDefault) },
         }) : null,
-        modal !== null && modal.kind === 'delete' ? h(RiskConfirmation, {
-          open: true,
+        modal !== null && modal.kind === 'delete' ? h(RiskConfirmation, {          open: true,
           title: t('riskConfirmTitle'),
           description: t('riskConfirmDesc'),
           acknowledgeLabel: t('riskConfirmCheckbox'),
@@ -1277,6 +1419,13 @@ window.__ModuleLoader__.load({
           onAcknowledgedChange: props.onRiskAck,
           onCancel: props.onCloseModal,
           onConfirm: function () { props.onDeleteProfile(modal.profileId) },
+        }) : null,
+        state.ui.drawerOpen ? h(FailoverDrawer, {
+          key: 'drawer',
+          t: t,
+          state: state,
+          onClose: props.onCloseDrawer,
+          onReload: props.onOpenDrawer,
         }) : null)
     }
 
@@ -1295,7 +1444,6 @@ window.__ModuleLoader__.load({
 
       var scope = ctx.configForms.get(CONFIG_NS)
       var controller = createController(ctx, scope, t)
-      controller.loadCatalog()
 
       var actions = {
         onSave: function () { controller.save() },
@@ -1317,6 +1465,8 @@ window.__ModuleLoader__.load({
         onAddCandidates: function (profileId, entries, isDefault) { controller.addCandidates(profileId, entries, isDefault) },
         onDeleteProfile: function (profileId) { controller.openModal({ kind: 'delete', profileId: profileId }) },
         onRiskAck: function (value) { controller.setRiskAck(value) },
+        onOpenDrawer: function () { controller.openDrawer() },
+        onCloseDrawer: function () { controller.closeDrawer() },
       }
 
       ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({

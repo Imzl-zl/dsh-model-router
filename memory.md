@@ -78,7 +78,9 @@ assistant/message  provider=spike-backup served_by=spike-backup
 - **Phase 1 host 侧闭环已完成并测试通过**（8/8 组合测试）：有序备份链 + switchOn + 每候选次数 + 硬总上限 + 中文 notice + 预校验跳过 + 总闸 + default 纯备用池 + 加载时结构校验；实现在 `packages/dsh-model-router/`。
 - **Phase 1 UI 半包已完成并浏览器实测**：`src/client.js`（单文件 factory，~1200 行）挂 `plugins.bundle.config`（key=包名），控制器自持草稿 + `scope.mutate` 整段保存；实测通过：表单全量渲染、总开关、新建 Profile（manual 路径；目录为空时 manual 入口可达）、primary 钉死、候选增删、attempt 编辑、保存持久化、刷新恢复、switchOn 嵌套写入往返。实测抓到并修 5 个 bug：2 处括号语法、serverError 词典 key、**store devFreeze 冻结草稿**（发布必须克隆）、空目录弹窗断点、active tab 卡默认页（autoActive 标志）。
 - **Phase 2 条件路由落地并测试通过**（2026-10-13）：宿主 `agent/pre-step` 取图片（`type==='image'` 规则）+ `sessionProjections.snapshot()['contextPressure'].projectedTokens`（canonical wire 值，未采样即 undefined=未满足），每步一次、重试稳定；用户路由豁免；条件不满足跳过并留 condition-skip notice。UI needs 面板（images Switch + minContextTokens 输入，仅备用候选）+ 推理档位徽标（catalog reasoning.efforts）。测试：单测 12/12（node strip-types 直导 .ts）+ 组合测试 condition-skip 场景 + 全套 9/9；浏览器实测 needs 编辑→保存→刷新恢复。
-- **下一步（Phase 2 剩余）**：durable lineage 投影（`router/failover-history`，wire UI-scale）+ 遥测抽屉（`ctx.remote.session.list()` → `projections({sessionId})`，设置页无 session 上下文）；catalog picker 真实 provider 补测；删除 Profile RiskConfirmation 补测；notice 浏览器样式、热卸载。
+- **Phase 2 全部完成并实测**（2026-10-13）：① 条件路由（needs images/minContextTokens，pre-step + contextPressure wire view）；② lineage 投影 `router/failover-history`（fold request/header 'change' + 前序失败 attempt，bounded 20，wire UI-scale）；③ 遥测抽屉（portal + list→projections，浏览器实测三条真实条目）；④ catalog picker 真实 provider 下实测通过（stub 三 group）；⑤ 保存路径无 overlay boot 实测通过。测试：单测 23/12（pure）+ 组合 9/9 + 浏览器全链路。
+- **本轮抓到并修 4 个客户端 bug**：drawer 读错状态路径（state.ui.*）、projections 响应无 kind 字段却以其门禁、modelCatalog 忘拆 `{ok,value}` 信封、catalog apply 时抢跑改懒加载。另发现测试环境坑：overlay 改写行 config 后同 boot 内该 ns 保存被 revision 冲突拒（无 overlay 正常）。
+- **下一步（收尾项）**：删除 Profile 的 RiskConfirmation 流程补测；notice 浏览器样式；投影 fork/resume 一致性；热卸载测试；`dsh plugin add` 交付路径复验（当前用 link 安装）。
 - 交付物：三 commit（852ad64 设计基线 / c01fcb2 Phase 1 host / 9a43ac5 Phase 1 UI）。
 - 决策笔记状态：三篇 `proposed/` + 四篇 `implemented/`（外置插件实跑、砍 needs.tools、reasoningEffort 预校验、cap advance 过 switchOn 门）。
 

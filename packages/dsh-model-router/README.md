@@ -80,9 +80,16 @@ default:                      # pure fallback pool for unconfigured models
 - **The candidate cursor is process memory.** It resets on restart; the
   durable attempt lineage is rebuilt from the session log, not from the
   cursor. Cross-restart continuation is deferred.
-- **No channel health view.** No latency/success-rate/cooldown telemetry
-  exists; a failover-history drawer is planned (Phase 2) reading a plugin
-  session projection.
+- **The failover ledger.** Every route switch is folded from the durable log
+  (`request/header` with `reason: 'change'` plus the preceding failed attempt)
+  into a plugin-owned session projection (`router/failover-history`), bounded
+  to the last 20 entries. The config page's drawer reads it through
+  `ctx.remote.session.list()` plus per-session `projections()` reads. A
+  user-initiated model switch (a `change` header with no preceding failure) is
+  deliberately not an entry.
+- **No channel health view.** The drawer shows failover history only — no
+  latency/success-rate/cooldown telemetry exists, and none is planned without
+  a global health subsystem.
 - **Agent main requests only.** Compaction and session-title calls keep their
   own DSH-provided model configuration and are not routed by this plugin.
 - **`needs` conditions are read once per step and the user's own route is

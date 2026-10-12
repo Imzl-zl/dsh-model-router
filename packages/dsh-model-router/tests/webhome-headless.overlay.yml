@@ -1,0 +1,41 @@
+# One-off overlay: boot the headless profile inside the WEB home so the
+# failover session lands in the home-level session store the web client lists.
+
+- id: llm-deepseek
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true
+
+# Force a durable projection checkpoint on every event: the CLI exits right
+# after turn/end, which races the fire-and-forget mandatory write.
+- id: session-projection-cache
+  config:
+    writeEveryEvents: 1
+    writeIntervalMs: 100
+
+- id: agent-default-model
+  config:
+    provider: stub-primary
+    model: stub-model
+
+- insert:
+    - id: stub-adapter
+      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-model-router/tests/stub-adapter.mjs'
+    - id: model-router
+      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-model-router/src/index.ts'
+      config:
+        enabled: true
+        profiles:
+          - id: p1
+            when: { provider: stub-primary, model: stub-model }
+            candidates:
+              - { provider: stub-primary, model: stub-model, maxAttempts: 2 }
+              - { provider: stub-backup, model: stub-model, maxAttempts: 1 }
+            switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+            maxTotalAttempts: 6
+        default:
+          enabled: false
+          candidates: []
+          switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+          maxTotalAttempts: 3

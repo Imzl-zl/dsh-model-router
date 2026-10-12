@@ -67,6 +67,9 @@ const SCENARIOS = [
     },
     check(events) {
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      // The fold's failover marker, asserted straight from the durable log: the
+      // second header records the route change the lineage unit folds.
+      eq('header reasons', headerReasons(events), ['initial', 'change'])
       eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT', 'RATE_LIMIT'])
       eq('notice count', notices(events).length, 1)
       ok('notice mentions 限流', notices(events)[0]?.text.includes('限流'))
@@ -274,6 +277,8 @@ function readEvents() {
 
 const headers = events => events.filter(e => e.type === 'request/header')
   .map(e => `${e.data.header.config.provider}/${e.data.header.config.model}`)
+
+const headerReasons = events => events.filter(e => e.type === 'request/header').map(e => e.data.reason)
 
 const failedAttempts = events => events.filter(e => e.type === 'assistant/attempt').map(e => {
   const chunks = [...e.data.stream].reverse()

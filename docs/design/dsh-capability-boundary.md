@@ -363,6 +363,14 @@ Cordis `fiber.update(config)` 先校验再 `restart()`（[`fiber.ts:731-751`](fi
 
 **结论**：结构错误（ID 重复、上限非法、候选为空）硬失败；provider 未注册（环境漂移）降级为该 profile 停用 + warn + UI 徽章。
 
+### 8.6 lineage 投影与设置页读取（2026-10-13，【源码证实】）
+
+- `SessionProjectionRegistry.register()` 接受带 wire 块的定义即对客户端可见；`snapshot(session)` 遍历全部注册项、唯一门槛是有无 wire（[`session-projection/src/index.ts:339-353`](file:///D:/sudy/github/deepseek-harness/packages/session/session-projection/src/index.ts#L339)）。插件经 `ctx.get('sessionProjections')` 可选注册（无该服务的组合仍可路由，仅历史视图降级）。key 必须命名空间化（`router/failover-history`），`stateVersion` 从 1 起。
+- failover 标记 = `request/header` 的 `reason: 'change'`（[`session/types.ts:273`](file:///D:/sudy/github/deepseek-harness/packages/core/session/src/types.ts#L273)）+ 前一个失败 attempt 的 code；用户主动换模型（无前序失败）不记入。组合测试已从 durable log 直证 `['initial','change']` 序列。
+- **投影缓存是 fire-and-forget 写回**：`turn/end` 是必写点但异步（[`session-projection-cache/src/index.ts:96-103`](file:///D:/sudy/github/deepseek-harness/packages/session/session-projection-cache/src/index.ts#L96)），CLI 退出会竞态掉最后的写——集成测试断言缓存行时需在 overlay 里把 `writeEveryEvents` 调小。
+- **client 半包远程调用解析出的是 `{ok, value}` 信封**，不是裸值（先例：`ui-settings-models/src/client/store.ts:236`、`ui-model-selection/src/client/catalog.ts:56` 均读 `response.value`）；`session/list` 收空请求、行带 cached 投影 hints，`session/projections` 按 sessionId 返回 live `values`（**响应不带 `kind` 字段**，勿以其门禁）。
+- **测试环境坑**：`--patch` overlay 改写某插件行的 config 后，同一 boot 内该 ns 的 settings 保存会被 revision 冲突拒绝（overlay 应用与 describe 的 revision 竞态）；无 overlay 的 boot 保存正常。插件保存路径本身已在多个 boot 实证。
+
 ### 8.5 条件路由取数（2026-10-13，【源码证实】）
 
 - `agent/pre-step` 的 payload 为 `{ agent, messages: UserMessage[], turn, step, signal }`（[`runtime-types.ts:320`](file:///D:/sudy/github/deepseek-harness/packages/core/agent/src/runtime-types.ts#L320)）；spike 7.7 已实测它在 `agent/request` 之前触发且消息可读。图片判定用与 llm 层一致的规则：内容块 `type === 'image'`（[`llm/src/index.ts:1078-1082`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm/src/index.ts#L1078) 的文本模型图片投影同款）。

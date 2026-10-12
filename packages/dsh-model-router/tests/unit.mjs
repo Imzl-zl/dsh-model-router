@@ -20,6 +20,7 @@ import {
   startStep,
   unmetCondition,
 } from '../src/router.ts'
+import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, MAX_ENTRIES } from '../src/lineage.ts'
 import { emptyConditions } from '../src/state.ts'
 
 let passed = 0
@@ -165,3 +166,104 @@ test('resolveChain matches the exact route, else the enabled default pool with a
 })
 
 console.log(`\n${passed} unit test(s) passed`)
+
+// ---- failover-history fold ----
+
+/** Minimal committed-event shapes the fold reads. */
+const header = (provider, model, reason, time = 1000) => ({
+  type: 'request/header', time, data: { header: { config: { provider, model } }, reason },
+})
+const failedAttempt = (code, turn = 1, step = 1) => ({
+  type: 'assistant/attempt', time: 1100, data: { turn, step, stream: [{ type: 'chunk', chunk: { type: 'finish', reason: { kind: 'error', failure: { code } } } }] },
+})
+const okAttempt = (turn = 1, step = 1) => ({
+  type: 'assistant/attempt', time: 1100, data: { turn, step, stream: [{ type: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } }] },
+})
+const message = (turn = 1) => ({ type: 'assistant/message', time: 1200, data: { turn } })
+const fold = (...events) => events.reduce(failoverHistoryProjection.apply, failoverHistoryProjection.init())
+
+test('fold records a failover: from, to, code, settled', () => {
+  const state = fold(
+    { type: 'turn/start', time: 900, data: { turn: 1 } },
+    { type: 'step/start', time: 950, data: { turn: 1, step: 1 } },
+    header('p-a', 'm-a', 'initial'),
+    failedAttempt('RATE_LIMIT'),
+    header('p-b', 'm-b', 'change'),
+    okAttempt(),
+    message(),
+  )
+  assert.equal(state.entries.length, 1)
+  assert.deepEqual(state.entries[0], {
+    time: 1000, turn: 1, step: 1, from: 'p-a/m-a', to: 'p-b/m-b', code: 'RATE_LIMIT', settled: true,
+  })
+})
+
+test('fold ignores a user-initiated switch (change without a failure)', () => {
+  const state = fold(header('p-a', 'm-a', 'initial'), header('p-b', 'm-b', 'change'))
+  assert.equal(state.entries.length, 0)
+})
+
+test('fold ignores series headers and successful attempts', () => {
+  const state = fold(header('p-a', 'm-a', 'initial'), okAttempt(), header('p-a', 'm-a', 'series'))
+  assert.equal(state.entries.length, 0)
+})
+
+test('a failure older than the previous header does not leak into the next switch', () => {
+  const state = fold(
+    header('p-a', 'm-a', 'initial'),
+    failedAttempt('TIMEOUT'),
+    header('p-b', 'm-b', 'change'),      // failover #1 (TIMEOUT)
+    okAttempt(),
+    message(),
+    header('p-c', 'm-c', 'change'),      // no failure since the last header: a user switch
+  )
+  assert.equal(state.entries.length, 1)
+  assert.equal(state.entries[0].to, 'p-b/m-b')
+})
+
+test('chained failovers each get an entry, unsettled when the chain dies', () => {
+  const state = fold(
+    header('p-a', 'm-a', 'initial'),
+    failedAttempt('RATE_LIMIT'),
+    header('p-b', 'm-b', 'change'),
+    failedAttempt('TIMEOUT'),
+    header('p-c', 'm-c', 'change'),
+    failedAttempt('SERVER'),
+  )
+  assert.equal(state.entries.length, 2)
+  assert.equal(state.entries[0].settled, false)
+  assert.equal(state.entries[1].code, 'TIMEOUT')
+  assert.equal(state.entries[1].settled, false)
+})
+
+test('entries are bounded to MAX_ENTRIES', () => {
+  let state = failoverHistoryProjection.init()
+  for (let i = 0; i < MAX_ENTRIES + 5; i += 1) {
+    state = failoverHistoryProjection.apply(state, header(`p-${i}`, 'm', i === 0 ? 'initial' : 'change'))
+    state = failoverHistoryProjection.apply(state, failedAttempt('RATE_LIMIT'))
+  }
+  assert.equal(state.entries.length, MAX_ENTRIES)
+  assert.equal(state.entries[0].to, 'p-5/m')
+  assert.equal(state.entries[MAX_ENTRIES - 1].to, `p-${MAX_ENTRIES + 4}/m`)
+})
+
+test('unrelated events return the same state reference', () => {
+  const state = fold(header('p-a', 'm-a', 'initial'))
+  assert.equal(failoverHistoryProjection.apply(state, { type: 'turn/end', time: 1, data: { turn: 1, reason: { kind: 'completed' } } }), state)
+})
+
+test('the wire view returns the state-held array reference', () => {
+  const state = fold(header('p-a', 'm-a', 'initial'), failedAttempt('RATE_LIMIT'), header('p-b', 'm-b', 'change'))
+  assert.equal(failoverHistoryProjection.wire.view(state), state.entries)
+})
+
+test('failureCodeOfStream reads the terminal finish chunk', () => {
+  assert.equal(failureCodeOfStream([{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: ['x'] }, { type: 'chunk', chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH' } } } }]), 'AUTH')
+  assert.equal(failureCodeOfStream([{ type: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } }]), undefined)
+  assert.equal(failureCodeOfStream([]), undefined)
+})
+
+test('projection key is namespaced and stateVersion is a positive integer', () => {
+  assert.equal(FAILOVER_HISTORY_KEY, 'router/failover-history')
+  assert.ok(Number.isSafeInteger(failoverHistoryProjection.stateVersion) && failoverHistoryProjection.stateVersion >= 1)
+})
