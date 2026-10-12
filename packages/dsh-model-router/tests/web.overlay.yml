@@ -1,0 +1,11 @@
+# Boot the web profile with the router bundle installed, on the default port.
+# The shipped DeepSeek adapters are disabled so the boot needs no API key; the
+# Plugins page itself makes no model call. The router's row comes from the
+# bundle's own cordis.patch.yml (bare package name specifier) — re-inserting it
+# here would replace that row.
+
+- id: llm-deepseek
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true

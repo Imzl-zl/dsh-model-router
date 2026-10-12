@@ -33,6 +33,7 @@ setup-collaboration-files.backup/
 
 # Plugin test runtime: pinned DSH home, session logs, generated overlay/script
 packages/dsh-model-router/tests/.dshhome/
+packages/dsh-model-router/tests/.dshhome-web/
 packages/dsh-model-router/tests/.sessions/
 packages/dsh-model-router/tests/overlay.yml
 packages/dsh-model-router/tests/stub-script.json

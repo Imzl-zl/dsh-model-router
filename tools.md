@@ -42,5 +42,11 @@ DSH 侧规范入口：[根 `AGENTS.md`](file:///D:/sudy/github/deepseek-harness/
 - `LlmFailure.code` 是开放 string；`llm-retry` normal policy 有默认可重试码，always mode 无重试上限。
 - **`UNSUPPORTED_REASONING_EFFORT` 等 preparation error 直接终止 step+turn，不进 `agent/request-error`**（`agent.ts:603-610` 只吞 `NO_ADAPTER`；`request-reconstruction.spec.ts:438-467` 断言）。Router 必须先用 `ctx.llm.resolveCallConfig()` 预校验候选；两个自带 adapter 的 `resolveModel` 是内存快照，零网络成本。
 - **工具能力没有任何机器可读来源**（`LlmModelInfo` 仅 `inputModalities`；`normalizeModelInfo` 白名单重建）。工具不兼容运行时才炸（`INVALID_REQUEST`/`PI_AI_ERROR`，分类跨 provider 不一致），由 switchOn 承接，不做前置资格条件。
-- **插件配置热更新 = fiber 整体重启**（`fiber.update()` 先校验再 restart，`vendor/cordis/src/fiber.ts:731-751`）；校验失败炸插件 fiber 不炸 DSH。DSH 校验范式是 zod schema + `apply()` 里 `validateConfig()`，没有 `Config.check()`。
+- **插件配置热更新 = fiber 整体重启**（`fiber.update()` 先校验再 restart，`vendor/cordis/src/fiber.ts:731-751`）；校验失败炸插件 fiber 不炸 DSH。DSH 校验范式是 schemastery schema + `apply()` 里 `validateConfig()`，没有 `Config.check()`。
 - **session projection wire 硬约束**：`snapshot()` 唯一门槛是有无 wire 块（`session-projection/src/index.ts:339-353`）；`@Remote('list')` 空请求枚举会话且行带投影 hints；client 半包 `inject ['remote','remote.session']` 可直连 `projections`。key 带命名空间、`stateVersion` 只增、view 守 UI-scale（每 tail 页带全部 client-visible key）、state plain JSON、view 对象复用引用。
+- **schemastery 无 `z.infer`**：手写 interface + `Config` interface（字段 `Volatile<T>`）+ schema 值三段式，样板 `llm-pi-ai/src/config.ts`；`Fiber.entry` 是 loader 包运行时增强，外置插件勿依赖；`resolveRetryPolicy` 的 `retryableCodes` 不可为空；headless CLI 入口 `node_modules/@deepseek-ai/dsh/lib/bin.js`。
+- **客户端半包（已实测）**：单文件 factory（`window.__ModuleLoader__.load`；同步 require 不支持相对路径，多模块必须内联）；slot `plugins.bundle.config` keyed=包名、只渲染 `view:'page'`、不传 form 自读 scope；配置 ns = bundle patch 行 id；文案走 `ctx.locale.bind(NS)`；`SettingsForm.labels` 五键且**帧内无 discard 按钮**（弃置走 unmount），自绘 discard 放 children。
+- **`createSnapshotStore` 的 set 会 devFreeze 入参**：发布进 store 的必须是克隆快照，否则内部草稿被冻结后赋值在 sloppy 模式静默失败（UI 无反应、无报错）。控制器自持草稿 + `project()` 返回 `clone(draft)`。
+- **scope 首帧可能晚于控制器构建**（status loading、value undefined）：active tab 等派生状态要用 autoActive 标志在 subscribe 里重算，只在构建时算一次会卡在默认页。
+- **web profile 验证路径**：`dsh plugin --profile web add <abs pkg dir>`（link 安装，改动即时生效）；`dsh --profile web --no-open --port <p>` 起服务；启动 stdout 打印带 token URL（`connection.authenticatedUrl`），浏览器必须用它进入（围栏查 Origin+token）；`--patch` 不属于 web 子命令（端口用 `--port`）；headless 与 web 的 DSH_HOME 分开。
+- **手写 createElement 深嵌套**：node --check + 括号深度跟踪定位；写完必跑 `node --check` 再上浏览器。
