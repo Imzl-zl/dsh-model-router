@@ -370,6 +370,8 @@ Cordis `fiber.update(config)` 先校验再 `restart()`（[`fiber.ts:731-751`](fi
 - **投影缓存是 fire-and-forget 写回**：`turn/end` 是必写点但异步（[`session-projection-cache/src/index.ts:96-103`](file:///D:/sudy/github/deepseek-harness/packages/session/session-projection-cache/src/index.ts#L96)），CLI 退出会竞态掉最后的写——集成测试断言缓存行时需在 overlay 里把 `writeEveryEvents` 调小。
 - **client 半包远程调用解析出的是 `{ok, value}` 信封**，不是裸值（先例：`ui-settings-models/src/client/store.ts:236`、`ui-model-selection/src/client/catalog.ts:56` 均读 `response.value`）；`session/list` 收空请求、行带 cached 投影 hints，`session/projections` 按 sessionId 返回 live `values`（**响应不带 `kind` 字段**，勿以其门禁）。
 - **测试环境坑**：`--patch` overlay 改写某插件行的 config 后，同一 boot 内该 ns 的 settings 保存会被 revision 冲突拒绝（overlay 应用与 describe 的 revision 竞态）；无 overlay 的 boot 保存正常。插件保存路径本身已在多个 boot 实证。
+- **notice 的 chat 呈现（2026-10-13 浏览器实测）**：notice 形态的 `user/message`（`source.kind !== 'user'`）被对话装配器归类为 **context 节点**（[`ui-chat/src/client/conversation-nodes/message.ts:76`](file:///D:/sudy/github/deepseek-harness/packages/client/ui-chat/src/client/conversation-nodes/message.ts#L76)），经 `ContextMessageNodeView → ContextInjectionRow` 渲染；本 build 中该行不出现在对话视图（DOM 无 `[data-context-form]`、无折叠组），但**轨迹视图完整渲染**（"上下文，[路由切换] 主模型 …失败（限流），已切换至 …（候选 2/2）"）。DSH 自己的 model-selection notice 走同一代码路径，呈现策略一致；未知 producer 的 `ContextInjectionRow` 还会折叠掉 summary（[`ContextInjectionRow.tsx:63`](file:///D:/sudy/github/deepseek-harness/packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx#L63)）。**结论：notice 的权威可见面是轨迹视图**，插件的 notice 形状（form+summary+surfaceOp append）与官方惯例一致。
+- **热卸载与 fork 一致性（2026-10-13 浏览器实测）**：bundle 开关关闭后同渠道重试 5/5 后如实失败（RATE_LIMIT）且无跨候选转移——监听器随 fiber 清理干净；重新启用后 failover 立即恢复。fork 会话从继承前缀重建投影：抽屉出现同时间戳的两条（原会话 + fork），证明 ledger 是 log 的纯函数。
 
 ### 8.5 条件路由取数（2026-10-13，【源码证实】）
 

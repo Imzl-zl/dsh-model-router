@@ -1418,7 +1418,7 @@ window.__ModuleLoader__.load({
           acknowledged: state.ui.riskAck,
           onAcknowledgedChange: props.onRiskAck,
           onCancel: props.onCloseModal,
-          onConfirm: function () { props.onDeleteProfile(modal.profileId) },
+          onConfirm: function () { props.onConfirmDelete(modal.profileId) },
         }) : null,
         state.ui.drawerOpen ? h(FailoverDrawer, {
           key: 'drawer',
@@ -1464,6 +1464,7 @@ window.__ModuleLoader__.load({
         onCreateProfile: function (when, templateId) { controller.addProfile(when, templateId) },
         onAddCandidates: function (profileId, entries, isDefault) { controller.addCandidates(profileId, entries, isDefault) },
         onDeleteProfile: function (profileId) { controller.openModal({ kind: 'delete', profileId: profileId }) },
+        onConfirmDelete: function (profileId) { controller.deleteProfile(profileId) },
         onRiskAck: function (value) { controller.setRiskAck(value) },
         onOpenDrawer: function () { controller.openDrawer() },
         onCloseDrawer: function () { controller.closeDrawer() },

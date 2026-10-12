@@ -31,8 +31,10 @@ Two more things the plugin adds:
   `UNSUPPORTED_REASONING_EFFORT`, which terminates the step outright and no
   recovery plugin can catch.
 - **The reason notice**: each failover appends a Chinese `form: 'notice'`
-  message to the conversation. DSH's own English "model changed" notice also
-  appears; both are factual.
+  message to the durable log; it renders in the trajectory view (the chat
+  conversation does not surface context rows in this DSH build — the same
+  presentation DSH's own model-selection notice gets). DSH's own English
+  "model changed" notice also appears; both are factual.
 
 ## Configuration
 

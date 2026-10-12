@@ -80,7 +80,9 @@ assistant/message  provider=spike-backup served_by=spike-backup
 - **Phase 2 条件路由落地并测试通过**（2026-10-13）：宿主 `agent/pre-step` 取图片（`type==='image'` 规则）+ `sessionProjections.snapshot()['contextPressure'].projectedTokens`（canonical wire 值，未采样即 undefined=未满足），每步一次、重试稳定；用户路由豁免；条件不满足跳过并留 condition-skip notice。UI needs 面板（images Switch + minContextTokens 输入，仅备用候选）+ 推理档位徽标（catalog reasoning.efforts）。测试：单测 12/12（node strip-types 直导 .ts）+ 组合测试 condition-skip 场景 + 全套 9/9；浏览器实测 needs 编辑→保存→刷新恢复。
 - **Phase 2 全部完成并实测**（2026-10-13）：① 条件路由（needs images/minContextTokens，pre-step + contextPressure wire view）；② lineage 投影 `router/failover-history`（fold request/header 'change' + 前序失败 attempt，bounded 20，wire UI-scale）；③ 遥测抽屉（portal + list→projections，浏览器实测三条真实条目）；④ catalog picker 真实 provider 下实测通过（stub 三 group）；⑤ 保存路径无 overlay boot 实测通过。测试：单测 23/12（pure）+ 组合 9/9 + 浏览器全链路。
 - **本轮抓到并修 4 个客户端 bug**：drawer 读错状态路径（state.ui.*）、projections 响应无 kind 字段却以其门禁、modelCatalog 忘拆 `{ok,value}` 信封、catalog apply 时抢跑改懒加载。另发现测试环境坑：overlay 改写行 config 后同 boot 内该 ns 保存被 revision 冲突拒（无 overlay 正常）。
-- **下一步（收尾项）**：删除 Profile 的 RiskConfirmation 流程补测；notice 浏览器样式；投影 fork/resume 一致性；热卸载测试；`dsh plugin add` 交付路径复验（当前用 link 安装）。
+- **Round 4 收尾全部完成并实测**（2026-10-13）：① 交付路径复验（干净副本 `dsh plugin add` 进全新 web profile，表单完整渲染、真实 DeepSeek 目录建 profile、保存通过）；② 删除 Profile RiskConfirmation 全流程通过——**抓到并修复一个真 bug**（确认删除错误接到开弹窗动作上，单测覆盖不到）；③ notice 浏览器实测：轨迹视图完整渲染，chat 对话视图不渲染 context 行（DSH 自身 notice 同一路径，权威可见面是轨迹）；④ 热卸载实测：bundle 关闭后 llm-retry 5/5 如实失败无跨候选转移，重启用立即恢复；⑤ fork 一致性实测：fork 会话重建出继承前缀的条目（同时间戳两条）。
+- **本轮测试环境教训**：stub-script.json 是**启动时读入内存**，改文件不影响运行中的服务（要重启）；model-selection 记住 last-used 路由，卸载后的请求可能直接走 backup（测试不成立），新会话才用默认选择；模型菜单不分 provider，无法强制选 primary。
+- **项目主体已完整**：宿主（选路/两层预算/预校验/条件/lineage 投影）+ UI（表单/needs 面板/目录选择/遥测抽屉）+ 文档 + 测试（单测 23、组合 9、浏览器全链路）。剩余仅 Phase 3/4 明确推迟项（逻辑模型选择器、cooldown/breaker）。
 - 交付物：三 commit（852ad64 设计基线 / c01fcb2 Phase 1 host / 9a43ac5 Phase 1 UI）。
 - 决策笔记状态：三篇 `proposed/` + 四篇 `implemented/`（外置插件实跑、砍 needs.tools、reasoningEffort 预校验、cap advance 过 switchOn 门）。
 
