@@ -140,6 +140,31 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'condition-skip',
+    note: '候选条件不满足（预估上下文未达门槛）被跳过，链条继续且留痕',
+    router: { enabled: true, profiles: [profile([
+      C('stub-primary', 1),
+      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, needs: { minContextTokens: 999999 } },
+      C('stub-third', 1),
+    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    script: {
+      // TIMEOUT is not retried by llm-retry here, so every failure is delegated
+      // and the chain walk is deterministic.
+      policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
+      'stub-primary': { outcomes: ['fail:TIMEOUT'] },
+      'stub-third': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-third/stub-model'])
+      const texts = notices(events).map(n => n.text)
+      eq('notice count', texts.length, 2)
+      ok('failover notice names candidate 3/3', texts.some(t => t.includes('候选 3/3')))
+      ok('condition skip names stub-backup with the threshold reason', texts.some(t => t.includes('stub-backup') && t.includes('使用条件不满足') && t.includes('999999')))
+      eq('final route', finalRoute(events), 'stub-third/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'master-off',
     note: '总闸关闭：配了规则也不接管',
     router: { enabled: false, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
@@ -161,6 +186,15 @@ const SCENARIOS = [
 ]
 
 // ---------- boot ----------
+
+function candidateYaml(c, indent) {
+  const needs = c.needs ?? {}
+  const parts = []
+  if (needs.images === true) parts.push('images: true')
+  if (needs.minContextTokens !== undefined && needs.minContextTokens > 0) parts.push(`minContextTokens: ${needs.minContextTokens}`)
+  const extra = parts.length > 0 ? `, needs: { ${parts.join(', ')} }` : ''
+  return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxAttempts: ${c.maxAttempts}${extra} }`
+}
 
 function overlayYaml(router, selection) {
   return `- id: llm-deepseek
@@ -190,13 +224,13 @@ ${selection?.reasoningEffort === undefined ? '' : `    reasoningEffort: ${select
 ${router.profiles.map(p => `          - id: ${p.id}
             when: { provider: ${p.when.provider}, model: ${p.when.model} }
             candidates:
-${p.candidates.map(c => `              - { provider: ${c.provider}, model: ${c.model}, maxAttempts: ${c.maxAttempts} }`).join('\n')}
+${p.candidates.map(c => candidateYaml(c, '              ')).join('\n')}
             switchOn: { rateLimit: ${p.switchOn.rateLimit}, server: ${p.switchOn.server}, timeout: ${p.switchOn.timeout}, transport: ${p.switchOn.transport}, emptyResponse: ${p.switchOn.emptyResponse}, invalidRequest: ${p.switchOn.invalidRequest} }
             maxTotalAttempts: ${p.maxTotalAttempts}`).join('\n')}
         default:
           enabled: ${router.default.enabled}
           candidates:
-${router.default.candidates.map(c => `            - { provider: ${c.provider}, model: ${c.model}, maxAttempts: ${c.maxAttempts} }`).join('\n')}
+${router.default.candidates.map(c => candidateYaml(c, '            ')).join('\n')}
           switchOn: { rateLimit: ${router.default.switchOn.rateLimit}, server: ${router.default.switchOn.server}, timeout: ${router.default.switchOn.timeout}, transport: ${router.default.switchOn.transport}, emptyResponse: ${router.default.switchOn.emptyResponse}, invalidRequest: ${router.default.switchOn.invalidRequest} }
           maxTotalAttempts: ${router.default.maxTotalAttempts}
 `

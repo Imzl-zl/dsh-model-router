@@ -43,7 +43,8 @@ profiles:                     # matched by exact provider/model
     when: { provider: deepseek-official, model: deepseek-v4-flash }
     candidates:               # [0] is pinned to the when model
       - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2 }
-      - { provider: pi-ai-gpt, model: gpt-5, maxAttempts: 1 }
+      - { provider: pi-ai-gpt, model: gpt-5, maxAttempts: 1, needs: { images: true } }
+      - { provider: pi-ai-claude, model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
     switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
     maxTotalAttempts: 6
 default:                      # pure fallback pool for unconfigured models
@@ -84,10 +85,15 @@ default:                      # pure fallback pool for unconfigured models
   session projection.
 - **Agent main requests only.** Compaction and session-title calls keep their
   own DSH-provided model configuration and are not routed by this plugin.
-- **`minContextTokens` is an estimate.** The token-meter projection
+- **`needs` conditions are read once per step and the user's own route is
+  exempt.** `images` reads the step's admitted user messages
+  (`agent/pre-step`); `minContextTokens` reads the context-pressure
+  projection's estimate for the next request, which is present only after the
+  first usage sample — an unmeasured request counts as unmet, and the estimate
   systematically under-counts CJK text.
-- **Conditional routing (images / context floor) is Phase 2.** The current
-  schema does not carry `needs`.
+- **Conditional routing does not cover tool support.** DSH exposes no
+  machine-readable tool capability, so a tools-incompatible candidate fails at
+  runtime (`INVALID_REQUEST`/`PI_AI_ERROR`) and is handled by `switchOn`.
 - **A provider uninstalled after configuration degrades gracefully**: its
   candidates are skipped at runtime with a warning; structural config errors
   (duplicate ids, illegal caps, unpinned `candidates[0]`) fail loudly at load.
@@ -96,12 +102,15 @@ default:                      # pure fallback pool for unconfigured models
 
 ```sh
 npm install                       # repo root: installs the DSH CLI + peers
-node packages/dsh-model-router/tests/run.mjs   # composition tests
+node packages/dsh-model-router/tests/unit.mjs    # pure decision logic
+node packages/dsh-model-router/tests/run.mjs     # Loader composition tests
 npx tsc --noEmit --skipLibCheck --strict --module nodenext \
   --moduleResolution nodenext --target es2022 --allowImportingTsExtensions \
   packages/dsh-model-router/src/index.ts
 ```
 
-The tests boot the real headless Loader with a deterministic stub adapter and
-assert on the durable session log — the real Cordis Loader composition the DSH
-package rules require, not hand-built contexts.
+The composition tests boot the real headless Loader with a deterministic stub
+adapter and assert on the durable session log — the real Cordis Loader
+composition the DSH package rules require, not hand-built contexts. The web
+profile is verified by installing the bundle (`dsh plugin --profile web add
+<dir>`) and driving the Plugins page in a browser.

@@ -63,11 +63,18 @@ window.__ModuleLoader__.load({
       pipelineSubtitle: '请求优先发送至首选主渠道。若达到单渠道尝试上限或触发指定异常，将自动流转至下一备用渠道。',
       primaryModelBadge: '用户默认首选',
       singleAttemptLimit: '单渠道尝试',
+      attemptLimitHint: '切换前会先等待一次退避（约 0.5~10 秒）',
       timesUnit: '次',
       moveUp: '上移',
       moveDown: '下移',
       removeNode: '从链路中移除',
       primaryPinnedHint: '首选节点钉死为用户所选模型，不可删除或换序',
+      toggleNeedsBtn: '⚙️ 高级路由条件',
+      needImagesTitle: '图像/多模态输入',
+      needImagesHint: '仅当会话包含图片时允许匹配',
+      needContextTitle: '最小上下文门槛 (Tokens)',
+      needContextHint: '按预估值判断（估算值，可能低估中文）；0 表示不限制',
+      reasoningBadge: '推理档位',
       failoverNotice: '若主渠道遭遇限流或超时，自动切换至备用：',
       failoverTag: 'Failover',
       addFromCatalog: '从已配置的模型目录中添加候选',
@@ -158,11 +165,18 @@ window.__ModuleLoader__.load({
       pipelineSubtitle: 'Requests route to the primary channel first. On failure reaching the attempt limit, flow steps down to the next fallback candidate.',
       primaryModelBadge: 'Primary Choice',
       singleAttemptLimit: 'Attempts per candidate',
+      attemptLimitHint: 'One backoff wait (about 0.5-10s) precedes each switch',
       timesUnit: 'times',
       moveUp: 'Move Up',
       moveDown: 'Move Down',
       removeNode: 'Remove from chain',
       primaryPinnedHint: 'The primary node is pinned to the selected model and cannot be removed or reordered',
+      toggleNeedsBtn: '⚙️ Advanced Conditions',
+      needImagesTitle: 'Vision / Image Input',
+      needImagesHint: 'Only matched when the conversation includes images',
+      needContextTitle: 'Min Context Floor (Tokens)',
+      needContextHint: 'Estimated projection (may under-count CJK); 0 disables the gate',
+      reasoningBadge: 'Reasoning',
       failoverNotice: 'Switches automatically on eligible failure to fallback #',
       failoverTag: 'Failover',
       addFromCatalog: 'Add candidate from model catalog',
@@ -325,6 +339,14 @@ window.__ModuleLoader__.load({
       catalogGroupTitle: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-tertiary)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '10px 0 4px' },
       catalogRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', cursor: 'pointer', fontSize: 13, color: 'var(--dsw-alias-label-primary)' },
       countBadge: { fontSize: 11, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)' },
+      reasoningBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-sm, 8px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-tertiary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500 },
+      needsBtn: { background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', padding: '2px 8px', borderRadius: 4, fontSize: 11.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 },
+      needsPanel: { borderTop: '0.5px solid var(--dsw-alias-border-l2)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 10 },
+      needsGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
+      needCard: { background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 6 },
+      needHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
+      needHint: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.4 },
+      needInput: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 4, color: 'var(--dsw-alias-label-primary)', padding: '3px 6px', fontSize: 11.5, outline: 'none', width: 120 },
     }
 
     // ---------- helpers ----------
@@ -536,6 +558,22 @@ window.__ModuleLoader__.load({
           candidate.maxAttempts = Number.isFinite(parsed) ? Math.min(5, Math.max(1, Math.round(parsed))) : 1
           publish()
         },
+        /** Patch one candidate's `needs`; an empty patch clears the field. */
+        setNeeds: function (profileId, index, patch, isDefault) {
+          var list = isDefault ? draft.default.candidates : draft.profiles.find(function (p) { return p.id === profileId }).candidates
+          var candidate = list[index]
+          var next = Object.assign({}, candidate.needs ?? {})
+          if (patch.images !== undefined) {
+            if (patch.images) next.images = true
+            else delete next.images
+          }
+          if (patch.minContextTokens !== undefined) {
+            if (patch.minContextTokens > 0) next.minContextTokens = patch.minContextTokens
+            else delete next.minContextTokens
+          }
+          candidate.needs = Object.keys(next).length > 0 ? next : undefined
+          publish()
+        },
         setMaxTotalAttempts: function (profileId, value, isDefault) {
           var parsed = Number(value)
           var clamped = Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 1
@@ -567,12 +605,26 @@ window.__ModuleLoader__.load({
     var ICON_CLOSE = 'M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z'
     var ICON_WARN = 'M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z'
 
+    /** The catalog's reasoning efforts for one route, for the node badge. */
+    function reasoningLabelOf(catalog, provider, model) {
+      var group = (catalog?.groups ?? []).find(function (entry) { return entry.id === provider })
+      var entry = (group?.models ?? []).find(function (item) { return item.id === model })
+      var efforts = entry?.reasoning?.efforts
+      if (!efforts || efforts.length === 0) return undefined
+      return efforts.map(function (effort) { return effort.name }).join(' / ')
+    }
+
     /** One candidate node in the pipeline. */
     function CandidateNode(props) {
       var t = props.t
       var candidate = props.candidate
       var index = props.index
       var isPrimary = index === 0 && !props.isDefault
+      var expandedState = React.useState(false)
+      var expanded = expandedState[0]
+      var setExpanded = expandedState[1]
+      var needs = candidate.needs ?? {}
+      var reasoning = reasoningLabelOf(props.catalog, candidate.provider, candidate.model)
       return h('div', { style: S.node },
         h('div', { style: Object.assign({}, S.nodeCard, isPrimary ? S.nodeCardPrimary : null) },
           h('div', { style: S.nodeMainRow },
@@ -582,10 +634,17 @@ window.__ModuleLoader__.load({
                 h('div', { style: S.modelNameRow },
                   h('span', { style: S.modelName }, candidate.model || '—'),
                   h('span', { style: S.providerBadge }, candidate.provider),
-                  isPrimary ? h('span', { style: S.primaryBadge }, t('primaryModelBadge')) : null),
+                  isPrimary ? h('span', { style: S.primaryBadge }, t('primaryModelBadge')) : null,
+                  reasoning === undefined ? null : h('span', { style: S.reasoningBadge }, t('reasoningBadge') + ': ' + reasoning),
+                  isPrimary ? null : h('button', {
+                    type: 'button',
+                    style: S.needsBtn,
+                    'aria-expanded': expanded,
+                    onClick: function () { setExpanded(!expanded) },
+                  }, t('toggleNeedsBtn'))),
                 h('span', { style: S.modelPath }, routeOf(candidate))),
               h('div', { style: S.nodeTuning },
-                h('div', { style: S.attemptPicker, title: t('maxTotalAttemptsHint') },
+                h('div', { style: S.attemptPicker, title: t('attemptLimitHint') },
                   h('span', null, t('singleAttemptLimit')),
                   h('input', {
                     style: S.attemptInput,
@@ -616,7 +675,35 @@ window.__ModuleLoader__.load({
                 disabled: index <= 0 || props.disabled,
                 title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
                 onClick: function () { props.onRemove(index) },
-              }, h(Icon, { d: ICON_CLOSE }))))))
+              }, h(Icon, { d: ICON_CLOSE })))),
+          !isPrimary && expanded ? h('div', { style: S.needsPanel },
+            h('div', { style: S.needsGrid },
+              h('div', { style: S.needCard },
+                h('div', { style: S.needHeader },
+                  h('span', null, t('needImagesTitle')),
+                  h(Switch, {
+                    checked: needs.images === true,
+                    label: t('needImagesTitle'),
+                    disabled: props.disabled,
+                    onChange: function (next) { props.onNeeds(index, { images: next }) },
+                  })),
+                h('span', { style: S.needHint }, t('needImagesHint'))),
+              h('div', { style: S.needCard },
+                h('div', { style: S.needHeader }, h('span', null, t('needContextTitle'))),
+                h('input', {
+                  style: S.needInput,
+                  type: 'text',
+                  inputMode: 'numeric',
+                  placeholder: '0',
+                  'aria-label': t('needContextTitle'),
+                  value: String(needs.minContextTokens ?? 0),
+                  disabled: props.disabled,
+                  onChange: function (event) {
+                    var parsed = Number(event.target.value)
+                    props.onNeeds(index, { minContextTokens: Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0 })
+                  },
+                }),
+                h('span', { style: S.needHint }, t('needContextHint'))))) : null))
     }
 
     /** The failover connector between two nodes. */
@@ -643,9 +730,11 @@ window.__ModuleLoader__.load({
           total: candidates.length,
           isDefault: props.isDefault,
           disabled: props.disabled,
+          catalog: props.catalog,
           onMaxAttempts: props.onMaxAttempts,
           onMove: props.onMove,
           onRemove: props.onRemove,
+          onNeeds: props.onNeeds,
         }))
       })
       return h('div', null, nodes)
@@ -727,9 +816,11 @@ window.__ModuleLoader__.load({
             t: t,
             candidates: profile.candidates,
             disabled: props.disabled,
+            catalog: props.catalog,
             onMaxAttempts: function (index, value) { props.onMaxAttempts(profile.id, index, value, false) },
             onMove: function (index, direction) { props.onMove(profile.id, index, direction, false) },
             onRemove: function (index) { props.onRemove(profile.id, index, false) },
+            onNeeds: function (index, patch) { props.onNeeds(profile.id, index, patch, false) },
           }),
           h('div', { style: S.addBar },
             h('button', { type: 'button', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, t('addFromCatalog')),
@@ -789,9 +880,11 @@ window.__ModuleLoader__.load({
             candidates: pool.candidates,
             isDefault: true,
             disabled: props.disabled,
+            catalog: props.catalog,
             onMaxAttempts: function (index, value) { props.onMaxAttempts(null, index, value, true) },
             onMove: function (index, direction) { props.onMove(null, index, direction, true) },
             onRemove: function (index) { props.onRemove(null, index, true) },
+            onNeeds: function (index, patch) { props.onNeeds(null, index, patch, true) },
           }),
           h('div', { style: S.addBar },
             h('button', { type: 'button', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(null, true) } }, t('addFromCatalog')),
@@ -1126,12 +1219,14 @@ window.__ModuleLoader__.load({
               t: t,
               pool: draft.default,
               disabled: disabled,
+              catalog: state.catalog,
               onDefaultEnabled: props.onDefaultEnabled,
               onMaxAttempts: props.onMaxAttempts,
               onMove: props.onMove,
               onRemove: props.onRemove,
               onMaxTotal: props.onMaxTotal,
               onToggleSwitchOn: props.onToggleSwitchOn,
+              onNeeds: props.onNeeds,
               onOpenCatalog: props.onOpenCatalog,
               onOpenManual: props.onOpenManual,
             })
@@ -1139,12 +1234,14 @@ window.__ModuleLoader__.load({
               t: t,
               profile: activeProfile,
               disabled: disabled,
+              catalog: state.catalog,
               onDeleteProfile: props.onDeleteProfile,
               onMaxAttempts: props.onMaxAttempts,
               onMove: props.onMove,
               onRemove: props.onRemove,
               onMaxTotal: props.onMaxTotal,
               onToggleSwitchOn: props.onToggleSwitchOn,
+              onNeeds: props.onNeeds,
               onOpenCatalog: props.onOpenCatalog,
               onOpenManual: props.onOpenManual,
             })),
@@ -1207,6 +1304,7 @@ window.__ModuleLoader__.load({
         onActive: function (id) { controller.setActive(id) },
         onDefaultEnabled: function (value) { controller.setDefaultEnabled(value) },
         onMaxAttempts: function (profileId, index, value, isDefault) { controller.setMaxAttempts(profileId, index, value, isDefault) },
+        onNeeds: function (profileId, index, patch, isDefault) { controller.setNeeds(profileId, index, patch, isDefault) },
         onMove: function (profileId, index, direction, isDefault) { controller.moveCandidate(profileId, index, direction, isDefault) },
         onRemove: function (profileId, index, isDefault) { controller.removeCandidate(profileId, index, isDefault) },
         onMaxTotal: function (profileId, value, isDefault) { controller.setMaxTotalAttempts(profileId, value, isDefault) },

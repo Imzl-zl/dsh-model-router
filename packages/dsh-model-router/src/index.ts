@@ -29,9 +29,9 @@ import {
   type Profile,
   type RouterOptions,
 } from './config.ts'
-import { decideRecovery, isSwitchOnEligible, planFire, resolveChain, skipTo, startStep, type StepChain } from './router.ts'
-import { RouterState, candidateConfig } from './state.ts'
-import { failoverNotice, skipNotice } from './notice.ts'
+import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, skipTo, startStep, unmetCondition } from './router.ts'
+import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
+import { conditionSkipNotice, failoverNotice, skipNotice } from './notice.ts'
 
 export const name = 'model-router'
 export const inject = ['llm']
@@ -79,6 +79,17 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
+    // Conditions are gathered once per step, before route selection: pre-step
+    // sees the admitted user messages (the images gate) and the
+    // context-pressure projection answers for the next request (the token
+    // gate). Neither re-runs on retries, so the conditions stay stable across
+    // a step's attempts. This listener only observes.
+    agent.ctx.on('agent/pre-step', async (payload, next) => {
+      const decision = await next()
+      states.noteConditions(agent, payload.turn, payload.step, gatherConditions(ctx, agent.session, payload.messages))
+      return decision
+    })
+
     // Outermost on agent/request: the override applied after next() wins over
     // installModelSelection's write-back of the user's selection.
     agent.ctx.on(
@@ -96,7 +107,7 @@ export function apply(ctx: Context, config: Config): void {
             config.default.get() as DefaultProfile,
           )
           if (chain === undefined) return resolved
-          state = startStep(turn, step, chain)
+          state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step))
           states.start(agent, state)
         }
 
@@ -104,16 +115,25 @@ export function apply(ctx: Context, config: Config): void {
         const candidates = plan.state.chain.candidates
 
         // Walk forward from the planned index, skipping candidates this exact
-        // request cannot be served by. The user's own route needs no check:
-        // DSH validated the selection when it was made.
+        // request cannot be served by: an unmet `needs` condition first, then a
+        // capability rejection. The user's own route is exempt from both —
+        // DSH validated the selection when it was made, and skipping it would
+        // be a silent reroute.
         let index = plan.state.index
         const skipped: Candidate[] = []
+        const conditionSkipped: { candidate: Candidate; reason: string }[] = []
         let outgoing: LlmCallConfig | undefined
         while (index < candidates.length) {
           const candidate = candidates[index]!
           if (candidate.provider === resolved.provider && candidate.model === resolved.model) {
             outgoing = candidateConfig(resolved, candidate)
             break
+          }
+          const unmet = unmetCondition(candidate, plan.state.conditions)
+          if (unmet !== undefined) {
+            conditionSkipped.push({ candidate, reason: unmet })
+            index += 1
+            continue
           }
           try {
             outgoing = await ctx.llm.resolveCallConfig(candidateConfig(resolved, candidate), signal)
@@ -132,7 +152,7 @@ export function apply(ctx: Context, config: Config): void {
           // silent swap.
           return resolved
         }
-        states.start(agent, skipped.length === 0 && index === plan.state.index ? plan.state : skipTo(plan.state, index))
+        states.start(agent, skipped.length === 0 && conditionSkipped.length === 0 && index === plan.state.index ? plan.state : skipTo(plan.state, index))
 
         if (plan.advanced) {
           agent.session.append(
@@ -146,6 +166,9 @@ export function apply(ctx: Context, config: Config): void {
             ),
             { surfaceOp: 'append' },
           )
+        }
+        for (const entry of conditionSkipped) {
+          agent.session.append('user/message', conditionSkipNotice(entry.candidate, entry.reason), { surfaceOp: 'append' })
         }
         for (const candidate of skipped) {
           agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
@@ -212,4 +235,26 @@ function warnUnregisteredProviders(ctx: Context, config: { profiles: readonly Pr
   }
   for (const profile of config.profiles) check(profile.candidates, `profile "${profile.id}"`)
   check(config.default.candidates, 'default pool')
+}
+
+/** The projection registry's read face this plugin uses; structurally typed to keep the service optional. */
+interface ProjectionReadFace {
+  snapshot(session: Session): { values: Record<string, unknown> }
+}
+
+/**
+ * Gather the step's request-shape conditions. The images gate reads the
+ * admitted user messages; the token gate reads the context-pressure wire view,
+ * whose `projectedTokens` is the canonical "what the next request will cost"
+ * answer (present only after the first usage sample). When the registry or the
+ * unit is absent the gate reads as unmet rather than guessing.
+ */
+function gatherConditions(ctx: Context, session: Session, messages: readonly { content: readonly { type: string }[] }[]): StepConditions {
+  let projectedTokens: number | undefined
+  const projections = ctx.get('sessionProjections') as ProjectionReadFace | undefined
+  if (projections !== undefined) {
+    const pressure = projections.snapshot(session).values['contextPressure'] as { projectedTokens?: number } | undefined
+    projectedTokens = pressure?.projectedTokens
+  }
+  return { hasImages: hasImageContent(messages), projectedTokens }
 }

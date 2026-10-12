@@ -50,3 +50,4 @@ DSH 侧规范入口：[根 `AGENTS.md`](file:///D:/sudy/github/deepseek-harness/
 - **scope 首帧可能晚于控制器构建**（status loading、value undefined）：active tab 等派生状态要用 autoActive 标志在 subscribe 里重算，只在构建时算一次会卡在默认页。
 - **web profile 验证路径**：`dsh plugin --profile web add <abs pkg dir>`（link 安装，改动即时生效）；`dsh --profile web --no-open --port <p>` 起服务；启动 stdout 打印带 token URL（`connection.authenticatedUrl`），浏览器必须用它进入（围栏查 Origin+token）；`--patch` 不属于 web 子命令（端口用 `--port`）；headless 与 web 的 DSH_HOME 分开。
 - **手写 createElement 深嵌套**：node --check + 括号深度跟踪定位；写完必跑 `node --check` 再上浏览器。
+- **条件路由取数（已实测）**：`agent/pre-step` payload `{agent, messages, turn, step, signal}`，在 `agent/request` 前触发；图片判定 = 内容块 `type==='image'`（与 llm 层投影同规则）；`projectedTokens` 只在 contextPressure 的 **wire view** 产出且首次用量采样后才存在，host 侧读 `ctx.sessionProjections.snapshot(session).values['contextPressure']`（canonical 值，勿自行复算公式）；`ctx.get('sessionProjections')` 取可选服务。单测可直导 .ts（node 24 strip-types）：`import ... from '../src/router.ts'`。

@@ -20,14 +20,7 @@
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Candidate, DefaultProfile, Profile, SwitchOn } from './config.ts'
 import { switchOnKeyOf } from './config.ts'
-import type { StepState } from './state.ts'
-
-/** The effective chain for one step: a snapshot, so mid-step config edits do not split it. */
-export interface StepChain {
-  readonly candidates: readonly Candidate[]
-  readonly switchOn: SwitchOn
-  readonly maxTotalAttempts: number
-}
+import type { StepChain, StepConditions, StepState } from './state.ts'
 
 /**
  * Match the user's resolved route. A matched profile's chain starts at its
@@ -58,9 +51,9 @@ export function resolveChain(
   }
 }
 
-/** Open a step's cursor at the first candidate. */
-export function startStep(turn: number, step: number, chain: StepChain): StepState {
-  return { turn, step, chain, index: 0, attemptsOnCandidate: 0, totalAttempts: 0, exhausted: false }
+/** Open a step's cursor at the first candidate, with the step's frozen conditions. */
+export function startStep(turn: number, step: number, chain: StepChain, conditions: StepConditions): StepState {
+  return { turn, step, chain, conditions, index: 0, attemptsOnCandidate: 0, totalAttempts: 0, exhausted: false }
 }
 
 export interface FirePlan {
@@ -123,6 +116,39 @@ export function skipTo(state: StepState, index: number): StepState {
 export function isSwitchOnEligible(chain: StepChain, code: string): boolean {
   const key = switchOnKeyOf(code)
   return key !== undefined && chain.switchOn[key]
+}
+
+/**
+ * The canonical has-image check over admitted user messages: any content block
+ * of type `image`, mirroring the llm layer's own text-model projection rule
+ * (`llm/src/index.ts` projects images to handle text when the route declares no
+ * image modality).
+ */
+export function hasImageContent(messages: readonly { content: readonly { type: string }[] }[]): boolean {
+  return messages.some(message => message.content.some(block => block.type === 'image'))
+}
+
+/**
+ * Whether a candidate is eligible for this request's shape: the negation of
+ * {@link unmetCondition}.
+ */
+export function conditionsMet(candidate: Candidate, conditions: StepConditions): boolean {
+  return unmetCondition(candidate, conditions) === undefined
+}
+
+/**
+ * The unmet `needs` condition of one candidate, or undefined when it is
+ * eligible for this request. An unmeasured projection is not a measured-large
+ * one, so a `minContextTokens` gate treats absence as unmet.
+ */
+export function unmetCondition(candidate: Candidate, conditions: StepConditions): string | undefined {
+  if (candidate.needs?.images === true && !conditions.hasImages) return '需图片输入'
+  const min = candidate.needs?.minContextTokens
+  if (min !== undefined && min > 0) {
+    const projected = conditions.projectedTokens
+    if (projected === undefined || projected < min) return `需预估上下文 ≥ ${min} tokens`
+  }
+  return undefined
 }
 
 export type RecoveryDecision = 'retry' | 'terminal'

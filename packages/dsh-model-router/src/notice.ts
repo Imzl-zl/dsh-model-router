@@ -69,3 +69,17 @@ export function skipNotice(candidate: { provider: string; model: string }): User
     `[路由切换] 候选 ${candidate.provider}/${candidate.model} 不支持当前请求参数，已跳过`,
   )
 }
+
+/**
+ * A candidate was skipped because its `needs` condition is not met. This is
+ * not a failure — the candidate is servable, just not for this request's
+ * shape — but the chain visibly jumped over it, so the reason is recorded.
+ */
+export function conditionSkipNotice(
+  candidate: { provider: string; model: string },
+  reason: string,
+): UserMessage {
+  return notice(
+    `[路由切换] 候选 ${candidate.provider}/${candidate.model} 的使用条件不满足（${reason}），已跳过`,
+  )
+}

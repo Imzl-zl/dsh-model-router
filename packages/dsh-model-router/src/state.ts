@@ -30,6 +30,8 @@ export interface StepState {
   turn: number
   step: number
   chain: StepChain
+  /** The request-shape conditions gathered once per step, frozen at step start. */
+  conditions: StepConditions
   /** Index into `chain.candidates` of the route the next attempt uses. */
   index: number
   /** `agent/request` fires on the current candidate; the cap advances the index. */
@@ -38,6 +40,30 @@ export interface StepState {
   totalAttempts: number
   /** Set when the last candidate hit its cap: only a terminal decision remains. */
   exhausted: boolean
+}
+
+/**
+ * The request-shape conditions a `needs` gate reads, gathered once per step:
+ * `agent/pre-step` sees the step's admitted user messages, and the
+ * context-pressure projection answers for the next request. Both run before
+ * route selection and are not re-run on retries, so the conditions are stable
+ * across a step's attempts — "what this step's request looks like" is fixed.
+ */
+export interface StepConditions {
+  /** An image block is present in the step's admitted user messages. */
+  hasImages: boolean
+  /**
+   * The context-pressure projection's estimate for the next request. Absent
+   * before the first usage sample and when token-meter is not loaded; a
+   * `minContextTokens` gate treats absence as "not met" — an unmeasured
+   * request is not a measured-large one.
+   */
+  projectedTokens: number | undefined
+}
+
+/** The default conditions when `agent/pre-step` has not been observed for the step. */
+export function emptyConditions(): StepConditions {
+  return { hasImages: false, projectedTokens: undefined }
 }
 
 /** The last failure code seen for one (session, turn, step), for the notice. */
@@ -50,6 +76,7 @@ export interface FailureNote {
 export class RouterState {
   private readonly steps = new WeakMap<Agent, StepState>()
   private readonly failures = new WeakMap<Session, FailureNote>()
+  private readonly conditions = new WeakMap<Agent, StepConditions & { turn: number; step: number }>()
 
   /** The state for this (agent, turn, step), or undefined when the slot moved on. */
   current(agent: Agent, turn: number, step: number): StepState | undefined {
@@ -72,6 +99,18 @@ export class RouterState {
   failureCodeOf(session: Session, turn: number, step: number): string | undefined {
     const note = this.failures.get(session)
     return note !== undefined && note.turn === turn && note.step === step ? note.code : undefined
+  }
+
+  /** Record the request-shape conditions observed at `agent/pre-step`. */
+  noteConditions(agent: Agent, turn: number, step: number, conditions: StepConditions): void {
+    this.conditions.set(agent, { ...conditions, turn, step })
+  }
+
+  /** The conditions for this step, or the defaults when pre-step was not observed. */
+  conditionsFor(agent: Agent, turn: number, step: number): StepConditions {
+    const note = this.conditions.get(agent)
+    if (note === undefined || note.turn !== turn || note.step !== step) return emptyConditions()
+    return { hasImages: note.hasImages, projectedTokens: note.projectedTokens }
   }
 }
 

@@ -14,12 +14,26 @@
 
 import z from '@deepseek-ai/schemastery'
 
-/** One physical candidate. Credentials stay owned by the provider adapter. */
+/**
+ * One physical candidate. Credentials stay owned by the provider adapter.
+ *
+ * `needs` gates the candidate on the shape of THIS request: `images` requires
+ * an image block in the step's admitted user messages, `minContextTokens`
+ * requires the context-pressure projection's estimate for the next request.
+ * Both are read once per step (agent/pre-step and the projection), so they are
+ * stable across the step's retries. The user's own route (a matched profile's
+ * pinned candidates[0], or the default pool's implicit first hop) is exempt:
+ * skipping it would be a silent reroute.
+ */
 export const candidateSchema = z.object({
   provider: z.string().required().description('provider 标识，例如 deepseek-official'),
   model: z.string().required().description('模型 ID，例如 deepseek-v4-flash'),
   maxAttempts: z.number().step(1).min(1).max(5).default(1)
     .description('这条渠道最多真实调用多少次（切换前会有一次退避等待）'),
+  needs: z.object({
+    images: z.boolean().description('仅当本次请求包含图片时使用此候选'),
+    minContextTokens: z.number().step(1).min(0).description('仅当预估上下文达到该 token 数时使用此候选；0 表示不限制'),
+  }).description('高级路由条件：不满足时跳过此候选'),
 })
 
 /** Which failures move to the next candidate. Fixed set, Chinese labels. */
@@ -82,6 +96,7 @@ export interface Candidate {
   provider: string
   model: string
   maxAttempts: number
+  needs?: { images?: boolean; minContextTokens?: number }
 }
 
 /** Which failures move to the next candidate. Fixed set, Chinese labels. */

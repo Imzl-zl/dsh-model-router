@@ -362,3 +362,9 @@ dispatch 前不按能力过滤 tools（[`llm/src/index.ts:1078-1095`](file:///D:
 Cordis `fiber.update(config)` 先校验再 `restart()`（[`fiber.ts:731-751`](file:///D:/sudy/github/deepseek-harness/vendor/cordis/src/fiber.ts#L731)）；DSH 插件范式是 zod schema 管字段级 + `apply()` 里 `validateConfig()` 管跨字段、加载即抛（[`llm-retry/src/index.ts:30,123-124`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L30)）。校验失败的爆炸半径是插件 fiber，不是 DSH 本体。
 
 **结论**：结构错误（ID 重复、上限非法、候选为空）硬失败；provider 未注册（环境漂移）降级为该 profile 停用 + warn + UI 徽章。
+
+### 8.5 条件路由取数（2026-10-13，【源码证实】）
+
+- `agent/pre-step` 的 payload 为 `{ agent, messages: UserMessage[], turn, step, signal }`（[`runtime-types.ts:320`](file:///D:/sudy/github/deepseek-harness/packages/core/agent/src/runtime-types.ts#L320)）；spike 7.7 已实测它在 `agent/request` 之前触发且消息可读。图片判定用与 llm 层一致的规则：内容块 `type === 'image'`（[`llm/src/index.ts:1078-1082`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm/src/index.ts#L1078) 的文本模型图片投影同款）。
+- `contextPressure` 投影的 **wire view** 才产出 `projectedTokens`（= `pressureTokens + surfaceTokens - sampledSurfaceTokens`），且仅在首次用量采样后存在（[`usage-projection.ts:208-216`](file:///D:/sudy/github/deepseek-harness/packages/llm/token-meter/src/usage-projection.ts#L208)）；host 侧经 `ctx.sessionProjections.snapshot(session).values['contextPressure']` 读该 canonical 值（[`session-projection/src/index.ts:339-353`](file:///D:/sudy/github/deepseek-harness/packages/session/session-projection/src/index.ts#L339)），不自行复算公式。未采样/未安装 token-meter 时读作 undefined，`minContextTokens` 门按“未满足”处理。
+- 取数时机：两个源都在 route 决策之前且重试不重跑，条件在一步内稳定。用户自己的路由（钉死 primary / default 隐式第一跳）豁免条件——跳过它就是无失败静默改路。
