@@ -1,0 +1,13 @@
+{
+  "name": "dsh-model-router-dev",
+  "private": true,
+  "type": "module",
+  "description": "Dev workspace for the dsh-model-router plugin: installs the DSH CLI so the plugin's @deepseek-ai/dsh-* imports resolve to the same module instances the running host uses.",
+  "scripts": {
+    "test": "node packages/dsh-model-router/tests/run.mjs"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
+    "typescript": "^7.0.2"
+  }
+}

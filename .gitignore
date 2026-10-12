@@ -31,5 +31,11 @@ spike/split/
 # Local backup of the collaboration-file setup run; not project content
 setup-collaboration-files.backup/
 
+# Plugin test runtime: pinned DSH home, session logs, generated overlay/script
+packages/dsh-model-router/tests/.dshhome/
+packages/dsh-model-router/tests/.sessions/
+packages/dsh-model-router/tests/overlay.yml
+packages/dsh-model-router/tests/stub-script.json
+
 # Local Harness session logs, written when a run's working directory is here
 .sessions/

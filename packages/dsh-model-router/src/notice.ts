@@ -1,0 +1,71 @@
+/**
+ * The Chinese failover notice.
+ *
+ * Appended to the session surface as a `user/message` with
+ * `source.form: 'notice'`, the same shape DSH's own model-switch notice uses
+ * (`model-selection.ts`). The client renders any `notice` form as a collapsed
+ * row regardless of the producer kind, and an unknown kind falls back to a
+ * visible label — both verified in the Phase 1 spike (see
+ * docs/design/dsh-capability-boundary.md 7.7).
+ *
+ * One failover therefore shows two notices: DSH's English "model changed" row
+ * (unavoidable, factual) and this one (the reason). That trade-off is a
+ * recorded product decision, not an oversight.
+ */
+
+import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { UserMessage } from '@deepseek-ai/dsh-session'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'model-router': { readonly kind: 'model-router'; readonly form: 'notice'; readonly summary: string }
+  }
+}
+
+/** Chinese labels for the failure codes `switchOn` can name. */
+const CODE_LABELS: Readonly<Record<string, string>> = {
+  RATE_LIMIT: '限流',
+  SERVER: '服务端错误',
+  TIMEOUT: '超时',
+  TRANSPORT: '网络传输中断',
+  EMPTY_RESPONSE: '空回复',
+  INVALID_REQUEST: '请求被拒绝',
+}
+
+export function codeLabel(code: string): string {
+  return CODE_LABELS[code] ?? code
+}
+
+/** One route label: bare model inside one provider, `provider/model` across providers. */
+function label(provider: string, model: string, otherProvider: string): string {
+  return provider === otherProvider ? model : `${provider}/${model}`
+}
+
+function notice(text: string): UserMessage {
+  return createUserMessage({
+    content: [{ type: 'text' as const, text }],
+    source: { kind: 'model-router', form: 'notice', summary: boundContextSummary(text) },
+  })
+}
+
+/** The chain moved to the next candidate after a failure. */
+export function failoverNotice(
+  from: { provider: string; model: string },
+  to: { provider: string; model: string },
+  position: number,
+  total: number,
+  code: string | undefined,
+): UserMessage {
+  const reason = code === undefined ? '连续失败' : `失败（${codeLabel(code)}）`
+  return notice(
+    `[路由切换] 主模型 ${label(from.provider, from.model, to.provider)} ${reason}，`
+    + `已切换至 ${label(to.provider, to.model, from.provider)}（候选 ${position}/${total}）`,
+  )
+}
+
+/** A candidate was skipped before any call: it cannot serve this request. */
+export function skipNotice(candidate: { provider: string; model: string }): UserMessage {
+  return notice(
+    `[路由切换] 候选 ${candidate.provider}/${candidate.model} 不支持当前请求参数，已跳过`,
+  )
+}

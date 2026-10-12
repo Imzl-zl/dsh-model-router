@@ -1,0 +1,9 @@
+# Bundle patch for dsh-model-router.
+#
+# The row id doubles as the settings namespace (`ns: entry.options.id`), and the
+# specifier must be the bare package name so the browser half of this package
+# attaches to this row. See docs/design/dsh-capability-boundary.md 7.9.
+
+- insert:
+    - id: model-router
+      name: 'dsh-model-router'

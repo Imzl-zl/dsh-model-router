@@ -9,11 +9,11 @@
 
 ## 0. 实施基线
 
-- 环境：Windows；参考 DSH checkout 为 `D:\sudy\github\deepseek-harness`。
-- 语言/运行时：设计文档以中文为主；未来插件技术栈遵循 DSH 当前 Cordis/TypeScript 包规范。
-- 当前交付：Markdown 设计项目，无插件实现、依赖清单或构建产物。
-- 配置根目录：当前无运行配置；未来实现的 Cordis 配置位置待产品设计确定。
-- 标准验证命令：当前未配置自动化验证脚本；交付前逐项核对 Markdown 本地链接、官方来源和 DSH 源码引用。
+- 环境：Windows；参考 DSH checkout 为 `D:\sudy\github\deepseek-harness`（只读）。
+- 语言/运行时：设计文档以中文为主；插件技术栈遵循 DSH 当前 Cordis/TypeScript 包规范（schemastery Config、函数插件形态、`Volatile` 配置访问）。
+- 当前交付：Markdown 设计 + Phase 1 插件实现（`packages/dsh-model-router/`，host 侧最小闭环：选路、两层交接、候选索引、预校验、中文通知；8 个真实 Loader 组合测试通过）。
+- 配置根目录：插件经 cordis overlay（开发）或 `dsh.bundle`（交付）安装；配置 ns = bundle patch 行 id（`model-router`）。
+- 标准验证命令：`node packages/dsh-model-router/tests/run.mjs`（组合测试）；`npx tsc --noEmit --skipLibCheck --strict --module nodenext --moduleResolution nodenext --target es2022 --allowImportingTsExtensions packages/dsh-model-router/src/index.ts`（类型检查）；交付前逐项核对 Markdown 本地链接、官方来源和 DSH 源码引用。
 
 ## 1. 作用
 
@@ -28,7 +28,7 @@
 
 ## 3. 架构与项目结构
 
-- 项目无运行时包；`docs/design/` 保存路由提案、源码地图与计划，`docs/references/` 保存外部先例，`.agents/notes/` 保存决策理由。
+- 插件实现在 `packages/dsh-model-router/`（host `src/` + 测试 `tests/`）；`docs/design/` 保存路由提案、源码地图与计划，`docs/references/` 保存外部先例，`.agents/notes/` 保存决策理由；`spike/` 保留 Phase 1 spike 实证产物。
 - DSH 当前实现仅从 `D:\sudy\github\deepseek-harness` 只读核对；未经用户明确授权，不在该 checkout 创建、删除或修改文件。
 
 ## 4. 协作文件与决策笔记
@@ -44,7 +44,7 @@
 - 外部先例：[主流方案对照](docs/references/prior-art.md)。
 - 用户待决问题：[未决事项](docs/design/open-questions.md)。
 - DSH 参考 checkout：`D:\sudy\github\deepseek-harness`。
-- 当前无测试、构建或打包命令；不得声称运行过尚不存在的插件测试。
+- Phase 1 组合测试已实跑（8/8，`packages/dsh-model-router/tests/run.mjs`）；不得声称运行过尚未编写的测试。
 
 ## 6. 项目特定规则
 

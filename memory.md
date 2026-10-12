@@ -4,10 +4,10 @@
 
 ## 当前基线
 
-- 仅包含 Markdown 设计提案与源码研究；无插件实现、自动化测试或构建脚本。
+- Markdown 设计 + Phase 1 插件实现（`packages/dsh-model-router/`，host 侧最小闭环）；无 UI 半包、无条件路由。
 - DSH 参考 checkout：`D:\sudy\github\deepseek-harness`；项目根：`D:\sudy\myproject\dsh-model-router`。
-- 最后更新：2026-10-12（晚：九项产品决策关闭并落档）。
-- 验证状态：17 个 Markdown 文件本地链接 0 失效；166 条 DSH 源码行号引用 0 越界；Phase 1 spike 实跑 exit 0。本轮新增引用未重新全量校验。
+- 最后更新：2026-10-12（晚：Phase 1 host 最小闭环落地并测试通过）。
+- 验证状态：17 个 Markdown 文件本地链接 0 失效；166 条 DSH 源码行号引用 0 越界；Phase 1 spike 实跑 exit 0；Phase 1 组合测试 8/8 通过（真实 headless Loader boot + stub adapter，断言 durable session 事件）；`tsc --noEmit` 0 错误。
 
 ## 已完成能力
 
@@ -28,7 +28,10 @@
 - **九项未决问题全部关闭并落档**（2026-10-12 晚）：`needs.tools` 砍掉（无机器可读元数据；运行时 failover 承接，`INVALID_REQUEST` 进 switchOn 默认不勾）；reasoningEffort 由 Router 在 `agent/request` 用 `resolveCallConfig` 预校验（`prepareCall` 抛错直接终态、不进 recovery，有测试断言）；遥测抽屉只留故障转移历史（`list`→`projections` 通路已核实）；canonical schema 定稿（`enabled` 总闸 + `profiles` 数组 + `default` 纯备用池）；primary 钉死；条件全不满足终态；校验分级（结构硬失败 / provider 缺失降级）。两条 decision note 落 `implemented/`。
 - **DSH 能力元数据事实**：工具能力全仓库无机器可读来源（`LlmModelInfo` 仅 `inputModalities`；pi-ai SDK `Model` 接口无；`normalizeModelInfo` 白名单重建）；reasoning efforts 可读，两个自带 adapter 的 `resolveModel` 均为内存快照（预校验零网络成本）。
 - **投影读取通路**：`snapshot()` 唯一门槛是 wire；`@Remote('list')` 空请求可枚举会话且行带投影 hints；client 半包 `inject ['remote','remote.session']` 可直连 `projections`（guard 只查声明，`ui-settings-models` 同型先例）。
-- **配置生命周期**：`fiber.update()` 先校验再 `restart()`（炸插件不炸 app）；DSH 插件校验范式 = zod schema + `apply()` 里 `validateConfig()`，**不存在 `Config.check()` 方法**。
+- **配置生命周期**：`fiber.update()` 先校验再 `restart()`（炸插件不炸 app）；DSH 插件校验范式 = schemastery schema + `apply()` 里 validateConfig，**不存在 `Config.check()` 方法**。
+- **Phase 1 插件实现落地**（`packages/dsh-model-router/`）：函数插件（`name`/`inject`/`Config`/`apply`），schemastery Config 全 volatile，`config.x.get()` 读取；`agent/request` prepend 选路（每 attempt 都过，压住 llm-retry 重试）、`agent/request-error` 注册于 `agent/created` 的 `agent.ctx` 且不用 prepend；候选索引 WeakMap 单槽按 (turn, step)；预校验走 `ctx.llm.resolveCallConfig`（不过即跳过候选 + skip notice）；notice 经 `agent.session.append('user/message', createUserMessage({source:{kind:'model-router',form:'notice',summary}}), {surfaceOp:'append'})`；失败码经 `session/event` feed + recovery 双路记录。
+- **实现期抓到的真 bug 已修**：到顶换候选原先不查 switchOn（llm-retry 抢占 recovery 时绕过用户选择）——`planFire(state, mayAdvance)` 加门，见 `.agents/notes/implemented/2026-10-12-cap-advance-must-respect-switch-on.md`。
+- **实现期 API 事实**：schemastery 无 `z.infer`（手写 interface + `Volatile<T>` 三段式，样板 llm-pi-ai/src/config.ts）；`Fiber.entry` 是 loader 包运行时增强，外置插件勿依赖；`resolveRetryPolicy` 的 `retryableCodes` 不可为空；stub adapter 必须对 `options.purpose !== undefined` 直接成功；headless CLI 入口 `node_modules/@deepseek-ai/dsh/lib/bin.js`。
 
 ## Phase 1 spike 实证结果（2026-10-12，`spike/`）
 
@@ -72,11 +75,11 @@ assistant/message  provider=spike-backup served_by=spike-backup
 - **配置界面：DSH 完全支持插件带 UI**（slot 系统 + SettingsForm 原语 + locale 字典 + form model + schema 自查询），但**没有"声明 Config 就自动出表单"**——每个插件自己写表单 JSX；连 Models 页那个最像生成的表单也是手写编辑器 + 读 schema 取选项/校验（`ProviderEditor` 按 `layoutOf(ns)` 在手写布局间选）。`.description()` 不会被任何客户端代码读取，标签必须来自插件自己的 locale 字典。客户端半包 factory 格式可手写不必搭 tsdown。
 - **配置界面设计已定稿**，见[ui-design.md](docs/design/ui-design.md)，可视化模板 `spike/ui-mockup.html`。关键结论：① slot 用 `plugins.bundle.config`、key=bundle 包名、只渲染 `view:'page'` 且不传 form（跟随 cot-translation 同形态先例）；② 配置 ns = **bundle patch 行的 id**；③ `SettingsFormModel` 只有 text/number 两个规格工厂，**无 boolean、无 min/max、无列表原语**，自定义 `SettingsFieldSpec` 是官方范式；④ 布尔合规写法只有一条有先例的路——`Switch`/checkbox 原语 + 卡片控制器动作（绕过表单暂存）；⑤ 有序列表范式在 `ui-settings-models/ModelListEditor`（受控、整数组 onChange、按下标增删、**无排序控件**，排序须自造）；⑥ `form.edit` 只收文本，数组必须走整段 `set` path op；⑦ `SettingsForm.labels` 只有 6 个必填键，无 discard/saved/inherited；⑧ i18n gate 禁 JSX 文本/copy 属性/子表达式，文案全进 locales.ts。
 - **两处待用户定已裁定**：排序用行内上移/下移（DSH 无拖拽先例）；多 profile 一屏一链（Profile Bar 标签切换）。
-- 交付物尚未提交 Git；本仓库当前无任何 commit，全部文件为 untracked。
-- **技术准入全绿**：引擎侧（route 决策权、两层 failover 交接、候选索引、中文通知、条件路由取数）与 UI 侧（配置表单真实渲染）均已实测。
-- **下一步：Phase 1 开工**（有序备份链 + switchOn + 每候选次数 + 硬总上限 + 中文通知；条件路由与遥测抽屉进 Phase 2）。准入项：完整候选链 `runLoaderSmoke`、notice 浏览器样式、投影 fork/resume 一致性、设置页读投影组合覆盖、热卸载测试。
-- 遗留保真度问题（spike 探针，正式实现要修）：`switchOn`/`takeOverOthers` 用了文本字段而非开关/复选框；`candidates`/`switchOn` 未注册进 `SettingsFormModel` specs，改动后保存按钮不变 enabled。
-- 决策笔记状态：两篇 `proposed/`（lineage 走 session projection、两个 waterfall 位置不对称）+ 三篇 `implemented/`（外置插件已实跑验证、砍 needs.tools、reasoningEffort 预校验）。
+- **Phase 1 host 侧闭环已完成并测试通过**（8/8 组合测试）：有序备份链 + switchOn + 每候选次数 + 硬总上限 + 中文 notice + 预校验跳过 + 总闸 + default 纯备用池 + 加载时结构校验；实现在 `packages/dsh-model-router/`。
+- **下一步（Phase 1 剩余）**：UI 半包（`src/client` factory + `plugins.bundle.config` slot，key=包名）——候选链/switchOn/预算表单；布尔与数组字段按已验证范式接线（`settingsBooleanField`、整数组 `set` path op、specs 注册），修掉 spike 探针两处保真度问题。
+- **Phase 2 准入项**：条件路由（images/context）、durable lineage 投影、遥测抽屉（list→projections）；notice 浏览器样式、投影 fork/resume 一致性、热卸载测试。
+- 交付物：设计基线已提交（commit 852ad64）；Phase 1 实现待提交。
+- 决策笔记状态：三篇 `proposed/` + 四篇 `implemented/`（外置插件实跑、砍 needs.tools、reasoningEffort 预校验、cap advance 过 switchOn 门）。
 
 ## 仍需注意的坑点
 
@@ -112,4 +115,5 @@ assistant/message  provider=spike-backup served_by=spike-backup
 - 记录两篇 proposed 决策笔记；完成 166 条源码锚点校验。
 - **Phase 1 spike 实跑通过**：`npm install @deepseek-ai/dsh` + `--patch` overlay，仓库外插件加载成功、模块单副本、两个 waterfall 均收到事件、`agent/request` 重试时解析回同一条 route。
 - 记录一篇 implemented 决策笔记；补 `.gitignore` 忽略 spike 运行时产物。
-- **四路并行源码核查 + 九项决策落档**（2026-10-12 晚）：① reasoningEffort 失败路径（源码+既有测试：直接终态不进 recovery）；② 工具能力元数据（全仓库+pi-ai SDK 均无；不兼容走运行时 failover）；③ 插件投影读取通路（snapshot/list/projections/guard 四段核实）；④ 主流能力元数据调研（OpenRouter `supported_parameters`、LiteLLM cost map + pre-call checks、Portkey `type.supported`）。据此关闭 open-questions 全部九项，修订 product-plan（canonical schema/validateConfig 范式/backoff 只读）、ui-design（条件 2 项+推理徽标+primary 钉死+INVALID_REQUEST+历史抽屉）、capability-boundary 第八节、prior-art 能力元数据一节，同步 mockup，落两篇 implemented 决策笔记。
+- **四路并行源码核查 + 九项决策落档**（2026-10-12 晚）：① reasoningEffort 失败路径（源码+既有测试：直接终态不进 recovery）；② 工具能力元数据（全仓库+pi-ai SDK 均无；不兼容走运行时 failover）；③ 插件投影读取通路（snapshot/list/projections/guard 四段核实）；④ 主流能力元数据调研（OpenRouter `supported_parameters`、LiteLLM cost map + pre-call checks、Portkey `type.supported`）。据此关闭 open-questions 全部九项，修订 product-plan/ui-design/capability-boundary/prior-art，同步 mockup，落两篇 implemented 决策笔记。
+- **Phase 1 host 最小闭环落地**（2026-10-12 深夜）：搭包骨架（`dsh.bundle`/patch row id=model-router/peerDeps）、schemastery Config 三段式、`agent/request` prepend 选路 + 每候选 attempt 计数、`agent/request-error` 内层交接、`resolveCallConfig` 预校验跳过、中文 notice、`session/event` 失败码记录；写 stub adapter + 8 场景真实 Loader 组合测试（boot headless CLI + 断言 durable session 事件）。**测试抓到一个真 bug**：到顶换候选不查 switchOn（llm-retry 抢占 recovery 时绕过用户选择），已修并留决策笔记。`tsc --noEmit` 0 错误。
