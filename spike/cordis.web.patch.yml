@@ -1,0 +1,16 @@
+# Boot the web profile with the spike plugin so its auto-generated Config form
+# can be looked at. Same overlay discipline as the headless runs: the shipped
+# DeepSeek adapter is disabled so no API key is needed.
+#
+# The plugin row itself is NOT inserted here: dsh-model-router-spike declares
+# dsh.bundle.patch, and its own cordis.patch.yml already inserts the row with
+# the bare package name. Re-inserting it here under the same id would replace
+# that row (vendor/include/src/index.ts:79-101, vendor/loader/src/config/group.ts:51-52),
+# and an absolute-path row resolves its nearest package to spike/package.json,
+# which declares no dsh.client.
+
+- id: llm-deepseek
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true

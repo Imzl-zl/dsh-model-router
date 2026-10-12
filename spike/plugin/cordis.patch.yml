@@ -1,0 +1,7 @@
+# The row's specifier MUST be the bare package name: the client module system
+# attaches a package's browser half to the row whose specifier is that name, and
+# a row mounted from a subpath export never carries a half.
+
+- insert:
+    - id: spike-probe
+      name: 'dsh-model-router-spike'

@@ -1,0 +1,35 @@
+# Editor and operating-system noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Build and package outputs (reserved for future implementation)
+node_modules/
+dist/
+coverage/
+
+# Spike runtime artifacts: the installed dsh CLI, the pinned Harness home,
+# local session logs and probe evidence. None of it is a deliverable.
+spike/node_modules/
+spike/.dshhome/
+spike/.dshhome-web/
+spike/.sessions/
+spike/package-lock.json
+spike/probe.log
+spike/src/probe.log
+spike/*.log
+spike/**/*.log
+spike/dumpcfg.txt
+spike/split/
+
+# Local backup of the collaboration-file setup run; not project content
+setup-collaboration-files.backup/
+
+# Local Harness session logs, written when a run's working directory is here
+.sessions/

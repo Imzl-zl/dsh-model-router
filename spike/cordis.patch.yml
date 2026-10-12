@@ -1,0 +1,28 @@
+# Spike overlay: boot the real headless profile with the out-of-tree probe.
+#
+# Two things are proved by this file alone:
+#   1. the plugin module at an absolute path outside the dsh checkout loads;
+#   2. its `@deepseek-ai/dsh-llm` import resolves to the SAME instance the
+#      running host uses (a second copy makes `registerAdapter` throw or the
+#      adapter fail `instanceof` checks).
+#
+# The shipped DeepSeek adapter is disabled so no API key and no network call are
+# needed; that frees the `deepseek-official` route, which the probe registers
+# with its stub. The headless app reads its provider/model from
+# `agentDefaultModel.currentSelection()`, so the stub is reached without touching
+# `agent-loop.agents` — which the base bundle leaves empty on purpose.
+
+- id: llm-deepseek
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true
+
+- id: session-persistence-jsonl
+  config:
+    root: './.sessions'
+    compression: none
+
+- insert:
+    - id: spike-probe
+      name: 'D:/sudy/myproject/dsh-model-router/spike/src/spike-probe.mjs'

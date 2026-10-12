@@ -1,0 +1,1922 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-model-router — 完整配置界面原型 (全细节页面与交互)</title>
+<style>
+  /* =====================================================================
+   * DSH 官方 Design Token 系统注入 (取自 ui-theme/styles/design-platform.css)
+   * ===================================================================== */
+  :root {
+    --dsh-font-text: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    --dsh-font-brand: 'Montserrat', var(--dsh-font-text);
+    --dsh-font-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    --dsw-radius-xs: 4px;
+    --dsw-radius-sm: 8px;
+    --dsw-radius-md: 12px;
+    --dsw-radius-lg: 16px;
+    --dsw-radius-xl: 20px;
+    --dsw-radius-panel: 28px;
+    --ds-ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --ds-transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* 默认深色主题 (Dark Theme - data-ds-dark-theme) */
+  body[data-theme="dark"], body:not([data-theme="light"]) {
+    --dsw-alias-bg-base: rgb(21, 21, 23);
+    --dsw-alias-bg-layer-1: rgb(35, 35, 36);
+    --dsw-alias-bg-layer-2: rgb(44, 44, 46);
+    --dsw-alias-bg-layer-3: rgb(53, 54, 56);
+    --dsw-alias-bg-layer-4: rgb(67, 69, 74);
+    --dsw-alias-bg-layer-active: rgba(255, 255, 255, 0.08);
+
+    --dsw-alias-border-l1: rgba(255, 255, 255, 0.06);
+    --dsw-alias-border-l2: rgba(255, 255, 255, 0.10);
+    --dsw-alias-border-l3: rgba(255, 255, 255, 0.16);
+    --dsw-alias-border-l4: rgba(255, 255, 255, 0.22);
+
+    --dsw-alias-label-primary: rgb(249, 250, 251);
+    --dsw-alias-label-secondary: rgb(207, 211, 214);
+    --dsw-alias-label-tertiary: rgb(151, 157, 166);
+    --dsw-alias-label-caption: rgb(129, 133, 140);
+    --dsw-alias-label-dimmed: rgb(97, 102, 107);
+
+    --dsw-alias-brand-primary: rgb(86, 134, 254);
+    --dsw-alias-button-primary-fill: rgb(86, 134, 254);
+    --dsw-alias-button-primary-hover: rgb(122, 170, 255);
+
+    --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.07);
+    --dsw-alias-interactive-bg-active: rgba(255, 255, 255, 0.12);
+
+    --dsw-alias-state-success: rgb(34, 197, 94);
+    --dsw-alias-state-success-bg: rgba(34, 197, 94, 0.12);
+    --dsw-alias-state-warn: rgb(245, 158, 11);
+    --dsw-alias-state-warn-bg: rgba(245, 158, 11, 0.12);
+    --dsw-alias-state-error: rgb(242, 90, 90);
+    --dsw-alias-state-error-bg: rgba(242, 90, 90, 0.14);
+
+    --dsw-card-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  }
+
+  /* 浅色主题 (Light Theme) */
+  body[data-theme="light"] {
+    --dsw-alias-bg-base: rgb(245, 246, 247);
+    --dsw-alias-bg-layer-1: rgb(255, 255, 255);
+    --dsw-alias-bg-layer-2: rgb(249, 250, 251);
+    --dsw-alias-bg-layer-3: rgb(235, 238, 242);
+    --dsw-alias-bg-layer-4: rgb(225, 229, 238);
+    --dsw-alias-bg-layer-active: rgba(0, 0, 0, 0.06);
+
+    --dsw-alias-border-l1: rgba(0, 0, 0, 0.05);
+    --dsw-alias-border-l2: rgba(0, 0, 0, 0.08);
+    --dsw-alias-border-l3: rgba(0, 0, 0, 0.14);
+    --dsw-alias-border-l4: rgba(0, 0, 0, 0.18);
+
+    --dsw-alias-label-primary: rgb(21, 21, 23);
+    --dsw-alias-label-secondary: rgb(67, 69, 74);
+    --dsw-alias-label-tertiary: rgb(97, 102, 107);
+    --dsw-alias-label-caption: rgb(151, 157, 166);
+    --dsw-alias-label-dimmed: rgb(173, 178, 184);
+
+    --dsw-alias-brand-primary: rgb(59, 130, 246);
+    --dsw-alias-button-primary-fill: rgb(59, 130, 246);
+    --dsw-alias-button-primary-hover: rgb(37, 99, 235);
+
+    --dsw-alias-interactive-bg-hover: rgba(0, 0, 0, 0.04);
+    --dsw-alias-interactive-bg-active: rgba(0, 0, 0, 0.08);
+
+    --dsw-alias-state-success: rgb(22, 163, 74);
+    --dsw-alias-state-success-bg: rgba(22, 163, 74, 0.1);
+    --dsw-alias-state-warn: rgb(217, 119, 6);
+    --dsw-alias-state-warn-bg: rgba(217, 119, 6, 0.1);
+    --dsw-alias-state-error: rgb(220, 38, 38);
+    --dsw-alias-state-error-bg: rgba(220, 38, 38, 0.1);
+
+    --dsw-card-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--dsw-alias-bg-base);
+    color: var(--dsw-alias-label-primary);
+    font-family: var(--dsh-font-text);
+    font-size: 13.5px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color var(--ds-transition), color var(--ds-transition);
+  }
+
+  /* 顶部全局提示条与工具栏 */
+  .meta-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--dsw-alias-bg-layer-1);
+    border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+    padding: 10px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+  }
+  .meta-topbar .info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--dsw-alias-label-secondary);
+  }
+  .meta-topbar .badge {
+    background: var(--dsw-alias-state-success-bg);
+    color: var(--dsw-alias-state-success);
+    padding: 2px 8px;
+    border-radius: var(--dsw-radius-sm);
+    font-weight: 500;
+    font-size: 11px;
+  }
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .btn-topbar {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l4);
+    color: var(--dsw-alias-label-secondary);
+    border-radius: var(--dsw-radius-md);
+    padding: 4px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    transition: var(--ds-transition);
+  }
+  .btn-topbar:hover {
+    color: var(--dsw-alias-label-primary);
+    border-color: var(--dsw-alias-brand-primary);
+  }
+
+  .layout-container {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 32px 24px 120px;
+  }
+
+  /* 导航面包屑 */
+  .breadcrumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--dsw-alias-label-tertiary);
+    cursor: pointer;
+    margin-bottom: 18px;
+  }
+
+  /* 插件头部看板 Card Header */
+  .plugin-header {
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-xl);
+    padding: 22px 26px;
+    margin-bottom: 24px;
+    box-shadow: var(--dsw-card-shadow);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+  }
+  .header-left {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+  }
+  .plugin-avatar {
+    width: 50px;
+    height: 50px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .plugin-avatar svg { width: 26px; height: 26px; fill: #ffffff; }
+
+  .plugin-meta h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .version-tag {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 6px;
+    background: var(--dsw-alias-bg-layer-3);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    color: var(--dsw-alias-label-secondary);
+    font-family: var(--dsh-font-code);
+  }
+  .status-tag {
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 6px;
+    background: var(--dsw-alias-state-success-bg);
+    color: var(--dsw-alias-state-success);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+  }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background-color: currentColor; }
+  .plugin-desc {
+    color: var(--dsw-alias-label-secondary);
+    font-size: 13px;
+    margin: 4px 0 0;
+    max-width: 530px;
+    line-height: 1.5;
+  }
+
+  .header-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 12px;
+  }
+
+  /* DSH Switch 开关原语规范 */
+  .switch-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .switch-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--dsw-alias-label-primary);
+  }
+  .dsh-switch {
+    width: 44px;
+    height: 24px;
+    border-radius: 12px;
+    background: var(--dsw-alias-bg-layer-4);
+    position: relative;
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background-color var(--ds-transition), border-color var(--ds-transition);
+  }
+  .dsh-switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    transition: transform var(--ds-transition);
+  }
+  .dsh-switch[aria-checked="true"] {
+    background: var(--dsw-alias-brand-primary);
+    border-color: var(--dsw-alias-brand-primary);
+  }
+  .dsh-switch[aria-checked="true"]::after {
+    transform: translateX(20px);
+  }
+
+  /* ================= 多 Profile 标签导航栏 ================= */
+  .profile-bar-card {
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-lg);
+    padding: 14px 18px;
+    margin-bottom: 24px;
+    box-shadow: var(--dsw-card-shadow);
+  }
+  .profile-bar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .profile-bar-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--dsw-alias-label-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .profile-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .profile-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: var(--dsw-radius-md);
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l2);
+    color: var(--dsw-alias-label-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all var(--ds-transition);
+    user-select: none;
+  }
+  .profile-tab:hover {
+    color: var(--dsw-alias-label-primary);
+    border-color: var(--dsw-alias-border-l4);
+    background: var(--dsw-alias-bg-layer-3);
+  }
+  .profile-tab.active {
+    background: var(--dsw-alias-bg-layer-3);
+    border-color: var(--dsw-alias-brand-primary);
+    color: var(--dsw-alias-brand-primary);
+    font-weight: 500;
+  }
+  .profile-tab .count-badge {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--dsw-alias-bg-layer-4);
+    color: var(--dsw-alias-label-secondary);
+  }
+  .profile-tab.active .count-badge {
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--dsw-alias-brand-primary);
+  }
+  .add-profile-btn {
+    border: 0.5px dashed var(--dsw-alias-border-l4);
+    background: transparent;
+    color: var(--dsw-alias-label-tertiary);
+    padding: 6px 12px;
+    border-radius: var(--dsw-radius-md);
+    font-size: 12.5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all var(--ds-transition);
+  }
+  .add-profile-btn:hover {
+    border-color: var(--dsw-alias-brand-primary);
+    color: var(--dsw-alias-brand-primary);
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+
+  /* 核心配置工作区 */
+  .profile-workarea {
+    display: grid;
+    gap: 24px;
+  }
+
+  .section-card {
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-lg);
+    padding: 22px 24px;
+    box-shadow: var(--dsw-card-shadow);
+    transition: border-color var(--ds-transition);
+  }
+  .section-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .section-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--dsw-alias-label-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+  }
+  .section-subtitle {
+    font-size: 12.5px;
+    color: var(--dsw-alias-label-tertiary);
+    margin: 0;
+  }
+
+  /* Profile 操作条 (如删除当前 Profile) */
+  .profile-meta-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn-danger-ghost {
+    background: transparent;
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    color: var(--dsw-alias-state-error);
+    border-radius: var(--dsw-radius-md);
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: var(--ds-transition);
+  }
+  .btn-danger-ghost:hover {
+    background: var(--dsw-alias-state-error-bg);
+    border-color: var(--dsw-alias-state-error);
+  }
+
+  /* ================= 核心组件 1：流式降级链 (Pipeline Flow) ================= */
+  .chain-pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    padding-left: 12px;
+  }
+  .chain-node {
+    position: relative;
+    padding-bottom: 16px;
+  }
+  .chain-node:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    left: 20px;
+    top: 50px;
+    bottom: -4px;
+    width: 2px;
+    background: repeating-linear-gradient(
+      to bottom,
+      var(--dsw-alias-border-l4) 0,
+      var(--dsw-alias-border-l4) 4px,
+      transparent 4px,
+      transparent 8px
+    );
+    z-index: 1;
+  }
+
+  .node-card {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-md);
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    z-index: 2;
+    transition: all var(--ds-transition);
+  }
+  .node-card:hover {
+    border-color: var(--dsw-alias-border-l4);
+    background: var(--dsw-alias-bg-layer-3);
+  }
+  .node-card.primary {
+    border-color: rgba(65, 118, 230, 0.4);
+    background: linear-gradient(90deg, rgba(65, 118, 230, 0.08) 0%, var(--dsw-alias-bg-layer-2) 100%);
+  }
+
+  .node-card-main-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .node-rank-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+    background: var(--dsw-alias-bg-layer-3);
+    color: var(--dsw-alias-label-secondary);
+    border: 0.5px solid var(--dsw-alias-border-l4);
+  }
+  .node-card.primary .node-rank-badge {
+    background: var(--dsw-alias-brand-primary);
+    color: #ffffff;
+    border-color: transparent;
+    box-shadow: 0 2px 8px rgba(65, 118, 230, 0.4);
+  }
+
+  .node-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .model-info-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .model-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .model-display-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--dsw-alias-label-primary);
+  }
+  .provider-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: var(--dsw-radius-sm);
+    background: var(--dsw-alias-bg-layer-4);
+    color: var(--dsw-alias-label-secondary);
+    border: 0.5px solid var(--dsw-alias-border-l2);
+    font-weight: 500;
+  }
+  .provider-badge.deepseek {
+    background: rgba(65, 118, 230, 0.15);
+    color: rgb(122, 170, 255);
+    border-color: rgba(65, 118, 230, 0.3);
+  }
+  .provider-badge.openai {
+    background: rgba(16, 185, 129, 0.15);
+    color: rgb(52, 211, 153);
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+  .provider-badge.anthropic {
+    background: rgba(245, 158, 11, 0.15);
+    color: rgb(251, 191, 36);
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  .model-path-sub {
+    font-size: 12px;
+    color: var(--dsw-alias-label-tertiary);
+    font-family: var(--dsh-font-code);
+  }
+
+  .node-tuning-block {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .attempt-limit-picker {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-sm);
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--dsw-alias-label-secondary);
+  }
+  .attempt-limit-picker input {
+    width: 28px;
+    border: none;
+    background: transparent;
+    color: var(--dsw-alias-label-primary);
+    font-size: 12.5px;
+    font-weight: 600;
+    text-align: center;
+    outline: none;
+  }
+
+  .node-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .icon-tool-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--dsw-radius-sm);
+    border: none;
+    background: transparent;
+    color: var(--dsw-alias-label-tertiary);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: all var(--ds-transition);
+  }
+  .icon-tool-btn:hover:not(:disabled) {
+    background: var(--dsw-alias-bg-layer-4);
+    color: var(--dsw-alias-label-primary);
+  }
+  .icon-tool-btn:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+  }
+  .icon-tool-btn.danger:hover:not(:disabled) {
+    background: var(--dsw-alias-state-error-bg);
+    color: var(--dsw-alias-state-error);
+  }
+
+  /* 节点高级条件展开卡片 (Advanced Needs Editor) */
+  .node-advanced-needs-panel {
+    border-top: 0.5px solid var(--dsw-alias-border-l2);
+    padding-top: 10px;
+    display: none;
+    animation: fadeIn 0.2s var(--ds-ease);
+  }
+  .node-advanced-needs-panel.expanded {
+    display: block;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .needs-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .need-item-card {
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l2);
+    border-radius: var(--dsw-radius-sm);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .need-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .need-item-hint {
+    font-size: 11px;
+    color: var(--dsw-alias-label-tertiary);
+  }
+  .need-item-card input[type="text"] {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: 4px;
+    color: var(--dsw-alias-label-primary);
+    padding: 3px 6px;
+    font-size: 11.5px;
+    outline: none;
+  }
+
+  .toggle-needs-btn {
+    background: transparent;
+    border: 0.5px solid var(--dsw-alias-border-l2);
+    color: var(--dsw-alias-label-secondary);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .toggle-needs-btn:hover {
+    color: var(--dsw-alias-brand-primary);
+    border-color: var(--dsw-alias-brand-primary);
+  }
+
+  .failover-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 6px 46px;
+    font-size: 11.5px;
+    color: var(--dsw-alias-label-tertiary);
+  }
+  .failover-tag {
+    background: var(--dsw-alias-bg-layer-3);
+    border: 0.5px solid var(--dsw-alias-border-l2);
+    color: var(--dsw-alias-label-secondary);
+    border-radius: var(--dsw-radius-sm);
+    padding: 2px 8px;
+    font-weight: 500;
+  }
+
+  .add-candidate-bar {
+    margin-left: 46px;
+    display: flex;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .btn-catalog-pick {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    color: var(--dsw-alias-label-primary);
+    padding: 7px 16px;
+    border-radius: var(--dsw-radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: all var(--ds-transition);
+  }
+  .btn-catalog-pick:hover {
+    background: var(--dsw-alias-bg-layer-3);
+    border-color: var(--dsw-alias-brand-primary);
+    color: var(--dsw-alias-brand-primary);
+  }
+  .btn-manual-add {
+    background: transparent;
+    border: 0.5px dashed var(--dsw-alias-border-l4);
+    color: var(--dsw-alias-label-secondary);
+    padding: 7px 14px;
+    border-radius: var(--dsw-radius-md);
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all var(--ds-transition);
+  }
+  .btn-manual-add:hover {
+    border-color: var(--dsw-alias-border-l4);
+    color: var(--dsw-alias-label-primary);
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+
+  /* ================= 核心组件 2：故障切换条件网格 ================= */
+  .trigger-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 12px;
+    margin-top: 6px;
+  }
+  .trigger-card {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-md);
+    padding: 12px 14px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+    transition: all var(--ds-transition);
+    user-select: none;
+  }
+  .trigger-card:hover {
+    border-color: var(--dsw-alias-border-l4);
+    background: var(--dsw-alias-bg-layer-3);
+  }
+  .trigger-card.checked {
+    border-color: rgba(65, 118, 230, 0.45);
+    background: rgba(65, 118, 230, 0.06);
+  }
+  .trigger-chk {
+    width: 17px;
+    height: 17px;
+    accent-color: var(--dsw-alias-brand-primary);
+    margin-top: 2px;
+    cursor: pointer;
+  }
+  .trigger-info { flex: 1; }
+  .trigger-title-row { display: flex; align-items: center; gap: 6px; }
+  .trigger-name { font-size: 13px; font-weight: 500; color: var(--dsw-alias-label-primary); }
+  .trigger-code {
+    font-size: 10.5px;
+    font-family: var(--dsh-font-code);
+    color: var(--dsw-alias-label-tertiary);
+    background: var(--dsw-alias-bg-layer-4);
+    padding: 0 5px;
+    border-radius: 4px;
+  }
+  .trigger-desc { font-size: 11.5px; color: var(--dsw-alias-label-tertiary); margin-top: 3px; line-height: 1.4; }
+
+  .safety-notice-box {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: var(--dsw-radius-md);
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l2);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--dsw-alias-label-secondary);
+  }
+  .safety-notice-box svg { flex-shrink: 0; margin-top: 1px; color: var(--dsw-alias-state-warn); }
+
+  /* ================= 核心组件 3：防护硬预算与退避参数 ================= */
+  .budget-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .budget-item {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-md);
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .budget-label-wrap { display: flex; flex-direction: column; gap: 2px; }
+  .budget-title { font-size: 13px; font-weight: 500; color: var(--dsw-alias-label-primary); }
+  .budget-hint { font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
+  .budget-input-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-sm);
+    padding: 4px 10px;
+  }
+  .budget-input-group input {
+    width: 44px;
+    border: none;
+    background: transparent;
+    color: var(--dsw-alias-label-primary);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: right;
+    outline: none;
+  }
+  .budget-input-group span { font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+
+  /* 全局默认兜底 Profile 专属视图提示卡片 */
+  .default-profile-intro-box {
+    background: rgba(59, 130, 246, 0.08);
+    border: 0.5px solid rgba(59, 130, 246, 0.25);
+    border-radius: var(--dsw-radius-lg);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .default-profile-intro-box svg { color: var(--dsw-alias-brand-primary); flex-shrink: 0; margin-top: 2px; }
+  .default-profile-intro-title { font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary); margin: 0 0 4px; }
+  .default-profile-intro-desc { font-size: 12.5px; color: var(--dsw-alias-label-secondary); margin: 0; line-height: 1.5; }
+
+  /* ================= 浮动操作条 ================= */
+  .floating-action-bar {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(0);
+    z-index: 90;
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l4);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    border-radius: var(--dsw-radius-panel);
+    padding: 8px 16px 8px 22px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    animation: slideUp 0.25s var(--ds-ease);
+  }
+  @keyframes slideUp {
+    from { transform: translateX(-50%) translateY(24px); opacity: 0; }
+    to { transform: translateX(-50%) translateY(0); opacity: 1; }
+  }
+  .floating-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+  .dirty-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dsw-alias-state-warn); }
+  .floating-buttons { display: flex; align-items: center; gap: 8px; }
+  .btn-discard {
+    background: transparent;
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    color: var(--dsw-alias-label-secondary);
+    padding: 6px 14px;
+    border-radius: var(--dsw-radius-md);
+    font-size: 13px;
+    cursor: pointer;
+    transition: var(--ds-transition);
+  }
+  .btn-discard:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+  .btn-save {
+    background: var(--dsw-alias-button-primary-fill);
+    border: none;
+    color: #ffffff;
+    padding: 6px 18px;
+    border-radius: var(--dsw-radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: var(--ds-transition);
+    box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35);
+  }
+  .btn-save:hover { background: var(--dsw-alias-button-primary-hover); }
+
+  /* ================= 通用模态弹窗系统 (Modal 原语) ================= */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal-dialog {
+    background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l4);
+    border-radius: var(--dsw-radius-xl);
+    width: 100%;
+    max-width: 560px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modalPop 0.2s var(--ds-ease);
+  }
+  @keyframes modalPop {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .modal-header {
+    padding: 18px 24px;
+    border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-title { font-size: 16px; font-weight: 600; margin: 0; }
+  .modal-body {
+    padding: 18px 24px;
+    max-height: 440px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .modal-footer {
+    padding: 14px 24px;
+    border-top: 0.5px solid var(--dsw-alias-border-l2);
+    background: var(--dsw-alias-bg-layer-2);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .form-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--dsw-alias-label-primary);
+  }
+  .form-hint {
+    font-size: 11.5px;
+    color: var(--dsw-alias-label-tertiary);
+  }
+  .form-input {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    border-radius: var(--dsw-radius-sm);
+    color: var(--dsw-alias-label-primary);
+    padding: 8px 12px;
+    font-size: 13px;
+    outline: none;
+    font-family: inherit;
+  }
+  .form-input:focus { border-color: var(--dsw-alias-brand-primary); }
+
+  /* 运行状态与审计日志抽屉 (Telemetry Drawer) */
+  .telemetry-drawer {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: 460px;
+    background: var(--dsw-alias-bg-layer-1);
+    border-left: 0.5px solid var(--dsw-alias-border-l4);
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
+    z-index: 250;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.25s var(--ds-ease);
+  }
+  .telemetry-drawer.active { transform: translateX(0); }
+  .drawer-header {
+    padding: 18px 24px;
+    border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .drawer-body {
+    padding: 20px 24px;
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .channel-health-row {
+    background: var(--dsw-alias-bg-layer-2);
+    border: 0.5px solid var(--dsw-alias-border-l2);
+    border-radius: var(--dsw-radius-md);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .health-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .health-dot.ok { background: var(--dsw-alias-state-success); }
+  .health-dot.cooling { background: var(--dsw-alias-state-warn); }
+  .health-dot.down { background: var(--dsw-alias-state-error); }
+
+  .audit-log-item {
+    border-left: 2px solid var(--dsw-alias-brand-primary);
+    padding-left: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12px;
+  }
+  .audit-log-time { color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+  .audit-log-desc { color: var(--dsw-alias-label-primary); }
+
+  /* 规范对照面板 */
+  .design-notes-panel {
+    margin-top: 40px;
+    border-top: 0.5px solid var(--dsw-alias-border-l3);
+    padding-top: 24px;
+    color: var(--dsw-alias-label-tertiary);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .design-notes-panel h3 { color: var(--dsw-alias-label-secondary); font-size: 13px; margin: 0 0 10px; }
+  .design-notes-panel ul { margin: 0; padding-left: 18px; }
+  .design-notes-panel li { margin-bottom: 6px; }
+  .design-notes-panel code {
+    font-family: var(--dsh-font-code);
+    background: var(--dsw-alias-bg-layer-3);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--dsw-alias-label-secondary);
+  }
+</style>
+</head>
+<body data-theme="dark">
+
+<!-- 顶部演示控制条 -->
+<aside class="meta-topbar" aria-label="原型控制条">
+  <div class="info">
+    <span class="badge">DSH 官方规范完全体</span>
+    <span>DSH Model Router 插件配置完整体系 · 含全部细节配置页、二级弹窗与状态抽屉</span>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn-topbar" id="openTelemetryBtn" type="button">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2zm1.5 0a.5.5 0 0 0-.5.5v9l3.5-3.5 2.5 2.5 4.5-4.5 3 3V2.5a.5.5 0 0 0-.5-.5H1.5z"/>
+      </svg>
+      故障转移历史
+    </button>
+    <button class="btn-topbar" id="themeToggleBtn" type="button" aria-label="切换明暗主题">
+      <span id="themeIcon">☀️</span>
+      <span id="themeText">浅色模式</span>
+    </button>
+  </div>
+</aside>
+
+<div class="layout-container">
+
+  <!-- 面包屑 -->
+  <nav class="breadcrumb" aria-label="面包屑导航">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"/>
+    </svg>
+    <span>插件中心 (Plugins)</span>
+    <span>/</span>
+    <span>已安装插件</span>
+  </nav>
+
+  <!-- 插件头部看板 Card Header -->
+  <header class="plugin-header">
+    <div class="header-left">
+      <div class="plugin-avatar">
+        <svg viewBox="0 0 24 24">
+          <path d="M17 3a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-4.17l-2 2H15a3 3 0 0 1 3 3v1.17l1.59-1.58a1 1 0 0 1 1.41 1.41l-3.3 3.3a1 1 0 0 1-1.4 0l-3.3-3.3a1 1 0 0 1 1.4-1.41L16 16.17V15a1 1 0 0 0-1-1h-4.17l-2 2H11a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h1.17l2-2H8a3 3 0 0 1-3-3V9.83L3.41 11.41a1 1 0 0 1-1.41-1.41l3.3-3.3a1 1 0 0 1 1.4 0l3.3 3.3a1 1 0 0 1-1.4 1.41L7 9.83V11a1 1 0 0 0 1 1h4.17l2-2H13a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4zM7 18v2h4v-2H7zm6-13v2h4V5h-4z"/>
+        </svg>
+      </div>
+      <div class="plugin-meta">
+        <h1>
+          Model Router
+          <span class="version-tag">v0.1.0</span>
+          <span class="status-tag">
+            <span class="status-dot"></span>
+            活跃运行中
+          </span>
+        </h1>
+        <p class="plugin-desc">
+          为 Agent 主请求提供透明的跨 Provider 故障转移与备份链。当主模型遭遇限流或异常时，按指定顺序自动降级并保留上下文。
+        </p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="switch-wrapper">
+        <span class="switch-label">启用渠道路由</span>
+        <button class="dsh-switch" id="globalSwitch" role="switch" aria-checked="true" aria-label="启用渠道路由"></button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Profile 多模型规则切换器 (SegmentedTabs) -->
+  <section class="profile-bar-card" aria-label="路由规则选择">
+    <div class="profile-bar-header">
+      <span class="profile-bar-title">已配置的路由规则 (PROFILES)</span>
+      <button class="add-profile-btn" id="btnOpenNewProfileModal" type="button">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2z"/>
+        </svg>
+        为其他模型配置规则
+      </button>
+    </div>
+    <div class="profile-tabs" id="profileTabs">
+      <div class="profile-tab active" data-profile="deepseek">
+        <span>DeepSeek-V4 Flash</span>
+        <span class="count-badge">3 候选</span>
+      </div>
+      <div class="profile-tab" data-profile="claude">
+        <span>Claude 3.5 Sonnet</span>
+        <span class="count-badge">2 候选</span>
+      </div>
+      <div class="profile-tab" data-profile="default">
+        <span>🌐 全局默认兜底</span>
+        <span class="count-badge">未启用</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 核心工作区：由当前所选 Profile 驱动 -->
+  <main class="profile-workarea" id="profileWorkArea">
+
+    <!-- 视图 A：普通模型规则配置视图 (DeepSeek / Claude) -->
+    <div id="viewCustomProfile">
+      <!-- 1. 有序降级链路卡片 -->
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2 class="section-title">
+              <span id="currentProfileTitle">DeepSeek V4 Flash 降级链路</span>
+            </h2>
+            <p class="section-subtitle">
+              请求优先发送至首选主渠道。若达到单渠道尝试上限或触发指定异常，将自动流转至下一备用渠道。
+            </p>
+          </div>
+          <div class="profile-meta-actions">
+            <button class="btn-danger-ghost" id="btnDeleteCurrentProfile" type="button">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
+              删除此规则
+            </button>
+          </div>
+        </div>
+
+        <div class="chain-pipeline" id="chainPipeline">
+          <!-- 节点 1：主模型 -->
+          <div class="chain-node" data-index="0">
+            <div class="node-card primary">
+              <div class="node-card-main-row">
+                <div class="node-rank-badge">01</div>
+                <div class="node-content">
+                  <div class="model-info-block">
+                    <div class="model-name-row">
+                      <span class="model-display-name">DeepSeek V4 Flash</span>
+                      <span class="provider-badge deepseek">deepseek-official</span>
+                      <span class="provider-badge" title="推理档位：来自模型目录">推理: 标准</span>
+                    </div>
+                    <div class="model-path-sub">deepseek-official / deepseek-v4-flash</div>
+                  </div>
+                  <div class="node-tuning-block">
+                    <div class="attempt-limit-picker" title="该渠道在向下切换前的最大尝试次数（切换前会先等待一次退避，约 0.5~10 秒）">
+                      <span>单渠道尝试</span>
+                      <input type="text" value="2" maxlength="2" aria-label="单渠道尝试次数">
+                      <span>次</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="node-actions">
+                  <button class="icon-tool-btn" disabled title="首选节点已置顶">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="m8 3.5 4 4.5H4z"/></svg>
+                  </button>
+                  <button class="icon-tool-btn" title="下移" onclick="triggerDirty()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="m8 12.5-4-4.5h8z"/></svg>
+                  </button>
+                  <button class="icon-tool-btn danger" disabled title="首选节点不可删除（钉死为用户所选模型）">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Primary 节点无高级条件入口（钉死规则） -->
+
+            </div>
+          </div>
+
+          <!-- 触发流转指示 -->
+          <div class="failover-indicator">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--dsw-alias-brand-primary);">
+              <path fill-rule="evenodd" d="M8 1a.5.5 0 0 1 .5.5v11.793l3.146-3.147a.5.5 0 0 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 0 1 .708-.708L7.5 13.293V1.5A.5.5 0 0 1 8 1z"/>
+            </svg>
+            <span>若主渠道遭遇限流或超时，自动切换至 1 号备用：</span>
+            <span class="failover-tag">Failover #1</span>
+          </div>
+
+          <!-- 节点 2：备用 1 -->
+          <div class="chain-node" data-index="1">
+            <div class="node-card">
+              <div class="node-card-main-row">
+                <div class="node-rank-badge">02</div>
+                <div class="node-content">
+                  <div class="model-info-block">
+                    <div class="model-name-row">
+                      <span class="model-display-name">GPT-5 Mini / Turbo</span>
+                      <span class="provider-badge openai">pi-ai-gpt</span>
+                      <button class="toggle-needs-btn" onclick="toggleNeeds(1)">⚙️ 高级路由条件</button>
+                    </div>
+                    <div class="model-path-sub">pi-ai-gpt / gpt-5</div>
+                  </div>
+                  <div class="node-tuning-block">
+                    <div class="attempt-limit-picker" title="该渠道在向下切换前的最大尝试次数（切换前会先等待一次退避，约 0.5~10 秒）">
+                      <span>单渠道尝试</span>
+                      <input type="text" value="1" maxlength="2" aria-label="单渠道尝试次数">
+                      <span>次</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="node-actions">
+                  <button class="icon-tool-btn" title="上移" onclick="triggerDirty()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="m8 3.5 4 4.5H4z"/></svg>
+                  </button>
+                  <button class="icon-tool-btn" title="下移" onclick="triggerDirty()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="m8 12.5-4-4.5h8z"/></svg>
+                  </button>
+                  <button class="icon-tool-btn danger" title="删除" onclick="triggerDirty()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 节点 2 高级条件面板 -->
+              <div class="node-advanced-needs-panel" id="needsPanel1">
+                <div class="needs-grid">
+                  <div class="need-item-card">
+                    <div class="need-item-header">
+                      <span>图像/多模态输入</span>
+                      <input type="checkbox" checked onchange="triggerDirty()">
+                    </div>
+                    <span class="need-item-hint">仅当会话包含图片时允许匹配</span>
+                  </div>
+                  <div class="need-item-card">
+                    <div class="need-item-header">
+                      <span>最小上下文门槛 (Tokens)</span>
+                    </div>
+                    <input type="text" value="0" placeholder="如 64000" oninput="triggerDirty()">
+                    <span class="need-item-hint">按预估值判断（估算值，可能低估中文）</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- 触发流转指示 2 -->
+          <div class="failover-indicator">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--dsw-alias-brand-primary);">
+              <path fill-rule="evenodd" d="M8 1a.5.5 0 0 1 .5.5v11.793l3.146-3.147a.5.5 0 0 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 0 1 .708-.708L7.5 13.293V1.5A.5.5 0 0 1 8 1z"/>
+            </svg>
+            <span>若继续异常，切换至终极保底渠道：</span>
+            <span class="failover-tag">Failover #2</span>
+          </div>
+
+          <!-- 节点 3：备用 2 -->
+          <div class="chain-node" data-index="2">
+            <div class="node-card">
+              <div class="node-card-main-row">
+                <div class="node-rank-badge">03</div>
+                <div class="node-content">
+                  <div class="model-info-block">
+                    <div class="model-name-row">
+                      <span class="model-display-name">Claude 3.5 Sonnet</span>
+                      <span class="provider-badge anthropic">pi-ai-claude</span>
+                      <button class="toggle-needs-btn" onclick="toggleNeeds(2)">⚙️ 高级路由条件</button>
+                    </div>
+                    <div class="model-path-sub">pi-ai-claude / claude-sonnet-5</div>
+                  </div>
+                  <div class="node-tuning-block">
+                    <div class="attempt-limit-picker" title="该渠道在向下切换前的最大尝试次数（切换前会先等待一次退避，约 0.5~10 秒）">
+                      <span>单渠道尝试</span>
+                      <input type="text" value="1" maxlength="2" aria-label="单渠道尝试次数">
+                      <span>次</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="node-actions">
+                  <button class="icon-tool-btn" title="上移" onclick="triggerDirty()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="m8 3.5 4 4.5H4z"/></svg>
+                  </button>
+                  <button class="icon-tool-btn" disabled title="已在末位">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="m8 12.5-4-4.5h8z"/></svg>
+                  </button>
+                  <button class="icon-tool-btn danger" title="删除" onclick="triggerDirty()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 节点 3 高级条件面板 -->
+              <div class="node-advanced-needs-panel" id="needsPanel2">
+                <div class="needs-grid">
+                  <div class="need-item-card">
+                    <div class="need-item-header">
+                      <span>图像/多模态输入</span>
+                      <input type="checkbox" onchange="triggerDirty()">
+                    </div>
+                    <span class="need-item-hint">仅当会话包含图片时允许匹配</span>
+                  </div>
+                  <div class="need-item-card">
+                    <div class="need-item-header">
+                      <span>最小上下文门槛 (Tokens)</span>
+                    </div>
+                    <input type="text" value="120000" placeholder="如 64000" oninput="triggerDirty()">
+                    <span class="need-item-hint">长文本超过 120k 时启用（估算值）</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 候选栏添加操作 -->
+        <div class="add-candidate-bar">
+          <button class="btn-catalog-pick" id="openCatalogModalBtn" type="button">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z"/>
+              <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+            </svg>
+            从已配置的模型目录中添加候选
+          </button>
+          <button class="btn-manual-add" id="openManualChannelModalBtn" type="button">
+            + 手动输入渠道信息
+          </button>
+        </div>
+      </section>
+
+      <!-- 2. 故障转移触发策略 -->
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2 class="section-title">故障转移触发策略 (Switch On)</h2>
+            <p class="section-subtitle">勾选异常的渠道切换前，DSH 仍会按默认策略在同渠道重试至多 5 次；不勾选的异常不切换备用渠道。</p>
+          </div>
+        </div>
+
+        <div class="trigger-grid">
+          <label class="trigger-card checked">
+            <input type="checkbox" class="trigger-chk" checked>
+            <div class="trigger-info">
+              <div class="trigger-title-row">
+                <span class="trigger-name">服务限流与排队</span>
+                <span class="trigger-code">RATE_LIMIT</span>
+              </div>
+              <div class="trigger-desc">HTTP 429、并发用尽、TPM/RPM 频次超限。</div>
+            </div>
+          </label>
+
+          <label class="trigger-card checked">
+            <input type="checkbox" class="trigger-chk" checked>
+            <div class="trigger-info">
+              <div class="trigger-title-row">
+                <span class="trigger-name">上游服务端崩溃</span>
+                <span class="trigger-code">SERVER</span>
+              </div>
+              <div class="trigger-desc">HTTP 500/502/503/504、服务暂时过载不可用。</div>
+            </div>
+          </label>
+
+          <label class="trigger-card checked">
+            <input type="checkbox" class="trigger-chk" checked>
+            <div class="trigger-info">
+              <div class="trigger-title-row">
+                <span class="trigger-name">响应与连接超时</span>
+                <span class="trigger-code">TIMEOUT</span>
+              </div>
+              <div class="trigger-desc">首字等待超时、流式传输过程中断超时。</div>
+            </div>
+          </label>
+
+          <label class="trigger-card checked">
+            <input type="checkbox" class="trigger-chk" checked>
+            <div class="trigger-info">
+              <div class="trigger-title-row">
+                <span class="trigger-name">网络传输中断</span>
+                <span class="trigger-code">TRANSPORT</span>
+              </div>
+              <div class="trigger-desc">DNS 寻址失败、TCP 连接被重置、SSL 握手中断。</div>
+            </div>
+          </label>
+
+          <label class="trigger-card">
+            <input type="checkbox" class="trigger-chk">
+            <div class="trigger-info">
+              <div class="trigger-title-row">
+                <span class="trigger-name">空回复异常</span>
+                <span class="trigger-code">EMPTY_RESPONSE</span>
+              </div>
+              <div class="trigger-desc">模型正常返回 200 但未输出任何可用 Token 内容。</div>
+            </div>
+          </label>
+          <label class="trigger-card">
+            <input type="checkbox" class="trigger-chk">
+            <div class="trigger-info">
+              <div class="trigger-title-row">
+                <span class="trigger-name">请求被拒绝 / 能力不兼容</span>
+                <span class="trigger-code">INVALID_REQUEST</span>
+              </div>
+              <div class="trigger-desc">工具等能力不被候选支持时出现；分类依赖 provider，不保证精确。</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="safety-notice-box">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+          </svg>
+          <div>
+            <strong>零浪费熔断安全机制：</strong>
+            用户主动中断 (<code>ABORTED</code>)、凭证失效 (<code>AUTH_FAILED</code>) 及不可达的模型配置 (<code>NO_ADAPTER</code>) 属于永久性错误，将<strong>绝不进行盲目转移</strong>，立即向用户提示。
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. 重试预算与退避 -->
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2 class="section-title">重试预算与退避 (Execution Budget)</h2>
+            <p class="section-subtitle">防止坏请求陷入无限重试死循环，限制单个 Agent 轮次的总调用成本。</p>
+          </div>
+        </div>
+
+        <div class="budget-container">
+          <div class="budget-item">
+            <div class="budget-label-wrap">
+              <span class="budget-title">单请求最多总尝试次数</span>
+              <span class="budget-hint">含同渠道重试及所有跨渠道降级次数硬顶</span>
+            </div>
+            <div class="budget-input-group">
+              <input type="text" value="6" maxlength="2" aria-label="总尝试上限" oninput="triggerDirty()">
+              <span>次</span>
+            </div>
+          </div>
+
+          <div class="budget-item">
+            <div class="budget-label-wrap">
+              <span class="budget-title">退避抖动基准 (Backoff)</span>
+              <span class="budget-hint">遵循 DSH 标准指数退避 (500ms ~ 10000ms)</span>
+            </div>
+            <span class="chip" style="font-weight: 500;">标准自动退避</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 视图 B：全局默认兜底规则专用配置视图 (Default Fallback Profile) -->
+    <div id="viewDefaultProfile" style="display: none;">
+      <div class="default-profile-intro-box">
+        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0 13zM7.25 4v5.25h1.5V4h-1.5zm0 6.75v1.5h1.5v-1.5h-1.5z"/>
+        </svg>
+        <div>
+          <h3 class="default-profile-intro-title">全局默认兜底规则说明</h3>
+          <p class="default-profile-intro-desc">
+            当用户在 DSH 对话框选中的模型<strong>未单独配置专属路由 Profile</strong> 时，若开启此全局兜底，则统一使用本页策略。默认关闭（零侵入：未显式配置的模型不走路由插件）。
+          </p>
+        </div>
+      </div>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2 class="section-title">全局默认兜底开关</h2>
+            <p class="section-subtitle">是否接管所有未配置专属规则的模型调用。</p>
+          </div>
+          <button class="dsh-switch" id="defaultProfileSwitch" role="switch" aria-checked="false"></button>
+        </div>
+
+        <div style="margin-top: 16px;">
+          <h3 style="font-size: 13.5px; margin: 0 0 8px;">全局通用降级池</h3>
+          <p class="section-subtitle" style="margin-bottom: 12px;">当任何未配置规则的模型发生故障时，尝试以下通用保底候选：</p>
+          <div class="chain-pipeline">
+            <div class="chain-node">
+              <div class="node-card">
+                <div class="node-card-main-row">
+                  <div class="node-rank-badge">01</div>
+                  <div class="node-content">
+                    <div class="model-info-block">
+                      <div class="model-name-row">
+                        <span class="model-display-name">DeepSeek-V3 (官方保底)</span>
+                        <span class="provider-badge deepseek">deepseek-official</span>
+                      </div>
+                      <div class="model-path-sub">deepseek-official / deepseek-chat</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="add-candidate-bar" style="margin-top: 10px;">
+            <button class="btn-catalog-pick" type="button" onclick="triggerDirty()">+ 为全局池增加候选</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </main>
+
+  <!-- 规范与设计对照说明 -->
+  <footer class="design-notes-panel">
+    <h3>DSH 规范与先例实施对照</h3>
+    <ul>
+      <li><strong>表单与草稿状态机：</strong>遵循 <code>SettingsForm</code> 原语规范，由控制器自持草稿，不使用文本暂存，以整段 <code>set</code> path op 写入数组与对象配置（依据 <code>ui-settings-subagent/subagent-model-selection-card-controller.ts</code>）。</li>
+      <li><strong>视觉 Token 全面合规：</strong>完全采用 DSH 官方 <code>ui-theme/design-platform.css</code> 的变量（<code>--dsw-alias-bg-*</code>、<code>--dsw-alias-border-*</code>、<code>--dsw-alias-label-*</code>），拒绝硬编码色值，并完美支持深浅主题双向自适应。</li>
+      <li><strong>模型候选选择体验：</strong>摒弃原设计中两个生硬文本框拼凑的做法，采用 <code>ModelListEditor</code> 范式结合模型目录（<code>ctx.remote.session.modelCatalog()</code>）弹窗多选注入，手输仅作为离线兜底。</li>
+      <li><strong>降级链可视化表达：</strong>将冰冷的列表升级为具有流向指示的 Pipeline 链路卡片，显著降低配置心智负担，与产品“透明故障转移”核心价值高度呼应。</li>
+    </ul>
+  </footer>
+
+</div>
+
+<!-- 浮动操作条 (SettingsForm Save/Discard) -->
+<div class="floating-action-bar" id="floatingActionBar" role="region" aria-label="保存设置操作栏" style="display: none;">
+  <div class="floating-status">
+    <span class="dirty-dot"></span>
+    <span>存在未保存的路由配置更改</span>
+  </div>
+  <div class="floating-buttons">
+    <button class="btn-discard" id="btnDiscard" type="button">放弃更改</button>
+    <button class="btn-save" id="btnSave" type="button">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425a.247.247 0 0 1 .02-.022z"/>
+      </svg>
+      保存配置
+    </button>
+  </div>
+</div>
+
+<!-- ================= 弹窗系统 ================= -->
+
+<!-- 1. 新建 Profile 规则模态框 (New Profile Modal) -->
+<div class="modal-overlay" id="newProfileModal" role="dialog" aria-modal="true">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h3 class="modal-title">新建模型路由规则 (Profile)</h3>
+      <button class="icon-tool-btn" type="button" onclick="closeAllModals()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">为哪个主模型创建路由 (Primary Model)</label>
+        <span class="form-hint">用户在 DSH 会话中选中该模型时，插件将按本规则接管与备份。</span>
+        <select class="form-input" id="newProfileSelect">
+          <option value="stepfun/step-2-16k">stepfun / step-2-16k (阶跃星辰)</option>
+          <option value="qwen/qwen-2.5-72b">qwen / qwen-2.5-72b-instruct</option>
+          <option value="custom">-- 手动输入其他渠道与模型 ID --</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">初始化候选链模板</label>
+        <select class="form-input">
+          <option>复制现有的「DeepSeek-V4」降级链路配置</option>
+          <option>从空候选链开始创建</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-discard" type="button" onclick="closeAllModals()">取消</button>
+      <button class="btn-save" type="button" id="btnConfirmNewProfile">确认创建规则</button>
+    </div>
+  </div>
+</div>
+
+<!-- 2. 手动录入候选渠道模态框 (Manual Channel Modal) -->
+<div class="modal-overlay" id="manualChannelModal" role="dialog" aria-modal="true">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h3 class="modal-title">手动添加候选渠道</h3>
+      <button class="icon-tool-btn" type="button" onclick="closeAllModals()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Provider 标识 (提供方 ID)</label>
+        <span class="form-hint">需与 DSH 已注册的 Adapter 或官方 Provider 标识一致。</span>
+        <input type="text" class="form-input" id="manualProviderInput" placeholder="例如: pi-ai-siliconflow, openai">
+      </div>
+      <div class="form-group">
+        <label class="form-label">模型 ID (Model ID)</label>
+        <span class="form-hint">该 Provider 支持的具体物理模型名称。</span>
+        <input type="text" class="form-input" id="manualModelInput" placeholder="例如: deepseek-ai/DeepSeek-V3">
+      </div>
+      <div class="form-group">
+        <label class="form-label">单渠道尝试上限</label>
+        <input type="number" class="form-input" value="1" min="1" max="5">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-discard" type="button" onclick="closeAllModals()">取消</button>
+      <button class="btn-save" type="button" id="btnConfirmManualAdd">添加至链路</button>
+    </div>
+  </div>
+</div>
+
+<!-- 3. 删除 Profile 的二次确认弹窗 (Risk Confirmation Modal) -->
+<div class="modal-overlay" id="riskConfirmModal" role="dialog" aria-modal="true">
+  <div class="modal-dialog" style="max-width: 480px;">
+    <div class="modal-header">
+      <h3 class="modal-title" style="color: var(--dsw-alias-state-error);">确认删除路由规则？</h3>
+      <button class="icon-tool-btn" type="button" onclick="closeAllModals()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708-.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size: 13px; margin: 0; line-height: 1.5; color: var(--dsw-alias-label-secondary);">
+        删除后，针对该模型的专属降级链将被永久移除。此后该模型若发生限流或故障，将不再触发自动故障转移，直接向用户抛出错误。
+      </p>
+      <label style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-top: 10px; cursor: pointer;">
+        <input type="checkbox" id="riskConfirmChk" style="accent-color: var(--dsw-alias-state-error);">
+        <span>我已知晓该风险，确认删除该 Profile 规则</span>
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-discard" type="button" onclick="closeAllModals()">取消</button>
+      <button class="btn-save" id="btnConfirmDeleteProfile" type="button" style="background: var(--dsw-alias-state-error);" disabled>确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 4. 模型目录多选弹窗 (Catalog Modal) -->
+<div class="modal-overlay" id="catalogModal" role="dialog" aria-modal="true">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h3 class="modal-title">从模型目录添加候选</h3>
+      <button class="icon-tool-btn" type="button" onclick="closeAllModals()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <input type="search" class="form-input" placeholder="按模型名称或 Provider 搜索..." aria-label="搜索模型">
+      <div style="font-size: 11.5px; font-weight: 600; color: var(--dsw-alias-label-tertiary); text-transform: uppercase; margin-top: 10px;">DeepSeek Official</div>
+      <label style="display:flex; align-items:center; gap:10px; padding:6px 0; cursor:pointer;">
+        <input type="checkbox" checked style="accent-color: var(--dsw-alias-brand-primary);">
+        <span>DeepSeek-V3 (Chat)</span>
+        <span class="provider-badge deepseek" style="margin-left:auto;">deepseek-official</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:10px; padding:6px 0; cursor:pointer;">
+        <input type="checkbox" style="accent-color: var(--dsw-alias-brand-primary);">
+        <span>DeepSeek-R1 (Reasoning)</span>
+        <span class="provider-badge deepseek" style="margin-left:auto;">deepseek-official</span>
+      </label>
+
+      <div style="font-size: 11.5px; font-weight: 600; color: var(--dsw-alias-label-tertiary); text-transform: uppercase; margin-top: 10px;">Pi-AI Providers</div>
+      <label style="display:flex; align-items:center; gap:10px; padding:6px 0; cursor:pointer;">
+        <input type="checkbox" style="accent-color: var(--dsw-alias-brand-primary);">
+        <span>Claude 3.5 Haiku</span>
+        <span class="provider-badge anthropic" style="margin-left:auto;">pi-ai-claude</span>
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-discard" type="button" onclick="closeAllModals()">取消</button>
+      <button class="btn-save" type="button" onclick="adoptCatalogSelection()">添加所选模型至链路</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 故障转移历史抽屉 (Failover History Drawer) ================= -->
+<div class="telemetry-drawer" id="telemetryDrawer">
+  <div class="drawer-header">
+    <h3 style="font-size: 15px; font-weight: 600; margin: 0;">最近故障转移历史</h3>
+    <button class="icon-tool-btn" type="button" id="closeTelemetryBtn">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body">
+    <p style="font-size: 11.5px; color: var(--dsw-alias-label-tertiary); margin: 0;">
+      数据来自插件自有投影（router/failover-history），仅显示最近 20 个会话的记录。渠道健康度 / 延迟 / 成功率 / 冷却倒计时不在本插件范围内。
+    </p>
+
+    <div>
+      <h4 style="font-size: 13px; margin: 0 0 10px; color: var(--dsw-alias-label-secondary);">最近故障转移历史</h4>
+      <div style="display: grid; gap: 12px;">
+        <div class="audit-log-item">
+          <div class="audit-log-time">10:42:15 · 会话 #58ea52ad</div>
+          <div class="audit-log-desc">主模型遭遇 <code>RATE_LIMIT</code>，成功降级至 <code>pi-ai-gpt / gpt-5</code> (候选 2/3)</div>
+        </div>
+        <div class="audit-log-item">
+          <div class="audit-log-time">昨天 16:20:08 · 会话 #1f9408cb</div>
+          <div class="audit-log-desc">主模型遭遇 <code>TIMEOUT</code> (首字等待超时)，成功降级至 <code>pi-ai-claude</code></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 核心交互与状态驱动
+  const themeToggleBtn = document.getElementById('themeToggleBtn');
+  const themeIcon = document.getElementById('themeIcon');
+  const themeText = document.getElementById('themeText');
+  const globalSwitch = document.getElementById('globalSwitch');
+  const floatingActionBar = document.getElementById('floatingActionBar');
+  const btnSave = document.getElementById('btnSave');
+  const btnDiscard = document.getElementById('btnDiscard');
+
+  const viewCustomProfile = document.getElementById('viewCustomProfile');
+  const viewDefaultProfile = document.getElementById('viewDefaultProfile');
+  const currentProfileTitle = document.getElementById('currentProfileTitle');
+  const defaultProfileSwitch = document.getElementById('defaultProfileSwitch');
+
+  // 模态弹窗与抽屉
+  const newProfileModal = document.getElementById('newProfileModal');
+  const manualChannelModal = document.getElementById('manualChannelModal');
+  const riskConfirmModal = document.getElementById('riskConfirmModal');
+  const catalogModal = document.getElementById('catalogModal');
+  const telemetryDrawer = document.getElementById('telemetryDrawer');
+
+  function triggerDirty() {
+    floatingActionBar.style.display = 'flex';
+  }
+
+  function closeAllModals() {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
+  }
+
+  // 1. 明暗主题切换
+  themeToggleBtn.addEventListener('click', () => {
+    const isDark = document.body.getAttribute('data-theme') === 'dark';
+    if (isDark) {
+      document.body.setAttribute('data-theme', 'light');
+      themeIcon.textContent = '🌙';
+      themeText.textContent = '深色模式';
+    } else {
+      document.body.setAttribute('data-theme', 'dark');
+      themeIcon.textContent = '☀️';
+      themeText.textContent = '浅色模式';
+    }
+  });
+
+  // 2. 全局总开关
+  globalSwitch.addEventListener('click', () => {
+    const checked = globalSwitch.getAttribute('aria-checked') === 'true';
+    globalSwitch.setAttribute('aria-checked', String(!checked));
+    triggerDirty();
+  });
+
+  // 3. Profile 标签页切换驱动
+  document.querySelectorAll('.profile-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const profileKey = tab.getAttribute('data-profile');
+
+      if (profileKey === 'default') {
+        viewCustomProfile.style.display = 'none';
+        viewDefaultProfile.style.display = 'block';
+      } else if (profileKey === 'claude') {
+        viewDefaultProfile.style.display = 'none';
+        viewCustomProfile.style.display = 'block';
+        currentProfileTitle.textContent = 'Claude 3.5 Sonnet 降级链路';
+      } else {
+        viewDefaultProfile.style.display = 'none';
+        viewCustomProfile.style.display = 'block';
+        currentProfileTitle.textContent = 'DeepSeek V4 Flash 降级链路';
+      }
+    });
+  });
+
+  defaultProfileSwitch.addEventListener('click', () => {
+    const checked = defaultProfileSwitch.getAttribute('aria-checked') === 'true';
+    defaultProfileSwitch.setAttribute('aria-checked', String(!checked));
+    triggerDirty();
+  });
+
+  // 4. 故障策略卡片多选
+  document.querySelectorAll('.trigger-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.tagName !== 'INPUT') {
+        const chk = card.querySelector('.trigger-chk');
+        chk.checked = !chk.checked;
+      }
+      const chk = card.querySelector('.trigger-chk');
+      if (chk.checked) card.classList.add('checked');
+      else card.classList.remove('checked');
+      triggerDirty();
+    });
+  });
+
+  // 5. 节点高级条件折叠展开
+  function toggleNeeds(index) {
+    const p = document.getElementById(`needsPanel${index}`);
+    if (p) p.classList.toggle('expanded');
+  }
+
+  // 6. 新建 Profile 模态框打开与确认
+  document.getElementById('btnOpenNewProfileModal').addEventListener('click', () => {
+    newProfileModal.classList.add('active');
+  });
+  document.getElementById('btnConfirmNewProfile').addEventListener('click', () => {
+    const sel = document.getElementById('newProfileSelect');
+    const newName = sel.options[sel.selectedIndex].text.split(' ')[0];
+    const newTab = document.createElement('div');
+    newTab.className = 'profile-tab active';
+    newTab.innerHTML = `<span>${newName}</span><span class="count-badge">新规则</span>`;
+    document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('profileTabs').insertBefore(newTab, document.getElementById('profileTabs').children[2]);
+    closeAllModals();
+    currentProfileTitle.textContent = `${newName} 降级链路`;
+    triggerDirty();
+  });
+
+  // 7. 手动录入候选渠道模态框
+  document.getElementById('openManualChannelModalBtn').addEventListener('click', () => {
+    manualChannelModal.classList.add('active');
+  });
+  document.getElementById('btnConfirmManualAdd').addEventListener('click', () => {
+    closeAllModals();
+    triggerDirty();
+  });
+
+  // 8. 目录挑选模态框
+  document.getElementById('openCatalogModalBtn').addEventListener('click', () => {
+    catalogModal.classList.add('active');
+  });
+  function adoptCatalogSelection() {
+    closeAllModals();
+    triggerDirty();
+  }
+
+  // 9. 删除 Profile 二次确认 (Risk Confirmation)
+  document.getElementById('btnDeleteCurrentProfile').addEventListener('click', () => {
+    riskConfirmModal.classList.add('active');
+  });
+  document.getElementById('riskConfirmChk').addEventListener('change', (e) => {
+    document.getElementById('btnConfirmDeleteProfile').disabled = !e.target.checked;
+  });
+  document.getElementById('btnConfirmDeleteProfile').addEventListener('click', () => {
+    closeAllModals();
+    triggerDirty();
+  });
+
+  // 10. 抽屉打开发布
+  document.getElementById('openTelemetryBtn').addEventListener('click', () => {
+    telemetryDrawer.classList.add('active');
+  });
+  document.getElementById('closeTelemetryBtn').addEventListener('click', () => {
+    telemetryDrawer.classList.remove('active');
+  });
+
+  // 11. 浮动保存与放弃
+  btnSave.addEventListener('click', () => {
+    floatingActionBar.style.display = 'none';
+  });
+  btnDiscard.addEventListener('click', () => {
+    floatingActionBar.style.display = 'none';
+  });
+</script>
+</body>
+</html>
