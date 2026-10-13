@@ -122,4 +122,8 @@ The composition tests boot the real headless Loader with a deterministic stub
 adapter and assert on the durable session log — the real Cordis Loader
 composition the DSH package rules require, not hand-built contexts. The web
 profile is verified by installing the bundle (`dsh plugin --profile web add
-<dir>`) and driving the Plugins page in a browser.
+<dir>`) and driving the Plugins page in a browser. A live-gateway check
+(`tests/real-run.mjs`, credentials in a gitignored local file, machine proxy
+required) has verified the failover end-to-end against a real upstream 500:
+two same-route retries, one cross-channel switch, a Chinese notice, and a
+completed turn.

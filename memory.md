@@ -4,10 +4,10 @@
 
 ## 当前基线
 
-- Markdown 设计 + Phase 1 插件实现（`packages/dsh-model-router/`，host 侧最小闭环）；无 UI 半包、无条件路由。
+- 完整插件项目（`packages/dsh-model-router/`：宿主 + UI 半包 + 条件路由 + lineage 投影 + 遥测抽屉），GitHub 仓库 `Imzl-zl/dsh-model-router`（公开）。
 - DSH 参考 checkout：`D:\sudy\github\deepseek-harness`；项目根：`D:\sudy\myproject\dsh-model-router`。
-- 最后更新：2026-10-12（晚：Phase 1 host 最小闭环落地并测试通过）。
-- 验证状态：17 个 Markdown 文件本地链接 0 失效；166 条 DSH 源码行号引用 0 越界；Phase 1 spike 实跑 exit 0；Phase 1 组合测试 8/8 通过（真实 headless Loader boot + stub adapter，断言 durable session 事件）；`tsc --noEmit` 0 错误。
+- 最后更新：2026-10-13（真实 provider 故障转移实测通过 + 开源门面落成）。
+- 验证状态：单测 23/23（node strip-types 直导 .ts）+ 组合测试 9/9（真实 headless Loader + stub，断言 durable log）+ **真实 provider 1/1**（活 newapi 网关，真 500 → SERVER → 跨 key 切换）+ 浏览器全链路（表单/抽屉/目录/删除/热卸载/fork）；`tsc --noEmit` 0 错误；DSH checkout `status --porcelain` 0 行。
 
 ## 已完成能力
 
@@ -82,9 +82,10 @@ assistant/message  provider=spike-backup served_by=spike-backup
 - **本轮抓到并修 4 个客户端 bug**：drawer 读错状态路径（state.ui.*）、projections 响应无 kind 字段却以其门禁、modelCatalog 忘拆 `{ok,value}` 信封、catalog apply 时抢跑改懒加载。另发现测试环境坑：overlay 改写行 config 后同 boot 内该 ns 保存被 revision 冲突拒（无 overlay 正常）。
 - **Round 4 收尾全部完成并实测**（2026-10-13）：① 交付路径复验（干净副本 `dsh plugin add` 进全新 web profile，表单完整渲染、真实 DeepSeek 目录建 profile、保存通过）；② 删除 Profile RiskConfirmation 全流程通过——**抓到并修复一个真 bug**（确认删除错误接到开弹窗动作上，单测覆盖不到）；③ notice 浏览器实测：轨迹视图完整渲染，chat 对话视图不渲染 context 行（DSH 自身 notice 同一路径，权威可见面是轨迹）；④ 热卸载实测：bundle 关闭后 llm-retry 5/5 如实失败无跨候选转移，重启用立即恢复；⑤ fork 一致性实测：fork 会话重建出继承前缀的条目（同时间戳两条）。
 - **本轮测试环境教训**：stub-script.json 是**启动时读入内存**，改文件不影响运行中的服务（要重启）；model-selection 记住 last-used 路由，卸载后的请求可能直接走 backup（测试不成立），新会话才用默认选择；模型菜单不分 provider，无法强制选 primary。
-- **项目主体已完整**：宿主（选路/两层预算/预校验/条件/lineage 投影）+ UI（表单/needs 面板/目录选择/遥测抽屉）+ 文档 + 测试（单测 23、组合 9、浏览器全链路）。剩余仅 Phase 3/4 明确推迟项（逻辑模型选择器、cooldown/breaker）。
-- 交付物：三 commit（852ad64 设计基线 / c01fcb2 Phase 1 host / 9a43ac5 Phase 1 UI）。
-- 决策笔记状态：三篇 `proposed/` + 四篇 `implemented/`（外置插件实跑、砍 needs.tools、reasoningEffort 预校验、cap advance 过 switchOn 门）。
+- **真实 provider 实测通过**（2026-10-13，`tests/real-run.mjs` + gitignored `real-providers.local.json`）：用户所选 `real-b/gpt-6-astra` 对每个请求返回真实 HTTP 500 → llm-retry 同渠道 2 次 → 切 `real-a/sensenova-6.8-flash-lite` 完成（10.4s）。真实 500 映射为 `SERVER` 命中 switchOn.server；notice/候选序号/最终路由全对。**环境关键事实：该网关对直连 TLS 重置，必须走系统代理 127.0.0.1:7890（HTTPS_PROXY + NODE_USE_ENV_PROXY=1）**；官方 DeepSeek 适配器全程禁用（不花用户钱）。未覆盖：RATE_LIMIT（kimi-k3 的 429 瞬时不可复现）、TIMEOUT/TRANSPORT 无稳定手段——仍只有 stub 证据。
+- **开源门面已完成**：GitHub 仓库 `Imzl-zl/dsh-model-router`（公开），DSH 同构图标（tool-worktree 范式：#4A65E8/16 viewBox/stroke 1.3，断臂=失败、连通臂=接管），MIT，README 重写。`.agents/notes/implemented/2026-10-13-real-provider-failover-verified.md` 记录实测。
+- **项目主体已完整**：宿主（选路/两层预算/预校验/条件/lineage 投影）+ UI（表单/needs 面板/目录选择/遥测抽屉）+ 文档 + 测试（单测 23、组合 9、真实 provider 1、浏览器全链路）。剩余仅 Phase 3/4 明确推迟项（逻辑模型选择器、cooldown/breaker）。
+- 决策笔记状态：`implemented/` 六篇（外置插件实跑、砍 needs.tools、reasoningEffort 预校验、cap advance 过 switchOn 门、drop tools 资格、条件取数、真实 provider 实测）。
 
 ## 仍需注意的坑点
 
@@ -111,15 +112,7 @@ assistant/message  provider=spike-backup served_by=spike-backup
 ## 最近活跃窗口
 
 - 核验了 DSH retry executor 的 projection、policy 及 UI partial-stream reset 行为。
-- 补充 model-selection listener 顺序、请求物理身份和 recovery-transition 待验证项。
-- 规范协作文件并修复跨目录源码链接。
-- 逐条核对 LiteLLM/Portkey/OpenRouter 官方文档，修正 prior-art 中两处不准确表述。
-- **四路并行深挖 DSH 能力边界**：原生路由能力、持久化与身份、UI slots 与可观测性、Cordis composition 与次序。
-- 新增 `docs/design/dsh-capability-boundary.md`，分四层记录原生支持/不支持/最优雅补法/社区规范。
-- 修正 listener 次序方向错误；确定 lineage 走 session projection、两层 attempt 边界。
-- 记录两篇 proposed 决策笔记；完成 166 条源码锚点校验。
-- **Phase 1 spike 实跑通过**：`npm install @deepseek-ai/dsh` + `--patch` overlay，仓库外插件加载成功、模块单副本、两个 waterfall 均收到事件、`agent/request` 重试时解析回同一条 route。
-- 记录一篇 implemented 决策笔记；补 `.gitignore` 忽略 spike 运行时产物。
-- **四路并行源码核查 + 九项决策落档**（2026-10-12 晚）：① reasoningEffort 失败路径（源码+既有测试：直接终态不进 recovery）；② 工具能力元数据（全仓库+pi-ai SDK 均无；不兼容走运行时 failover）；③ 插件投影读取通路（snapshot/list/projections/guard 四段核实）；④ 主流能力元数据调研（OpenRouter `supported_parameters`、LiteLLM cost map + pre-call checks、Portkey `type.supported`）。据此关闭 open-questions 全部九项，修订 product-plan/ui-design/capability-boundary/prior-art，同步 mockup，落两篇 implemented 决策笔记。
-- **Phase 1 host 最小闭环落地**（2026-10-12 深夜）：搭包骨架（`dsh.bundle`/patch row id=model-router/peerDeps）、schemastery Config 三段式、`agent/request` prepend 选路 + 每候选 attempt 计数、`agent/request-error` 内层交接、`resolveCallConfig` 预校验跳过、中文 notice、`session/event` 失败码记录；写 stub adapter + 8 场景真实 Loader 组合测试（boot headless CLI + 断言 durable session 事件）。**测试抓到一个真 bug**：到顶换候选不查 switchOn（llm-retry 抢占 recovery 时绕过用户选择），已修并留决策笔记。`tsc --noEmit` 0 错误。
-- **Phase 1 UI 半包落地并浏览器实测**（2026-10-13 凌晨）：`src/client.js` 单文件 factory（createElement + DSH 原语 + locale 词典 + 内联 design-token 样式）；装进 web profile（link）实测：全表单渲染、建 Profile、加候选、改 attempt、保存、刷新恢复全通。抓到 5 个 bug 全修（2 括号、词典 key、devFreeze 冻结草稿、空目录 manual 断点、active tab 卡默认）。spike 探针两处保真度问题（布尔文本框、specs 未注册）在本实现不存在——布尔走控制器草稿 + Switch/checkbox 原语，保存脏态由控制器自持。
+- **四路并行深挖 DSH 能力边界**：原生路由能力、持久化与身份、UI slots 与可观测性、Cordis composition 与次序；据此新增 `docs/design/dsh-capability-boundary.md` 并关闭九项未决问题。
+- **Phase 1 spike 实跑通过**：仓库外插件可加载、模块单副本、两个 waterfall 均可达、外层 listener 的 route 覆盖压过 `installModelSelection` 写回且 durable 归因跟着真实 route。
+- **Phase 1 host + UI 落地**（2026-10-12~13）：组合测试 9/9 + 单测 23/23 + 浏览器全链路；实现期共抓到并修 10 个真 bug（含 store devFreeze 冻结草稿、删除确认错接线、投影 kind 门禁、modelCatalog 信封），细节见 `tools.md` 与 `.agents/notes/implemented/`。
+- **真实 provider 实测 + 开源门面**（2026-10-13）：活网关真 500 → SERVER → 跨 key 切换全对（代理 127.0.0.1:7890 必需）；GitHub 仓库、DSH 同构图标、MIT、README 重写落成。
