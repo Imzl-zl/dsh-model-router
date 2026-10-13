@@ -26,6 +26,7 @@ import {
   assertStructural,
   type Candidate,
   type DefaultProfile,
+  type HealthConfig,
   type Profile,
   type RouterOptions,
 } from './config.ts'
@@ -33,6 +34,7 @@ import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveC
 import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
 import { conditionSkipNotice, failoverNotice, skipNotice } from './notice.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
+import { HealthMonitor, RouterHealthService, channelHealthProjection } from './health.ts'
 
 export const name = 'model-router'
 export const inject = ['llm']
@@ -41,9 +43,49 @@ export { Config } from './config.ts'
 
 export function apply(ctx: Context, config: Config): void {
   const states = new RouterState()
+  const healthMonitor = new HealthMonitor(ctx)
 
   // Structural validation at load: wrong in every environment, so it fails loud.
   assertStructural(readConfig(config))
+
+  const getHealthCandidates = (): readonly { provider: string; model: string }[] => {
+    const list: { provider: string; model: string }[] = []
+    const profiles = config.profiles.get() as readonly Profile[] | undefined
+    if (profiles) {
+      for (const p of profiles) {
+        for (const c of p.candidates) list.push({ provider: c.provider, model: c.model })
+      }
+    }
+    const def = config.default.get() as DefaultProfile | undefined
+    if (def?.candidates) {
+      for (const c of def.candidates) list.push({ provider: c.provider, model: c.model })
+    }
+    return list
+  }
+
+  // Register Host Typert Remote service for health checks
+  new RouterHealthService(ctx, healthMonitor, () => {
+    const h = config.health?.get() as HealthConfig | undefined
+    return {
+      prompt: h?.prompt ?? 'hi',
+      timeoutSeconds: h?.timeoutSeconds ?? 8,
+      getCandidates: getHealthCandidates,
+    }
+  })
+
+  const updateHealthSchedule = (): void => {
+    const h = config.health?.get() as HealthConfig | undefined
+    if (h?.enabled !== false && (h?.intervalMinutes ?? 0) > 0) {
+      healthMonitor.updateInterval(getHealthCandidates, h!.intervalMinutes, h!.prompt || 'hi', h!.timeoutSeconds || 8)
+    } else {
+      healthMonitor.updateInterval(getHealthCandidates, 0, 'hi', 8)
+    }
+  }
+  updateHealthSchedule()
+
+  ctx.effect(() => () => {
+    healthMonitor.dispose()
+  })
 
   // Hot updates are validated before Cordis restarts this fiber, so a bad edit
   // is rejected at save time instead of killing the running plugin.
@@ -54,7 +96,9 @@ export function apply(ctx: Context, config: Config): void {
     assertStructural({
       profiles: candidate.profiles.get() as readonly Profile[],
       default: candidate.default.get() as DefaultProfile,
+      health: candidate.health?.get() as HealthConfig | undefined,
     })
+    updateHealthSchedule()
     return raw
   })
 
@@ -74,14 +118,21 @@ export function apply(ctx: Context, config: Config): void {
   // composition without it still routes — only the history view degrades.
   const projections = ctx.get('sessionProjections') as ProjectionRegistryFace | undefined
   projections?.register(failoverHistoryProjection)
+  projections?.register(channelHealthProjection)
 
-  // Failure observation. `session/event` is the sanctioned post-commit feed;
+  // Failure and success observation. `session/event` is the sanctioned post-commit feed;
   // `agent/request-error` records synchronously for delegated failures. Both
   // write the same fact, and the notice reads whichever arrived.
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
-    if (event.type !== 'assistant/attempt') return
-    const failure = failureCodeOfStream(event.data.stream)
-    if (failure !== undefined) states.noteFailure(session, event.data.turn, event.data.step, failure)
+    if (event.type === 'assistant/attempt') {
+      const failure = failureCodeOfStream(event.data.stream)
+      if (failure !== undefined) states.noteFailure(session, event.data.turn, event.data.step, failure)
+    } else if (event.type === 'assistant/message') {
+      const source = (event.data as unknown as { message?: { source?: { provider?: string; model?: string } } })?.message?.source
+      if (source?.provider && source?.model) {
+        healthMonitor.noteSuccess(source.provider, source.model)
+      }
+    }
   })
 
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
@@ -192,8 +243,9 @@ export function apply(ctx: Context, config: Config): void {
       const state = states.current(agent, turn, step)
       if (state === undefined) return next()
       states.noteFailure(agent.session, turn, step, failure.code)
-      if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return next()
       const current = state.chain.candidates[state.index]!
+      healthMonitor.noteFailure(current.provider, current.model, failure.code)
+      if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return next()
       ctx.logger.warn(
         `model-router: ${failure.code} on ${current.provider}/${current.model} `
         + `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); continuing the chain`,
@@ -203,10 +255,11 @@ export function apply(ctx: Context, config: Config): void {
   })
 }
 
-function readConfig(config: Config): { profiles: readonly Profile[]; default: DefaultProfile } {
+function readConfig(config: Config): { profiles: readonly Profile[]; default: DefaultProfile; health?: HealthConfig } {
   return {
     profiles: config.profiles.get() as readonly Profile[],
     default: config.default.get() as DefaultProfile,
+    health: config.health?.get() as HealthConfig | undefined,
   }
 }
 

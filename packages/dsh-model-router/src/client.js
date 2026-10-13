@@ -180,6 +180,24 @@ window.__ModuleLoader__.load({
       stepMinus: '减少重试次数',
       stepPlus: '增加重试次数',
       savedStateTip: '配置已是最新',
+      healthSectionTitle: '渠道健康监控',
+      healthEnabledLabel: '启用健康监控',
+      healthPromptLabel: '探测消息内容 (Prompt)',
+      healthPromptHint: '发送极小 Token 消息探测渠道存活。可自定义以避开特定渠道违禁词拦截（默认 "hi"）',
+      healthIntervalLabel: '自动探测周期 (分钟)',
+      healthIntervalHint: '设为 0 表示仅手动探测与对话被动记录，不产生后台 Token 费用',
+      healthTimeoutLabel: '单次探测超时 (秒)',
+      healthTimeoutHint: '单渠道探测超时限制（默认 8 秒）',
+      probeAllBtn: '探测全部渠道',
+      probingText: '探测中...',
+      probeDoneNotice: '全部渠道探测完成',
+      healthStatusHealthy: '正常',
+      healthStatusDegraded: '降级',
+      healthStatusUnhealthy: '异常',
+      healthStatusUnknown: '未探测',
+      healthConfigBtn: '健康监控设置',
+      healthModalTitle: '渠道健康监控与探测设置',
+      healthPassiveHint: '💡 零消耗机制：对话过程中成功的请求自动标记正常并记录延迟；异常错误（429/500/超时）自动标记降级或异常，日常使用不产生任何额外 Token 费用。主动探测仅消耗 1 Token 并于首字到达时立即断开。',
     }
     var en = {
       pluginTitle: 'Model Router',
@@ -311,6 +329,24 @@ window.__ModuleLoader__.load({
       stepMinus: 'Decrease attempts',
       stepPlus: 'Increase attempts',
       savedStateTip: 'Up to date',
+      healthSectionTitle: 'Channel Health Monitor',
+      healthEnabledLabel: 'Enable Health Monitoring',
+      healthPromptLabel: 'Probe Prompt',
+      healthPromptHint: 'Sends minimal token prompt. Customize to avoid provider content filter rejections (default "hi").',
+      healthIntervalLabel: 'Auto Probe Interval (min)',
+      healthIntervalHint: 'Set 0 for manual/passive only; avoids background token costs.',
+      healthTimeoutLabel: 'Probe Timeout (sec)',
+      healthTimeoutHint: 'Per-channel timeout limit (default 8s).',
+      probeAllBtn: 'Probe All Channels',
+      probingText: 'Probing...',
+      probeDoneNotice: 'All channels probed successfully',
+      healthStatusHealthy: 'Healthy',
+      healthStatusDegraded: 'Degraded',
+      healthStatusUnhealthy: 'Unhealthy',
+      healthStatusUnknown: 'Untested',
+      healthConfigBtn: 'Health Settings',
+      healthModalTitle: 'Channel Health & Proactive Probe Settings',
+      healthPassiveHint: '💡 Zero-Cost Mechanism: Successful conversation requests automatically record latency and mark channels healthy; failures (429/500/timeout) mark degraded/unhealthy. Active probes limit to 1 token and abort immediately on first token (TTFT).',
     }
 
     /** The six switchOn codes: `key` is the config field, `labelKey` the dictionary stem. */
@@ -675,6 +711,10 @@ window.__ModuleLoader__.load({
       modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
       providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
       primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(16,185,129,0.12)', color: 'var(--dsw-alias-state-success, #10b981)', border: '0.5px solid rgba(16,185,129,0.3)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
+      healthBadgeHealthy: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(39, 174, 96, 0.12)', color: '#27ae60', border: '0.5px solid rgba(39, 174, 96, 0.3)', fontWeight: 600, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
+      healthBadgeDegraded: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(243, 156, 18, 0.12)', color: '#e67e22', border: '0.5px solid rgba(243, 156, 18, 0.3)', fontWeight: 600, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
+      healthBadgeUnhealthy: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(231, 76, 60, 0.12)', color: '#e74c3c', border: '0.5px solid rgba(231, 76, 60, 0.3)', fontWeight: 600, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
+      healthBadgeUnknown: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-tertiary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
       modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--ds-font-family-code, monospace)' },
       nodeTuning: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
       attemptPicker: { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 8px)', padding: '4px 10px', fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
@@ -898,12 +938,31 @@ window.__ModuleLoader__.load({
           enabled: value.enabled ?? true,
           profiles: clone(value.profiles ?? []),
           default: clone(value.default ?? defaultProfileValue()),
+          health: clone(value.health ?? {
+            enabled: true,
+            prompt: 'hi',
+            intervalMinutes: 0,
+            timeoutSeconds: 8,
+          }),
         }
       }
       var host = seed()
       var draft = seed()
       var autoActive = true
-      var ui = { activeId: null, modal: null, riskAck: false, catalog: null, catalogFailed: false, catalogLoading: false, drawerOpen: false, drawerLoading: false, drawerError: false, drawerRows: [] }
+      var ui = {
+        activeId: null,
+        modal: null,
+        riskAck: false,
+        catalog: null,
+        catalogFailed: false,
+        catalogLoading: false,
+        drawerOpen: false,
+        drawerLoading: false,
+        drawerError: false,
+        drawerRows: [],
+        healthRecords: {},
+        healthProbing: false,
+      }
       var saving = false
       var failed = false
 
@@ -932,6 +991,8 @@ window.__ModuleLoader__.load({
             drawerLoading: ui.drawerLoading,
             drawerError: ui.drawerError,
             drawerRows: ui.drawerRows,
+            healthRecords: ui.healthRecords,
+            healthProbing: ui.healthProbing,
           },
           catalog: ui.catalog,
         }
@@ -958,6 +1019,28 @@ window.__ModuleLoader__.load({
         })
       }
 
+      var callHealth = async function (method, args) {
+        var svc = (typeof ctx.get === 'function' ? ctx.get('remote.routerHealth') : null) || null
+        if (!svc || typeof svc[method] !== 'function') return null
+        try {
+          var r = args === undefined ? await svc[method]() : await svc[method](args)
+          if (r && r.ok) return r.value
+          return r
+        } catch (e) {
+          return null
+        }
+      }
+
+      function loadHealthSnapshot() {
+        callHealth('getSnapshot').then(function (snapshot) {
+          if (snapshot && typeof snapshot === 'object') {
+            ui.healthRecords = Object.assign({}, ui.healthRecords, snapshot)
+            publish()
+          }
+        }).catch(function () {})
+      }
+      loadHealthSnapshot()
+
       scope.subscribe(function () {
         host = seed()
         draft = seed()
@@ -965,6 +1048,7 @@ window.__ModuleLoader__.load({
         // The first snapshot can arrive after the controller was built (status
         // loading, no value), so the active tab is re-established here too.
         ensureActive()
+        loadHealthSnapshot()
         publish()
       })
 
@@ -1126,6 +1210,9 @@ window.__ModuleLoader__.load({
                 // straight out of `values` — no `kind` gate (the wire payload
                 // does not carry one).
                 var values = read.ok && read.value !== null ? (read.value.values ?? {}) : {}
+                if (values['router/channel-health']) {
+                  ui.healthRecords = Object.assign({}, values['router/channel-health'], ui.healthRecords)
+                }
                 return { sessionId: session.sessionId, entries: values['router/failover-history'] ?? [] }
               })
             }))
@@ -1140,6 +1227,48 @@ window.__ModuleLoader__.load({
           })
         },
         closeDrawer: function () { ui.drawerOpen = false; publish() },
+        probeAll: function () {
+          if (ui.healthProbing) return
+          ui.healthProbing = true
+          publish()
+          var candidates = []
+          var seen = {}
+          draft.profiles.forEach(function (p) {
+            p.candidates.forEach(function (c) {
+              var k = routeOf(c)
+              if (!seen[k]) { seen[k] = true; candidates.push({ provider: c.provider, model: c.model }) }
+            })
+          })
+          if (draft.default.enabled) {
+            draft.default.candidates.forEach(function (c) {
+              var k = routeOf(c)
+              if (!seen[k]) { seen[k] = true; candidates.push({ provider: c.provider, model: c.model }) }
+            })
+          }
+          callHealth('probeAll', {
+            prompt: draft.health?.prompt || 'hi',
+            timeoutSeconds: draft.health?.timeoutSeconds || 8,
+            candidates: candidates,
+          }).then(function (records) {
+            if (records && typeof records === 'object') {
+              ui.healthRecords = Object.assign({}, ui.healthRecords, records)
+            }
+            ui.healthProbing = false
+            publish()
+          }).catch(function () {
+            ui.healthProbing = false
+            publish()
+          })
+        },
+        updateHealth: function (patch) {
+          draft.health = Object.assign({}, draft.health, patch)
+          publish()
+        },
+        openHealthModal: function () {
+          ui.modal = { kind: 'health' }
+          publish()
+        },
+        loadHealthSnapshot: loadHealthSnapshot,
       }
       return controller
     }
@@ -1185,6 +1314,8 @@ window.__ModuleLoader__.load({
     var ICON_MINUS = 'M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z'
     var ICON_ARROW_DOWN = 'M8 3.5a.5.5 0 0 1 .5.5v6.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L7.5 10.793V4a.5.5 0 0 1 .5-.5z'
     var ICON_SPINNER = 'M8 1.5a6.5 6.5 0 1 0 6.5 6.5A.75.75 0 0 0 13 8a5 5 0 1 1-5-5 .75.75 0 0 0 0-1.5z'
+    var ICON_BOLT = 'M8.5 1.5 3 9h4.5L6.5 14.5 13 7H8.5z'
+    var ICON_GEAR = 'M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311a1.464 1.464 0 0 1-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.86z'
 
     /** The catalog's reasoning efforts for one route, for the node badge. */
     function reasoningLabelOf(catalog, provider, model) {
@@ -1193,6 +1324,42 @@ window.__ModuleLoader__.load({
       var efforts = entry?.reasoning?.efforts
       if (!efforts || efforts.length === 0) return undefined
       return efforts.map(function (effort) { return effort.name }).join(' / ')
+    }
+
+    /** Channel health badge showing status and latency or error. */
+    function HealthBadge(props) {
+      var t = props.t
+      var record = props.record
+      if (!record || record.status === 'unknown') {
+        return h('span', {
+          style: S.healthBadgeUnknown,
+          title: t('healthStatusUnknown'),
+        }, '⚪ ' + t('healthStatusUnknown'))
+      }
+      var status = record.status
+      var latency = typeof record.latencyMs === 'number' ? record.latencyMs + 'ms' : null
+      var tooltip = status === 'healthy'
+        ? (t('healthStatusHealthy') + (latency ? ' (' + latency + ')' : ''))
+        : status === 'degraded'
+          ? (t('healthStatusDegraded') + (latency ? ' (' + latency + ')' : '') + (record.lastError ? ': ' + record.lastError : ''))
+          : (t('healthStatusUnhealthy') + (record.lastError ? ': ' + record.lastError : ''))
+
+      if (status === 'healthy') {
+        return h('span', {
+          style: S.healthBadgeHealthy,
+          title: tooltip,
+        }, '🟢 ' + (latency ?? t('healthStatusHealthy')))
+      }
+      if (status === 'degraded') {
+        return h('span', {
+          style: S.healthBadgeDegraded,
+          title: tooltip,
+        }, '🟡 ' + (latency ?? t('healthStatusDegraded')))
+      }
+      return h('span', {
+        style: S.healthBadgeUnhealthy,
+        title: tooltip,
+      }, '🔴 ' + t('healthStatusUnhealthy'))
     }
 
     /** One candidate node in the pipeline. */
@@ -1218,6 +1385,7 @@ window.__ModuleLoader__.load({
                   h('span', { style: S.modelName, title: candidate.model }, candidate.model || '—'),
                   h('span', { style: S.providerBadge }, candidate.provider),
                   isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null,
+                  h(HealthBadge, { t: t, record: props.healthRecords ? props.healthRecords[routeOf(candidate)] : null }),
                   reasoning === undefined ? null : h('span', { style: S.reasoningBadge }, t('reasoningBadge') + ': ' + reasoning),
                   isPrimary ? null : h('button', {
                     type: 'button',
@@ -1379,6 +1547,7 @@ window.__ModuleLoader__.load({
           isDefault: props.isDefault,
           disabled: props.disabled,
           catalog: props.catalog,
+          healthRecords: props.healthRecords,
           onMaxAttempts: props.onMaxAttempts,
           onMove: props.onMove,
           onRemove: props.onRemove,
@@ -1468,6 +1637,7 @@ window.__ModuleLoader__.load({
             candidates: profile.candidates,
             disabled: props.disabled,
             catalog: props.catalog,
+            healthRecords: props.healthRecords,
             onMaxAttempts: function (index, value) { props.onMaxAttempts(profile.id, index, value, false) },
             onMove: function (index, direction) { props.onMove(profile.id, index, direction, false) },
             onRemove: function (index) { props.onRemove(profile.id, index, false) },
@@ -1532,6 +1702,7 @@ window.__ModuleLoader__.load({
             isDefault: true,
             disabled: props.disabled,
             catalog: props.catalog,
+            healthRecords: props.healthRecords,
             onMaxAttempts: function (index, value) { props.onMaxAttempts(null, index, value, true) },
             onMove: function (index, direction) { props.onMove(null, index, direction, true) },
             onRemove: function (index) { props.onRemove(null, index, true) },
@@ -1561,6 +1732,88 @@ window.__ModuleLoader__.load({
             maxTotalAttempts: pool.maxTotalAttempts,
             disabled: props.disabled,
             onMaxTotal: function (value) { props.onMaxTotal(null, value, true) },
+          })))
+    }
+
+    /** Health Settings Modal dialog. */
+    function HealthSettingsModal(props) {
+      var t = props.t
+      var health = props.health || {}
+      var [enabled, setEnabled] = React.useState(health.enabled ?? true)
+      var [prompt, setPrompt] = React.useState(health.prompt ?? 'hi')
+      var [intervalMinutes, setIntervalMinutes] = React.useState(String(health.intervalMinutes ?? 0))
+      var [timeoutSeconds, setTimeoutSeconds] = React.useState(String(health.timeoutSeconds ?? 8))
+
+      return h(Modal, {
+        open: true,
+        title: t('healthModalTitle'),
+        closeLabel: t('close'),
+        onClose: props.onClose,
+        footer: h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 10 } },
+          h(Button, { variant: 'outline', onClick: props.onClose }, t('cancel')),
+          h(Button, {
+            variant: 'primary',
+            onClick: function () {
+              var intervalNum = Math.max(0, Math.round(Number(intervalMinutes) || 0))
+              var timeoutNum = Math.min(60, Math.max(1, Math.round(Number(timeoutSeconds) || 8)))
+              props.onUpdateHealth({
+                enabled: enabled,
+                prompt: prompt.trim() || 'hi',
+                intervalMinutes: intervalNum,
+                timeoutSeconds: timeoutNum,
+              })
+              props.onClose()
+            },
+          }, t('formSave'))),
+      },
+        h('div', { style: S.introBox },
+          h(Icon, { d: ICON_WARN, size: 20 }),
+          h('div', null,
+            h('h3', { style: S.introTitle }, t('healthSectionTitle')),
+            h('p', { style: S.introDesc }, t('healthPassiveHint')))),
+        h('div', { style: Object.assign({}, S.formGroup, { display: 'flex', alignItems: 'center', justifyContent: 'space-between' }) },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+            h('span', { style: S.formLabel }, t('healthEnabledLabel')),
+            h('span', { style: S.formHint }, t('healthPassiveHint'))),
+          h(Switch, {
+            checked: enabled,
+            label: t('healthEnabledLabel'),
+            onChange: function (next) { setEnabled(next) },
+          })),
+        h('div', { style: S.formGroup },
+          h('span', { style: S.formLabel }, t('healthPromptLabel')),
+          h('span', { style: S.formHint }, t('healthPromptHint')),
+          h('input', {
+            style: S.formInput,
+            type: 'text',
+            placeholder: 'hi',
+            'aria-label': t('healthPromptLabel'),
+            value: prompt,
+            onChange: function (event) { setPrompt(event.target.value) },
+          })),
+        h('div', { style: S.formGroup },
+          h('span', { style: S.formLabel }, t('healthIntervalLabel')),
+          h('span', { style: S.formHint }, t('healthIntervalHint')),
+          h('input', {
+            style: S.formInput,
+            type: 'text',
+            inputMode: 'numeric',
+            placeholder: '0',
+            'aria-label': t('healthIntervalLabel'),
+            value: intervalMinutes,
+            onChange: function (event) { setIntervalMinutes(event.target.value) },
+          })),
+        h('div', { style: S.formGroup },
+          h('span', { style: S.formLabel }, t('healthTimeoutLabel')),
+          h('span', { style: S.formHint }, t('healthTimeoutHint')),
+          h('input', {
+            style: S.formInput,
+            type: 'text',
+            inputMode: 'numeric',
+            placeholder: '8',
+            'aria-label': t('healthTimeoutLabel'),
+            value: timeoutSeconds,
+            onChange: function (event) { setTimeoutSeconds(event.target.value) },
           })))
     }
 
@@ -1823,6 +2076,22 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               className: 'dsh-router-catalog-btn',
+              style: Object.assign({}, S.catalogBtn, state.ui.healthProbing ? { opacity: 0.6, cursor: 'wait' } : null),
+              disabled: disabled || state.ui.healthProbing,
+              title: t('probeAllBtn'),
+              onClick: props.onProbeAll,
+            }, h(Icon, { d: state.ui.healthProbing ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state.ui.healthProbing }), state.ui.healthProbing ? t('probingText') : t('probeAllBtn')),
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-catalog-btn',
+              style: S.catalogBtn,
+              disabled: disabled,
+              title: t('healthConfigBtn'),
+              onClick: props.onOpenHealthModal,
+            }, h(Icon, { d: ICON_GEAR, size: 14 }), t('healthConfigBtn')),
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-catalog-btn',
               style: S.catalogBtn,
               onClick: props.onOpenDrawer,
             }, h(Icon, { d: ICON_CLOCK, size: 14 }), t('failoverHistoryButton')),
@@ -1926,6 +2195,7 @@ window.__ModuleLoader__.load({
               pool: draft.default,
               disabled: disabled,
               catalog: state.catalog,
+              healthRecords: state.ui.healthRecords,
               onDefaultEnabled: props.onDefaultEnabled,
               onMaxAttempts: props.onMaxAttempts,
               onMove: props.onMove,
@@ -1941,6 +2211,7 @@ window.__ModuleLoader__.load({
               profile: activeProfile,
               disabled: disabled,
               catalog: state.catalog,
+              healthRecords: state.ui.healthRecords,
               onDeleteProfile: props.onDeleteProfile,
               onMaxAttempts: props.onMaxAttempts,
               onMove: props.onMove,
@@ -1954,6 +2225,12 @@ window.__ModuleLoader__.load({
 
 
 
+        modal !== null && modal.kind === 'health' ? h(HealthSettingsModal, {
+          t: t,
+          health: draft.health,
+          onClose: props.onCloseModal,
+          onUpdateHealth: props.onUpdateHealth,
+        }) : null,
         modal !== null && modal.kind === 'new-profile' ? h(NewProfileModal, {
           t: t,
           catalog: state.catalog,
@@ -2051,6 +2328,22 @@ window.__ModuleLoader__.load({
                 h('button', {
                   type: 'button',
                   className: 'dsh-router-catalog-btn',
+                  style: Object.assign({}, S.catalogBtn, state?.ui?.healthProbing ? { opacity: 0.6, cursor: 'wait' } : null),
+                  disabled: !state?.writable || state?.saving || state?.ui?.healthProbing,
+                  title: t('probeAllBtn'),
+                  onClick: props.onProbeAll,
+                }, h(Icon, { d: state?.ui?.healthProbing ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state?.ui?.healthProbing }), state?.ui?.healthProbing ? t('probingText') : t('probeAllBtn')),
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-catalog-btn',
+                  style: S.catalogBtn,
+                  disabled: !state?.writable || state?.saving,
+                  title: t('healthConfigBtn'),
+                  onClick: props.onOpenHealthModal,
+                }, h(Icon, { d: ICON_GEAR, size: 14 }), t('healthConfigBtn')),
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-catalog-btn',
                   style: S.catalogBtn,
                   onClick: props.onOpenDrawer,
                 }, h(Icon, { d: ICON_CLOCK, size: 14 }), t('failoverHistoryButton')),
@@ -2101,6 +2394,34 @@ window.__ModuleLoader__.load({
       )
     }
 
+    var ROUTER_HEALTH_CONTRIBUTION = {
+      package: '@sudy/dsh-model-router',
+      descriptors: [
+        {
+          namespace: 'routerHealth',
+          method: 'getSnapshot',
+          parameters: [],
+          uplink: null,
+          result: { mode: 'src-json' },
+        },
+        {
+          namespace: 'routerHealth',
+          method: 'probeAll',
+          parameters: [
+            {
+              name: 'payload',
+              wire: 'payload',
+              kind: 'value',
+              codec: { mode: 'src-json' },
+              optional: true,
+            },
+          ],
+          uplink: null,
+          result: { mode: 'src-json' },
+        },
+      ],
+    }
+
     exports.name = NS + '/client'
     exports.inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
 
@@ -2141,6 +2462,26 @@ window.__ModuleLoader__.load({
         onRiskAck: function (value) { controller.setRiskAck(value) },
         onOpenDrawer: function () { controller.openDrawer() },
         onCloseDrawer: function () { controller.closeDrawer() },
+        onProbeAll: function () { controller.probeAll() },
+        onOpenHealthModal: function () { controller.openHealthModal() },
+        onUpdateHealth: function (patch) { controller.updateHealth(patch) },
+      }
+
+      if (ctx.remote && typeof ctx.remote.$mount === 'function') {
+        ctx.effect(function () {
+          var unmount = null
+          ctx.remote.$mount(ROUTER_HEALTH_CONTRIBUTION).then(function (dispose) {
+            unmount = dispose
+            if (typeof controller.loadHealthSnapshot === 'function') {
+              controller.loadHealthSnapshot()
+            }
+          }).catch(function () {})
+          return function () {
+            if (typeof unmount === 'function') {
+              void unmount().catch(function () {})
+            }
+          }
+        }, 'router: remote health mount')
       }
 
       ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({

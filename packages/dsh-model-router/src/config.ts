@@ -70,6 +70,16 @@ export const defaultSchema = z.object({
     .description('接管时单请求最多真实调用多少次（硬上限）'),
 })
 
+/** Health monitoring and proactive probe configuration. */
+export const healthSchema = z.object({
+  enabled: z.boolean().default(true).description('是否启用渠道健康监控'),
+  prompt: z.string().default('hi').description('主动探测消息内容（避免使用渠道违禁词）'),
+  intervalMinutes: z.number().step(1).min(0).max(1440).default(0)
+    .description('自动探测周期（分钟；0 表示仅手动探测与被动观测，避免产生额外 Token）'),
+  timeoutSeconds: z.number().step(1).min(2).max(60).default(8)
+    .description('单次探测超时时间（秒）'),
+})
+
 /** Plugin Config. Every field is volatile: all of them reach the settings form. */
 export const Config = z.object({
   enabled: z.boolean().default(true).volatile()
@@ -78,6 +88,8 @@ export const Config = z.object({
     .description('路由规则列表；按 when 精确匹配'),
   default: defaultSchema.default({}).volatile()
     .description('全局默认兜底：接管未配置专属规则的模型'),
+  health: healthSchema.default({}).volatile()
+    .description('渠道健康监控：被动观测与主动探测配置'),
 })
 
 /**
@@ -126,11 +138,20 @@ export interface DefaultProfile {
   maxTotalAttempts: number
 }
 
+/** Health monitoring and proactive probe configuration. */
+export interface HealthConfig {
+  enabled: boolean
+  prompt: string
+  intervalMinutes: number
+  timeoutSeconds: number
+}
+
 /** Plugin configuration as `apply` sees it: every field is a Volatile accessor. */
 export interface Config {
   enabled: Volatile<boolean>
   profiles: Volatile<Profile[]>
   default: Volatile<DefaultProfile>
+  health: Volatile<HealthConfig>
 }
 
 /** The plain config value shape, for validating a hot update before it applies. */
@@ -170,6 +191,7 @@ export function switchOnKeyOf(code: string): (typeof SWITCH_ON_KEYS)[number] | u
 export function assertStructural(config: {
   profiles: readonly Profile[]
   default: DefaultProfile
+  health?: HealthConfig
 }): void {
   const seen = new Set<string>()
   for (const profile of config.profiles) {
@@ -198,5 +220,13 @@ export function assertStructural(config: {
   }
   if (config.default.maxTotalAttempts < 1) {
     throw new Error('model-router: default.maxTotalAttempts must be >= 1')
+  }
+  if (config.health !== undefined) {
+    if (config.health.intervalMinutes < 0) {
+      throw new Error('model-router: health.intervalMinutes must be >= 0')
+    }
+    if (config.health.timeoutSeconds < 1) {
+      throw new Error('model-router: health.timeoutSeconds must be >= 1')
+    }
   }
 }

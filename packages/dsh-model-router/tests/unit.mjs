@@ -267,3 +267,96 @@ test('projection key is namespaced and stateVersion is a positive integer', () =
   assert.equal(FAILOVER_HISTORY_KEY, 'router/failover-history')
   assert.ok(Number.isSafeInteger(failoverHistoryProjection.stateVersion) && failoverHistoryProjection.stateVersion >= 1)
 })
+
+// ---- Health Monitoring unit tests ----
+import { HealthMonitor, classifyHealth, routeKeyOf, channelHealthProjection, CHANNEL_HEALTH_KEY } from '../src/health.ts'
+
+test('classifyHealth classifies RATE_LIMIT as degraded and SERVER/TIMEOUT as unhealthy', () => {
+  assert.equal(classifyHealth('RATE_LIMIT'), 'degraded')
+  assert.equal(classifyHealth('SERVER'), 'unhealthy')
+  assert.equal(classifyHealth('TIMEOUT'), 'unhealthy')
+  assert.equal(classifyHealth('TRANSPORT'), 'unhealthy')
+  assert.equal(classifyHealth('AUTH_FAILED'), 'unhealthy')
+})
+
+test('routeKeyOf formats provider and model as provider/model', () => {
+  assert.equal(routeKeyOf('deepseek-official', 'deepseek-chat'), 'deepseek-official/deepseek-chat')
+})
+
+test('HealthMonitor passively notes successes and failures', () => {
+  const fakeCtx = { llm: {} }
+  const monitor = new HealthMonitor(fakeCtx)
+
+  monitor.noteSuccess('prov-a', 'mod-a', 150)
+  const recA = monitor.getRecord('prov-a', 'mod-a')
+  assert.ok(recA)
+  assert.equal(recA.status, 'healthy')
+  assert.equal(recA.latencyMs, 150)
+  assert.equal(recA.source, 'passive')
+
+  monitor.noteFailure('prov-b', 'mod-b', 'RATE_LIMIT', 300)
+  const recB = monitor.getRecord('prov-b', 'mod-b')
+  assert.ok(recB)
+  assert.equal(recB.status, 'degraded')
+  assert.equal(recB.lastError, 'RATE_LIMIT')
+
+  monitor.noteFailure('prov-c', 'mod-c', 'SERVER')
+  const recC = monitor.getRecord('prov-c', 'mod-c')
+  assert.ok(recC)
+  assert.equal(recC.status, 'unhealthy')
+  assert.equal(recC.lastError, 'SERVER')
+
+  const snap = monitor.getSnapshot()
+  assert.equal(Object.keys(snap).length, 3)
+  assert.equal(snap['prov-a/mod-a'].status, 'healthy')
+  monitor.dispose()
+})
+
+test('channelHealthProjection folds session headers and attempts into channel records', () => {
+  assert.equal(CHANNEL_HEALTH_KEY, 'router/channel-health')
+  let state = channelHealthProjection.init()
+  assert.deepEqual(state.records, {})
+
+  // 1. Initial request header
+  state = channelHealthProjection.apply(state, {
+    type: 'request/header',
+    time: 1000,
+    data: { reason: 'initial', header: { config: { provider: 'prov-1', model: 'mod-1' } } },
+  })
+  assert.equal(state.currentRoute, 'prov-1/mod-1')
+
+  // 2. Failed attempt with 500
+  state = channelHealthProjection.apply(state, {
+    type: 'assistant/attempt',
+    time: 1500,
+    data: {
+      stream: [
+        { type: 'chunk', chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER' } } } },
+      ],
+    },
+  })
+  assert.ok(state.records['prov-1/mod-1'])
+  assert.equal(state.records['prov-1/mod-1'].status, 'unhealthy')
+  assert.equal(state.records['prov-1/mod-1'].lastError, 'SERVER')
+
+  // 3. Switch to candidate 2
+  state = channelHealthProjection.apply(state, {
+    type: 'request/header',
+    time: 2000,
+    data: { reason: 'change', header: { config: { provider: 'prov-2', model: 'mod-2' } } },
+  })
+
+  // 4. Successful assistant message
+  state = channelHealthProjection.apply(state, {
+    type: 'assistant/message',
+    time: 2400,
+    data: { message: { source: { provider: 'prov-2', model: 'mod-2' } } },
+  })
+  assert.ok(state.records['prov-2/mod-2'])
+  assert.equal(state.records['prov-2/mod-2'].status, 'healthy')
+  assert.equal(state.records['prov-2/mod-2'].latencyMs, 400)
+
+  // Wire view returns records
+  assert.equal(channelHealthProjection.wire.view(state), state.records)
+})
+
