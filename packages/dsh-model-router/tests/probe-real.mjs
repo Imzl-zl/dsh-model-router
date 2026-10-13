@@ -4,7 +4,11 @@
  * connection-error. Read-only reconnaissance for the real-provider failover
  * test — the credentials file is gitignored, this script carries no secrets.
  *
- *   node packages/dsh-model-router/tests/probe-real.mjs [timeoutMs]
+ *   node packages/dsh-model-router/tests/probe-real.mjs [timeoutMs] [--ua]
+ *
+ * `--ua` sends a browser User-Agent: the gateway rejects some requests without
+ * one, so the two runs answer different questions — what a bare client sees
+ * (DSH's posture) versus what a browser-like client sees.
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -12,7 +16,10 @@ import path from 'node:path'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const credPath = path.join(here, 'real-providers.local.json')
-const timeoutMs = Number(process.argv[2] ?? 20_000)
+const args = process.argv.slice(2)
+const withUA = args.includes('--ua')
+const timeoutMs = Number(args.find(a => /^\d+$/.test(a)) ?? 20_000)
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 let creds
 try {
@@ -29,7 +36,11 @@ async function probeOne(baseURL, apiKey, model) {
   try {
     const response = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+        ...withUA === true ? { 'user-agent': UA } : {},
+      },
       body: JSON.stringify({ model, messages: [{ role: 'user', content: 'reply with the single word OK' }], max_tokens: 16, stream: false }),
       signal: controller.signal,
     })
@@ -58,7 +69,7 @@ async function probeOne(baseURL, apiKey, model) {
 }
 
 for (const channel of creds.channels) {
-  console.log(`\n== ${channel.id}  ${channel.baseURL}`)
+  console.log(`\n== ${channel.id}  ${channel.baseURL}  (${withUA === true ? 'with browser UA' : 'no UA'})`)
   for (const model of channel.models) {
     const result = await probeOne(channel.baseURL, channel.apiKey, model)
     console.log(`  ${model.padEnd(28)} ${result.verdict.padEnd(18)} ${String(result.ms).padStart(6)}ms  ${result.detail}`)
