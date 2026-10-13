@@ -9,7 +9,12 @@
  *
  *   $env:HTTPS_PROXY = 'http://127.0.0.1:7890'   # machine proxy, see tools.md
  *   $env:NODE_USE_ENV_PROXY = '1'
- *   node packages/dsh-model-router/tests/real-run.mjs
+ *   node packages/dsh-model-router/tests/real-run.mjs [server|transport]
+ *
+ * `server` (default): the user's selection is a channel-B model that answers
+ * every request with an upstream 500. `transport`: the selection is a
+ * hand-declared route pointing at the discard port, so the failure is a real
+ * connection refusal — the deterministic TRANSPORT path.
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -19,6 +24,11 @@ import path from 'node:path'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.resolve(here, '..', '..', '..')
 const DSH_HOME = path.join(here, '.dshhome-real')
+const scenario = process.argv[2] ?? 'server'
+if (scenario !== 'server' && scenario !== 'transport') {
+  console.error('usage: real-run.mjs [server|transport]')
+  process.exit(2)
+}
 
 let creds
 try {
@@ -34,11 +44,13 @@ if (channelA === undefined || channelB === undefined) {
   process.exit(2)
 }
 
-// The scenario: the user's own selection is the channel-B model that answers
-// every request with an upstream 500; the chain's backup is a channel-A model
-// that answers fine. A real cross-channel, cross-key failover.
-const BROKEN = { provider: 'real-b', model: 'gpt-6-astra' }
-const BACKUP = { provider: 'real-a', model: 'sensenova-6.8-flash-lite' }
+// The scenario: the user's own selection is a model that cannot serve the
+// request — a real upstream 500 (`server`) or a real connection refusal
+// (`transport`) — and the chain's backup is a channel-A model that answers.
+const BROKEN = scenario === 'transport'
+  ? { provider: 'real-dead', model: 'kimi-k3' }
+  : { provider: 'real-b', model: 'gpt-6-astra' }
+const BACKUP = { provider: 'real-a', model: 'step-5-preview' }
 
 const models = (channel, ids) => ids.map(id => ({
   id,
@@ -77,6 +89,14 @@ ${models(channelA, channelA.models).map(m => `          - { id: '${m.id}', name:
         baseURL: '${channelB.baseURL}'
         models:
 ${models(channelB, channelB.models).map(m => `          - { id: '${m.id}', name: '${m.name}', contextWindow: ${m.contextWindow}, maxTokens: ${m.maxTokens} }`).join('\n')}
+${scenario === 'transport' ? `      real-dead:
+        apiKeyEnv: REAL_A_KEY
+        displayName: 'Real Dead (connection refused)'
+        api: 'openai-completions'
+        baseURL: 'http://127.0.0.1:9/v1'
+        models:
+          - { id: 'kimi-k3', name: 'kimi-k3', contextWindow: 65536, maxTokens: 8192 }
+` : ''}
 
 - id: agent-default-model
   config:
@@ -163,10 +183,13 @@ const check = (name, ok, detail) => {
   if (!ok) failures += 1
 }
 
-console.log(`\nreal-provider failover (${((Date.now() - started) / 1000).toFixed(1)}s):`)
+console.log(`\nreal-provider failover [${scenario}] (${((Date.now() - started) / 1000).toFixed(1)}s):`)
 check('two routes: broken selection first, backup second', JSON.stringify(headers) === JSON.stringify([`${BROKEN.provider}/${BROKEN.model}`, `${BACKUP.provider}/${BACKUP.model}`]), JSON.stringify(headers))
 check('the broken route really failed', attempts.length >= 2 && attempts[0].kind === 'error' && attempts[0].code !== undefined, JSON.stringify(attempts[0]))
 check('the failure code is switch-eligible', attempts[0] !== undefined && ['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'].includes(attempts[0].code), String(attempts[0]?.code))
+if (scenario === 'transport') {
+  check('the transport failure is a real connection refusal', attempts[0]?.code === 'TRANSPORT', `${String(attempts[0]?.code)} — ${String(attempts[0]?.message ?? '')}`)
+}
 check('a Chinese failover notice names the backup', notices.some(n => n.includes(BACKUP.model)), JSON.stringify(notices))
 check('the turn completed with an assistant message', hasAssistant)
 

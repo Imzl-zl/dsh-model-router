@@ -15,6 +15,8 @@
 | 4 | needs.images 合格方向（带图） | **deepseek 被选中（候选 2/3）**→ 它也 500 → 再切 sensenova（**一轮两跳**） |
 | 5 | 原生模态配置 | gpt-6-astra 声明 `input:[text,image]` 后 composer 解除拦截（DSH 原生保护：纯文本模型拒收图片） |
 | 6 | UI 配置全流程 | 真实目录 7 路由、建链、needs 面板、删除二次确认、保存，全部通过 |
+| 7 | **TRANSPORT 真实码**（无头 + UI） | 手声明 `real-dead`（`http://127.0.0.1:9/v1` 丢弃端口）→ 真实连接拒绝对 → `TRANSPORT` → 切 step-5-preview 完成（real-run.mjs transport 场景 6/6） |
+| 8 | **全局兜底池真实失败触发**（UI） | 新会话默认 real-dead/kimi-k3（无专属规则）→ 网络传输中断 → 兜底池接棒 sensenova（notice"候选 2/2"） |
 
 ## 真实世界发现（与设计假设的差异）
 
@@ -28,5 +30,6 @@
 
 ## 未覆盖
 
-- 全局兜底池的**失败触发**：池已配好（接管开 + sensenova），但唯一坏模型上游恢复，触发不了；池逻辑由组合测试 default-pool 场景覆盖。
-- RATE_LIMIT / TIMEOUT 真实路径仍不可稳定复现（kimi 429 瞬时；带图请求会让 gpt-6-astra 挂死，DSH 流空闲超时 5 分钟，等不起）。
+- **RATE_LIMIT 真实路径**：kimi-k3 的 429 瞬时，不可稳定复现。
+- **TIMEOUT 真实路径**：无稳定挂死的上游（带图 + 坏上游会挂但早前证实是附件损坏非 Provider 超时；DSH 流空闲超时 5 分钟，等不起）。
+- 其余四条真实失败码（SERVER / TRANSPORT / AUTH_FAILED 终态 / 条件跳过）均有真实证据。
