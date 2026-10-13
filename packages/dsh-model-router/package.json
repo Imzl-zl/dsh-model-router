@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Transparent cross-provider failover for DSH Agent main requests.",
+  "icon": "./icon.svg",
+  "license": "MIT",
+  "files": [
+    "icon.svg",
+    "cordis.patch.yml",
+    "src/",
+    "README.md"
+  ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
