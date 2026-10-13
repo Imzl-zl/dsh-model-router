@@ -198,6 +198,10 @@ window.__ModuleLoader__.load({
       healthConfigBtn: '健康监控设置',
       healthModalTitle: '渠道健康监控与探测设置',
       healthPassiveHint: '💡 零消耗机制：对话过程中成功的请求自动标记正常并记录延迟；异常错误（429/500/超时）自动标记降级或异常，日常使用不产生任何额外 Token 费用。主动探测仅消耗 1 Token 并于首字到达时立即断开。',
+      healthMetricStatus: '状态',
+      healthMetricLatency: '延迟',
+      healthMetricThroughput: '吞吐',
+      healthBarIdle: '暂无请求 / 闲置时段',
     }
     var en = {
       pluginTitle: 'Model Router',
@@ -347,6 +351,10 @@ window.__ModuleLoader__.load({
       healthConfigBtn: 'Health Settings',
       healthModalTitle: 'Channel Health & Proactive Probe Settings',
       healthPassiveHint: '💡 Zero-Cost Mechanism: Successful conversation requests automatically record latency and mark channels healthy; failures (429/500/timeout) mark degraded/unhealthy. Active probes limit to 1 token and abort immediately on first token (TTFT).',
+      healthMetricStatus: 'Status',
+      healthMetricLatency: 'Latency',
+      healthMetricThroughput: 'Throughput',
+      healthBarIdle: 'No requests / Idle',
     }
 
     /** The six switchOn codes: `key` is the config field, `labelKey` the dictionary stem. */
@@ -457,6 +465,10 @@ window.__ModuleLoader__.load({
       '.dsh-router-modal-close-btn:hover {',
       '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
       '  color: var(--dsw-alias-label-primary) !important;',
+      '}',
+      '.dsh-timeline-pill:hover {',
+      '  transform: scaleY(1.3) scaleX(1.1) !important;',
+      '  filter: brightness(1.3) !important;',
       '}',
       '/* Keyframes & transitions */',
       '@keyframes dsh-spin {',
@@ -881,6 +893,69 @@ window.__ModuleLoader__.load({
         padding: '20px 24px 60px',
         boxSizing: 'border-box',
       },
+
+      // Channel metrics & sparkline timeline styles
+      channelMetricsCard: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 20,
+        padding: '9px 14px',
+        background: 'var(--dsw-alias-bg-layer-1, rgba(0, 0, 0, 0.22))',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        boxSizing: 'border-box',
+        flexWrap: 'wrap',
+      },
+      metricsColStatus: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5,
+        minWidth: 170,
+      },
+      metricsStatusHeader: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 8,
+      },
+      metricsLabel: {
+        fontSize: 11.5,
+        fontWeight: 500,
+        color: 'var(--dsw-alias-label-tertiary)',
+        letterSpacing: '0.2px',
+      },
+      metricsStatusValue: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        fontFamily: 'var(--ds-font-family-code, monospace)',
+      },
+      timelineBarContainer: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 3,
+        height: 14,
+      },
+      timelinePill: {
+        width: 4,
+        height: 14,
+        borderRadius: 2,
+        flexShrink: 0,
+        transition: 'transform 0.1s ease, filter 0.1s ease',
+        cursor: 'pointer',
+      },
+      metricsColValue: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: 4,
+        minWidth: 70,
+      },
+      metricsValNumber: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        fontFamily: 'var(--ds-font-family-code, monospace)',
+        color: 'var(--dsw-alias-label-primary)',
+      },
     }
 
     // ---------- helpers ----------
@@ -896,6 +971,27 @@ window.__ModuleLoader__.load({
     }
     function fill(template, vars) {
       return template.replace(/\{(\w+)\}/g, function (_, key) { return String(vars[key]) })
+    }
+    function formatLatency(latencyMs) {
+      if (typeof latencyMs !== 'number' || isNaN(latencyMs)) return '—'
+      if (latencyMs >= 1000) return (latencyMs / 1000).toFixed(2) + 's'
+      return Math.round(latencyMs) + 'ms'
+    }
+    function formatThroughput(tps) {
+      if (typeof tps !== 'number' || isNaN(tps) || tps <= 0) return '—'
+      return tps.toFixed(1) + 't/s'
+    }
+    function formatAvailability(pct) {
+      if (typeof pct !== 'number' || isNaN(pct)) return '—'
+      return pct.toFixed(2) + '%'
+    }
+    function formatTime(ts) {
+      if (!ts) return ''
+      var d = new Date(ts)
+      var hh = String(d.getHours()).padStart(2, '0')
+      var mm = String(d.getMinutes()).padStart(2, '0')
+      var ss = String(d.getSeconds()).padStart(2, '0')
+      return hh + ':' + mm + ':' + ss
     }
 
     /** Client-side mirror of the host's structural checks, for a blocked save. */
@@ -1362,6 +1458,77 @@ window.__ModuleLoader__.load({
       }, '🔴 ' + t('healthStatusUnhealthy'))
     }
 
+    /** Sparkline timeline and metrics dashboard matching channel monitor specification. */
+    function ChannelMetricsDashboard(props) {
+      var t = props.t
+      var record = props.record
+      var timeline = (record && Array.isArray(record.timeline)) ? record.timeline : []
+      var availabilityPct = record ? record.availabilityPct : undefined
+      var latencyMs = record ? record.latencyMs : undefined
+      var throughputTps = record ? record.throughputTps : undefined
+
+      var availColor = 'var(--dsw-alias-label-tertiary)'
+      if (typeof availabilityPct === 'number') {
+        if (availabilityPct >= 99) availColor = '#00e599'
+        else if (availabilityPct >= 90) availColor = '#f59e0b'
+        else availColor = '#ef4444'
+      }
+
+      var slots = []
+      var padCount = Math.max(0, 24 - timeline.length)
+      for (var i = 0; i < padCount; i++) {
+        slots.push({ isIdle: true })
+      }
+      var recent = timeline.length > 24 ? timeline.slice(-24) : timeline
+      for (var j = 0; j < recent.length; j++) {
+        slots.push(recent[j])
+      }
+
+      var barElements = slots.map(function (item, idx) {
+        if (item.isIdle) {
+          return h('div', {
+            key: 'bar-' + idx,
+            className: 'dsh-timeline-pill',
+            style: Object.assign({}, S.timelinePill, { background: 'var(--dsw-alias-bg-layer-4, rgba(255, 255, 255, 0.08))' }),
+            title: t('healthBarIdle'),
+          })
+        }
+        var barBg = '#00e599'
+        var statusLabel = t('healthStatusHealthy')
+        if (item.status === 'degraded') {
+          barBg = '#f59e0b'
+          statusLabel = t('healthStatusDegraded')
+        } else if (item.status === 'unhealthy') {
+          barBg = '#ef4444'
+          statusLabel = t('healthStatusUnhealthy')
+        }
+        var tip = '[' + formatTime(item.time) + '] ' + statusLabel
+        if (typeof item.latencyMs === 'number') tip += ' · ' + formatLatency(item.latencyMs)
+        if (typeof item.throughputTps === 'number' && item.throughputTps > 0) tip += ' · ' + formatThroughput(item.throughputTps)
+        if (item.error) tip += ' (' + item.error + ')'
+
+        return h('div', {
+          key: 'bar-' + idx,
+          className: 'dsh-timeline-pill',
+          style: Object.assign({}, S.timelinePill, { background: barBg }),
+          title: tip,
+        })
+      })
+
+      return h('div', { style: S.channelMetricsCard },
+        h('div', { style: S.metricsColStatus },
+          h('div', { style: S.metricsStatusHeader },
+            h('span', { style: S.metricsLabel }, t('healthMetricStatus')),
+            h('span', { style: Object.assign({}, S.metricsStatusValue, { color: availColor }) }, formatAvailability(availabilityPct))),
+          h('div', { style: S.timelineBarContainer }, barElements)),
+        h('div', { style: S.metricsColValue },
+          h('span', { style: S.metricsLabel }, t('healthMetricLatency')),
+          h('span', { style: S.metricsValNumber }, formatLatency(latencyMs))),
+        h('div', { style: S.metricsColValue },
+          h('span', { style: S.metricsLabel }, t('healthMetricThroughput')),
+          h('span', { style: S.metricsValNumber }, formatThroughput(throughputTps))))
+    }
+
     /** One candidate node in the pipeline. */
     function CandidateNode(props) {
       var t = props.t
@@ -1449,6 +1616,7 @@ window.__ModuleLoader__.load({
                 title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
                 onClick: function () { props.onRemove(index) },
               }, h(Icon, { d: ICON_CLOSE })))),
+          h(ChannelMetricsDashboard, { t: t, record: props.healthRecords ? props.healthRecords[routeOf(candidate)] : null }),
           !isPrimary && expanded ? h('div', { style: S.needsPanel },
             h('div', { style: S.needsGrid },
               h('div', { style: S.needCard },

@@ -269,7 +269,51 @@ test('projection key is namespaced and stateVersion is a positive integer', () =
 })
 
 // ---- Health Monitoring unit tests ----
-import { HealthMonitor, classifyHealth, routeKeyOf, channelHealthProjection, CHANNEL_HEALTH_KEY } from '../src/health.ts'
+import { HealthMonitor, classifyHealth, routeKeyOf, channelHealthProjection, CHANNEL_HEALTH_KEY, pushTimelinePoint, MAX_TIMELINE_POINTS } from '../src/health.ts'
+
+test('pushTimelinePoint caps at 24 points and recalculates availability percentage', () => {
+  let timeline
+  let availabilityPct
+  for (let i = 0; i < 30; i++) {
+    const res = pushTimelinePoint(timeline, {
+      time: 1000 + i * 10,
+      status: i % 2 === 0 ? 'healthy' : 'degraded',
+      latencyMs: 100,
+    })
+    timeline = res.timeline
+    availabilityPct = res.availabilityPct
+  }
+  assert.equal(timeline.length, MAX_TIMELINE_POINTS)
+  assert.equal(timeline.length, 24)
+  // In the last 24 items (i = 6..29), exactly 12 are even (healthy), so 12/24 = 50%
+  assert.equal(availabilityPct, 50)
+})
+
+test('channelHealthProjection calculates throughput from real assistant/message tokens', () => {
+  let state = channelHealthProjection.init()
+  state = channelHealthProjection.apply(state, {
+    type: 'request/header',
+    time: 1000,
+    data: { reason: 'initial', header: { config: { provider: 'prov-fast', model: 'mod-fast' } } },
+  })
+  // 100 tokens generated in 0.5s = 200 tok/s
+  state = channelHealthProjection.apply(state, {
+    type: 'assistant/message',
+    time: 1500,
+    data: {
+      message: {
+        source: { provider: 'prov-fast', model: 'mod-fast' },
+        usage: { outputTokens: 100 },
+      },
+    },
+  })
+  const rec = state.records['prov-fast/mod-fast']
+  assert.ok(rec)
+  assert.equal(rec.status, 'healthy')
+  assert.equal(rec.throughputTps, 200)
+  assert.equal(rec.timeline?.length, 1)
+  assert.equal(rec.timeline[0].throughputTps, 200)
+})
 
 test('classifyHealth classifies RATE_LIMIT as degraded and SERVER/TIMEOUT as unhealthy', () => {
   assert.equal(classifyHealth('RATE_LIMIT'), 'degraded')

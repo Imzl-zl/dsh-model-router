@@ -28,15 +28,28 @@ import { z } from 'zod'
 
 export type ChannelHealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 
+export const MAX_TIMELINE_POINTS = 24
+
+export interface ChannelTimelinePoint {
+  time: number
+  status: ChannelHealthStatus
+  latencyMs?: number
+  throughputTps?: number
+  error?: string
+}
+
 export interface ChannelHealthRecord {
   route: string
   provider: string
   model: string
   status: ChannelHealthStatus
   latencyMs?: number
+  throughputTps?: number
+  availabilityPct?: number
   lastError?: string
   lastCheckedAt: number
   source: 'passive' | 'active'
+  timeline?: ChannelTimelinePoint[]
 }
 
 /** Route string formatted as `provider/model`. */
@@ -45,9 +58,22 @@ export function routeKeyOf(provider: string, model: string): string {
 }
 
 /** Classify failure code to health status. */
-export function classifyHealth(code: string): ChannelHealthStatus {
+export function classifyHealth(code: string): 'degraded' | 'unhealthy' {
   if (code === 'RATE_LIMIT') return 'degraded'
   return 'unhealthy'
+}
+
+/** Helper to append timeline point and recalculate availability. */
+export function pushTimelinePoint(
+  existingTimeline: readonly ChannelTimelinePoint[] | undefined,
+  point: ChannelTimelinePoint,
+): { timeline: ChannelTimelinePoint[]; availabilityPct: number } {
+  const current = existingTimeline ? existingTimeline.slice() : []
+  current.push(point)
+  const sliced = current.length > MAX_TIMELINE_POINTS ? current.slice(-MAX_TIMELINE_POINTS) : current
+  const healthyCount = sliced.filter(p => p.status === 'healthy').length
+  const pct = sliced.length > 0 ? Math.round((healthyCount / sliced.length) * 10000) / 100 : 100
+  return { timeline: sliced, availabilityPct: pct }
 }
 
 /**
@@ -62,32 +88,53 @@ export class HealthMonitor {
     this.ctx = ctx
   }
 
-  noteSuccess(provider: string, model: string, latencyMs?: number): void {
+  noteSuccess(provider: string, model: string, latencyMs?: number, throughputTps?: number): void {
     const route = routeKeyOf(provider, model)
     const existing = this.records.get(route)
+    const point: ChannelTimelinePoint = {
+      time: Date.now(),
+      status: 'healthy',
+      latencyMs,
+      throughputTps,
+    }
+    const { timeline, availabilityPct } = pushTimelinePoint(existing?.timeline, point)
     this.records.set(route, {
       route,
       provider,
       model,
       status: 'healthy',
       latencyMs: latencyMs ?? existing?.latencyMs,
+      throughputTps: throughputTps ?? existing?.throughputTps,
+      availabilityPct,
       lastCheckedAt: Date.now(),
       source: 'passive',
+      timeline,
     })
   }
 
   noteFailure(provider: string, model: string, code: string, latencyMs?: number): void {
     const route = routeKeyOf(provider, model)
     const existing = this.records.get(route)
+    const status = classifyHealth(code)
+    const point: ChannelTimelinePoint = {
+      time: Date.now(),
+      status,
+      latencyMs,
+      error: code,
+    }
+    const { timeline, availabilityPct } = pushTimelinePoint(existing?.timeline, point)
     this.records.set(route, {
       route,
       provider,
       model,
-      status: classifyHealth(code),
+      status,
       latencyMs: latencyMs ?? existing?.latencyMs,
+      throughputTps: existing?.throughputTps,
+      availabilityPct,
       lastError: code,
       lastCheckedAt: Date.now(),
       source: 'passive',
+      timeline,
     })
   }
 
@@ -98,7 +145,7 @@ export class HealthMonitor {
   getSnapshot(): Record<string, ChannelHealthRecord> {
     const snapshot: Record<string, ChannelHealthRecord> = {}
     for (const [key, value] of this.records) {
-      snapshot[key] = { ...value }
+      snapshot[key] = { ...value, timeline: value.timeline ? value.timeline.slice() : [] }
     }
     return snapshot
   }
@@ -155,14 +202,24 @@ export class HealthMonitor {
 
       clearTimeout(timeoutTimer)
       const latencyMs = Math.max(1, Math.round(performance.now() - t0))
+      const existing = this.records.get(route)
+      const point: ChannelTimelinePoint = {
+        time: Date.now(),
+        status: 'healthy',
+        latencyMs,
+      }
+      const { timeline, availabilityPct } = pushTimelinePoint(existing?.timeline, point)
       const record: ChannelHealthRecord = {
         route,
         provider: candidate.provider,
         model: candidate.model,
         status: 'healthy',
         latencyMs,
+        throughputTps: existing?.throughputTps,
+        availabilityPct,
         lastCheckedAt: Date.now(),
         source: 'active',
+        timeline,
       }
       this.records.set(route, record)
       return record
@@ -172,15 +229,26 @@ export class HealthMonitor {
       const isTimeout = controller.signal.aborted && !firstChunkSeen
       const rawCode = isTimeout ? 'TIMEOUT' : (err instanceof Error ? err.message : String(err))
       const code = rawCode.startsWith('Error: ') ? rawCode.slice(7) : rawCode
+      const existing = this.records.get(route)
+      const point: ChannelTimelinePoint = {
+        time: Date.now(),
+        status: classifyHealth(code),
+        latencyMs,
+        error: code,
+      }
+      const { timeline, availabilityPct } = pushTimelinePoint(existing?.timeline, point)
       const record: ChannelHealthRecord = {
         route,
         provider: candidate.provider,
         model: candidate.model,
         status: classifyHealth(code),
         latencyMs,
+        throughputTps: existing?.throughputTps,
+        availabilityPct,
         lastError: code,
         lastCheckedAt: Date.now(),
         source: 'active',
+        timeline,
       }
       this.records.set(route, record)
       return record
@@ -305,15 +373,26 @@ Object.defineProperty(RouterHealthService.prototype, REMOTE_METHOD_DESCRIPTOR, {
 
 export const CHANNEL_HEALTH_KEY = 'router/channel-health'
 
+const timelinePointSchema = z.object({
+  time: z.number(),
+  status: z.enum(['healthy', 'degraded', 'unhealthy', 'unknown']),
+  latencyMs: z.number().optional(),
+  throughputTps: z.number().optional(),
+  error: z.string().optional(),
+})
+
 const healthRecordSchema = z.object({
   route: z.string(),
   provider: z.string(),
   model: z.string(),
   status: z.enum(['healthy', 'degraded', 'unhealthy', 'unknown']),
   latencyMs: z.number().optional(),
+  throughputTps: z.number().optional(),
+  availabilityPct: z.number().optional(),
   lastError: z.string().optional(),
   lastCheckedAt: z.number(),
   source: z.enum(['passive', 'active']),
+  timeline: z.array(timelinePointSchema).optional(),
 })
 
 const projectionStateSchema = z.object({
@@ -363,14 +442,24 @@ export const channelHealthProjection = {
         }
         if (!failureCode) return state
         const [provider, model] = state.currentRoute.split('/')
+        const existing = state.records[state.currentRoute]
+        const { timeline, availabilityPct } = pushTimelinePoint(existing?.timeline, {
+          time: event.time,
+          status: classifyHealth(failureCode),
+          error: failureCode,
+        })
         const record: ChannelHealthRecord = {
           route: state.currentRoute,
           provider: provider ?? '',
           model: model ?? '',
           status: classifyHealth(failureCode),
+          latencyMs: existing?.latencyMs,
+          throughputTps: existing?.throughputTps,
+          availabilityPct,
           lastError: failureCode,
           lastCheckedAt: event.time,
           source: 'passive',
+          timeline,
         }
         return {
           ...state,
@@ -381,14 +470,29 @@ export const channelHealthProjection = {
         if (!state.currentRoute) return state
         const [provider, model] = state.currentRoute.split('/')
         const latencyMs = state.lastStart ? Math.max(1, event.time - state.lastStart) : undefined
+        let throughputTps: number | undefined
+        const usage = (event.data as unknown as { message?: { usage?: { outputTokens?: number } } })?.message?.usage
+        if (usage && typeof usage.outputTokens === 'number' && latencyMs && latencyMs > 0) {
+          throughputTps = Math.round((usage.outputTokens / (latencyMs / 1000)) * 10) / 10
+        }
+        const existing = state.records[state.currentRoute]
+        const { timeline, availabilityPct } = pushTimelinePoint(existing?.timeline, {
+          time: event.time,
+          status: 'healthy',
+          latencyMs,
+          throughputTps,
+        })
         const record: ChannelHealthRecord = {
           route: state.currentRoute,
           provider: provider ?? '',
           model: model ?? '',
           status: 'healthy',
           latencyMs,
+          throughputTps: throughputTps ?? existing?.throughputTps,
+          availabilityPct,
           lastCheckedAt: event.time,
           source: 'passive',
+          timeline,
         }
         return {
           ...state,

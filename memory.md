@@ -15,12 +15,13 @@
 - 确定两层 attempt 边界与条件路由（图片 pre-step 精确检测、上下文 tokenMeter contextPressure 投影估算；用户路由豁免）。
 - **Phase 1~2 宿主与 UI 闭环**：有序备份链 + switchOn 策略 + 单渠道次数与硬总上限 + 中文 notice + 预校验跳过 + default 纯备用池 + 加载时结构校验 + failover 历史抽屉。
 - **UI 与入口重构实测落地**：`sidebar.footer.action` 侧栏自适应入口（CSS 弹性纵向列排布，与 `dsh-toolbox-ui` 完美自适应堆叠并存，绝不抢位挤占）；吸顶 Header 与 Modal Top Bar 为唯一主保存入口，去除冗余悬浮条与重复底栏按钮，支持 `Ctrl+S` 与防换行状态反馈；CandidateNode 引入 Stepper 步进器与科技感流向视觉。
-- **双引擎渠道健康监控（Health Monitoring）闭环**：
+- **双引擎渠道健康监控（Health Monitoring）与时间轴仪表盘闭环**：
   1. *架构决策*：坚守 Profile -> 候选链单一入口，不分拆新页面，符合 LiteLLM/Portkey 行业标准；
   2. *被动零成本观测*：`session/event` 自动采集成功请求端到端延迟标记 `healthy` 🟢，`agent/request-error` 拦截 429/500/TIMEOUT/TRANSPORT 分类标记 `degraded` 🟡 / `unhealthy` 🔴，经 `channelHealthProjection` 折叠持久化至 Session 投影，0 额外 Token 消耗；
-  3. *主动极速探测*：`ctx.llm.stream()` 设 `maxTokens: 1` 并在首字（TTFT）到达时立即 `abort()` 掐断生成，消耗 <1 Token；支持自定义探测内容（避开渠道违禁词）、探测超时（默认 8s）与自动轮询周期（默认 0 关闭防偷跑资费）；
-  4. *UI 与交互*：候选卡片实时展示 `HealthBadge`（🟢 正常 140ms / 🟡 降级 / 🔴 异常 / ⚪ 未探测）；吸顶顶栏与弹窗顶栏配备「⚡ 探测全部渠道」与「⚙️ 健康设置」弹窗；
-  5. *远程接入*：实现 `RouterHealthService` 继承 `TypertRemoteService`（namespace: `'routerHealth'`），安全兼容 Node 24 原型描述符与 client 侧 `$mount` fail-open 保护。
+  3. *真实 tok/s 测算机制*：主动探测设定 `maxTokens: 1` 并在首字（TTFT）到达时立即 `abort()`，仅测存活与首字延迟，绝不拿 1 个 token 虚假除算；真实的 `161.1t/s` 吞吐量源自 DSH 日常会话原生 `assistant/message` 真实输出 tokens 与耗时解算；
+  4. *时间轴波动仪表盘（Sparkline Timeline Bars）*：各候选渠道卡片直观内嵌 3 列仪表盘（对齐截图）：状态可用率（如 `99.96%`）+ 24 根竖向胶囊状态条（支持悬浮缩放高亮与详细时间/延迟/吞吐 Tooltip）、延迟自适应展示（`140ms` 或 `8.39s`）、真实吞吐（`161.1t/s`）；
+  5. *主动极速探测*：支持自定义探测内容（避开渠道违禁词）、探测超时（默认 8s）与自动轮询周期（默认 0 关闭防偷跑资费）；
+  6. *控制中心与远程接入*：吸顶顶栏与弹窗顶栏配备「⚡ 探测全部渠道」与「⚙️ 健康设置」弹窗；实现 `RouterHealthService` 继承 `TypertRemoteService`（namespace: `'routerHealth'`），安全兼容 Node 24 原型描述符与 client 侧 `$mount` fail-open 保护。
 - 决策笔记状态：`implemented/` 8 篇（含本次 `2026-10-14-channel-health-monitoring.md`）。
 
 ## 仍需注意的坑点
@@ -42,3 +43,4 @@
 - **真实 provider 实测 + 开源门面**（2026-10-13）：活网关真 500 → SERVER → 跨 key 切换全对；GitHub 公开仓库与同构图标落成。
 - **UI 与入口重构实测落地**（2026-10-13）：`sidebar.footer.action` 侧栏自适应入口（纵向自适应堆叠，与 `dsh-toolbox-ui` 完美并存），吸顶主保存与快捷键去重，微交互打磨。
 - **渠道健康监控实测落地**（2026-10-14）：双引擎设计落地（被动零消耗 + 主动 1-Token TTFT 中断，自定义 Prompt 避违禁词），`RouterHealthService` + `channelHealthProjection`，UI 直观徽标与控制中心快捷探测/设置；16/16 单测 + 9/9 组合测试 + tsc 0 报错全绿。
+- **时间轴波动仪表盘与原生吞吐闭环**（2026-10-14）：24 柱时间轴波动条（绿/黄/红/灰）与可用率计算落地，解耦主动探测延迟与原生被动会话真实 tok/s，18/18 单测 + 9/9 组合测试 + tsc 0 报错全绿。

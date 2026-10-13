@@ -34,12 +34,23 @@ Status: implemented
      3. 跨请求全局健康状态（持久化与动态探测指标，受 `HealthMonitor` 与 Session 投影托管）。
    - 三者绝不混用同一个计数器或状态。
 
-4. **UI 视觉与交互呈现**：
-   - **健康徽章（`HealthBadge`）**：在所有候选渠道卡片内直观显示状态：🟢 正常（带毫秒延迟）/ 🟡 降级 / 🔴 异常（带错误码提示）/ ⚪ 未探测；
+4. **时间轴波动仪表盘与真实 tok/s 计算机制（对齐监控截图）**：
+   - **响应用户关于 tok/s 的深度洞察**：
+     - 用户敏锐指出：“主动探测只发 1 个 Token，根本测不出真实 tok/s”。
+     - 这一判断完全属实：主动探测设定 `maxTokens: 1` 并于首字到达立即中断，只有 1 个 token，严禁拿 1 个 token 强行除算伪造吞吐。
+     - 真实的 `tok/s` 吞吐量**源自 DSH 原生日常会话数据**：在 `channelHealthProjection` 中监听 `assistant/message`，从原生 `usage.outputTokens` 与耗时真实解算出 `outputTokens / ((completedTime - firstTokenTime) / 1000)` 并保留一位小数（如 `161.1t/s`）；未采样时长文本吞吐显示 `—`，绝不虚构。
+   - **时间轴波动仪表盘（Channel Metrics Dashboard）**：
+     - 在每个候选卡片下方呈现高质感暗黑磨砂仪表盘（对齐截图样式）：
+       - **状态（Availability %）**：展示如 `99.96%`，下方排列 24 根竖向胶囊时间轴柱（绿色 `#00e599`=正常，黄色=降级，红色=失败，暗灰=闲置），支持悬浮高亮放大与详细 tooltip；
+       - **延迟（Latency）**：自适应毫秒与秒，如 `140ms` 或 `8.39s`；
+       - **吞吐（Throughput）**：真实会话沉淀的 `161.1t/s`。
+
+5. **UI 视觉与交互呈现**：
+   - **健康徽章与仪表盘**：在所有候选渠道卡片内直观显示状态与波动时间轴；
    - **操作入口**：在页面吸顶 Header 与侧栏弹出视窗顶栏统一放置「⚡ 探测全部渠道」与「⚙️ 健康设置」按钮；探测时带 Spinner 旋转防重入动画；
    - **健康设置弹窗（`HealthSettingsModal`）**：提供启用开关、自定义探测 Prompt、自动探测周期（分钟）及探测超时（秒）的快捷微调。
 
-5. **Typert 远程服务与运行时兼容**：
+6. **Typert 远程服务与运行时兼容**：
    - 实现 `RouterHealthService` 继承 `TypertRemoteService`（namespace: `'routerHealth'`），暴露 `getSnapshot` 与 `probeAll`；
    - 规避 Node 24 `--experimental-strip-types` 无法解析 Stage 3 装饰器语法的限制，通过原型属性安全挂载 Remote 描述符；
    - Client 端通过 `ctx.remote.$mount` 与 fail-open 双重保护接入，无缝兼容 Headless 及各类宿主环境。
