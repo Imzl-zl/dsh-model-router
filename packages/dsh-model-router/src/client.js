@@ -167,6 +167,19 @@ window.__ModuleLoader__.load({
       catalogLoading: '正在加载模型目录...',
       noUnconfiguredModels: '所有已目录模型都已配置规则',
       attemptRangeHint: '1~5',
+      sidebarActionLabel: '模型路由',
+      sidebarActionTooltip: '模型路由与故障转移控制中心',
+      saveSuccess: '配置已成功保存',
+      unsavedChangesBadge: '未保存修改',
+      unsavedChangesBarText: '发现尚未保存的路由配置变更',
+      saveShortcutHint: '保存配置 (Ctrl+S)',
+      discardShortcutHint: '放弃更改',
+      quickModalTitle: '模型路由控制中心',
+      statusRunningBadge: '路由生效中',
+      statusDisabledBadge: '已暂停',
+      stepMinus: '减少重试次数',
+      stepPlus: '增加重试次数',
+      savedStateTip: '配置已是最新',
     }
     var en = {
       pluginTitle: 'Model Router',
@@ -285,6 +298,19 @@ window.__ModuleLoader__.load({
       catalogLoading: 'Loading the model catalog...',
       noUnconfiguredModels: 'Every catalog model already has a profile',
       attemptRangeHint: '1~5',
+      sidebarActionLabel: 'Model Router',
+      sidebarActionTooltip: 'Model Router & Failover Control Center',
+      saveSuccess: 'Configuration saved',
+      unsavedChangesBadge: 'Unsaved',
+      unsavedChangesBarText: 'Unsaved routing configuration changes detected',
+      saveShortcutHint: 'Save (Ctrl+S)',
+      discardShortcutHint: 'Discard',
+      quickModalTitle: 'Model Router Control Center',
+      statusRunningBadge: 'Active',
+      statusDisabledBadge: 'Paused',
+      stepMinus: 'Decrease attempts',
+      stepPlus: 'Increase attempts',
+      savedStateTip: 'Up to date',
     }
 
     /** The six switchOn codes: `key` is the config field, `labelKey` the dictionary stem. */
@@ -304,84 +330,403 @@ window.__ModuleLoader__.load({
       return { enabled: false, candidates: [], switchOn: defaultSwitchOn(), maxTotalAttempts: 3 }
     }
 
+    // ---------- global styles injection (DSH sidebar & modal adaptations) ----------
+
+    var ROUTER_CSS = [
+      '/* dsh-model-router: sidebar footer actions adaptive column layout */',
+      'div[class*="footerActions"] {',
+      '  display: flex !important;',
+      '  flex-direction: column !important;',
+      '  gap: 4px !important;',
+      '  width: 100% !important;',
+      '  box-sizing: border-box !important;',
+      '}',
+      'div[class*="collapsed"] div[class*="footerActions"] {',
+      '  display: flex !important;',
+      '  flex-direction: column !important;',
+      '  align-items: center !important;',
+      '  gap: 6px !important;',
+      '  width: auto !important;',
+      '}',
+      '/* Sidebar footer action button styles */',
+      '.dsh-router-footer-action {',
+      '  box-sizing: border-box !important;',
+      '  border: none !important;',
+      '  background: transparent;',
+      '  color: var(--dsw-alias-label-primary);',
+      '  font-family: inherit;',
+      '  font-size: 13.5px;',
+      '  font-weight: 500;',
+      '  line-height: 20px;',
+      '  cursor: pointer;',
+      '  white-space: nowrap !important;',
+      '  user-select: none;',
+      '  transition: background 0.15s ease, color 0.15s ease;',
+      '}',
+      '.dsh-router-footer-action:hover {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
+      '}',
+      '.dsh-router-footer-action:active {',
+      '  background: var(--dsw-alias-interactive-bg-active, rgba(255, 255, 255, 0.12)) !important;',
+      '}',
+      '.dsh-router-footer-action:focus-visible {',
+      '  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary));',
+      '  outline-offset: -1px;',
+      '}',
+      '/* Suppress duplicate SettingsForm footer inside router views (save action is prominently anchored to sticky header / modal top bar) */',
+      '.dsh-router-page div[class*="footer"]:has(button),',
+      '.dsh-router-modal-dialog div[class*="footer"]:has(button),',
+      '.dsh-router-page div[class*="_footer"],',
+      '.dsh-router-modal-dialog div[class*="_footer"] {',
+      '  display: none !important;',
+      '}',
+      '/* Interactive micro-interactions */',
+      '.dsh-router-save-btn:not(:disabled):hover {',
+      '  filter: brightness(1.08);',
+      '}',
+      '.dsh-router-save-btn:not(:disabled):active {',
+      '  filter: brightness(0.95);',
+      '}',
+      '.dsh-router-discard-btn:hover {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
+      '  color: var(--dsw-alias-label-primary) !important;',
+      '}',
+      '.dsh-router-catalog-btn:hover {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
+      '}',
+      '.dsh-router-manual-btn:hover {',
+      '  border-color: var(--dsw-alias-border-l3) !important;',
+      '  color: var(--dsw-alias-label-primary) !important;',
+      '}',
+      '.dsh-router-danger-btn:hover {',
+      '  background: rgba(239, 68, 68, 0.1) !important;',
+      '  border-color: var(--dsw-alias-state-error, #ef4444) !important;',
+      '}',
+      '.dsh-router-add-profile-btn:hover {',
+      '  border-color: var(--dsw-alias-brand-primary, #4A65E8) !important;',
+      '  color: var(--dsw-alias-brand-primary, #4A65E8) !important;',
+      '}',
+      '.dsh-router-icon-btn:not(:disabled):hover {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
+      '  color: var(--dsw-alias-label-primary) !important;',
+      '}',
+      '.dsh-router-stepper-btn:not(:disabled):hover {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.12)) !important;',
+      '  border-color: var(--dsw-alias-border-l4) !important;',
+      '}',
+      '.dsh-router-trigger-card:hover {',
+      '  border-color: var(--dsw-alias-border-l4) !important;',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.04)) !important;',
+      '}',
+      '.dsh-router-modal-close-btn:hover {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
+      '  color: var(--dsw-alias-label-primary) !important;',
+      '}',
+      '/* Keyframes & transitions */',
+      '@keyframes dsh-spin {',
+      '  from { transform: rotate(0deg); }',
+      '  to { transform: rotate(360deg); }',
+      '}',
+    ].join('\n')
+
+    function ensureStyles() {
+      if (typeof document === 'undefined') return function () {}
+      var id = 'dsh-model-router-styles'
+      var tag = document.querySelector('style[data-plugin="dsh-model-router"]')
+      if (!tag) {
+        tag = document.createElement('style')
+        tag.dataset.plugin = 'dsh-model-router'
+        tag.dataset.pluginCss = id
+        tag.textContent = ROUTER_CSS
+        document.head.appendChild(tag)
+      }
+      return function () {
+        if (tag && tag.parentNode) tag.parentNode.removeChild(tag)
+      }
+    }
+
     // ---------- style constants (DSH design tokens) ----------
 
     var S = {
-      page: { maxWidth: 920, margin: '0 auto', padding: '8px 0 120px' },
-      header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, marginBottom: 24 },
-      headerLeft: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 },
-      titleRow: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 20, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      desc: { color: 'var(--dsw-alias-label-secondary)', fontSize: 13, margin: 0, maxWidth: 560, lineHeight: 1.5 },
-      switchWrap: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
-      switchLabel: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
-      card: { background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-lg, 16px)', padding: '22px 24px', marginBottom: 24, boxShadow: 'var(--dsw-card-shadow, none)' },
+      page: { maxWidth: 960, margin: '0 auto', padding: '12px 16px 80px', boxSizing: 'border-box' },
+      pageModal: { maxWidth: '100%', margin: '0', padding: '0 0 40px', boxSizing: 'border-box' },
+      header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 20, flexWrap: 'wrap' },
+      stickyHeader: {
+        position: 'sticky',
+        top: 0,
+        zIndex: 40,
+        background: 'var(--dsw-alias-bg-layer-0, rgba(20,20,24,0.85))',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        borderBottom: '0.5px solid var(--dsw-alias-border-l3)',
+        padding: '12px 20px',
+        margin: '0 -20px 24px',
+        borderRadius: '0 0 var(--dsw-radius-lg, 14px) var(--dsw-radius-lg, 14px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 16,
+        flexWrap: 'nowrap',
+      },
+      headerLeft: { display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 },
+      headerTitles: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
+      titleRow: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 17, fontWeight: 700, color: 'var(--dsw-alias-label-primary)', margin: 0, whiteSpace: 'nowrap' },
+      desc: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12.5, margin: 0, maxWidth: 460, lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      headerActions: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'nowrap' },
+      switchWrap: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, background: 'var(--dsw-alias-bg-layer-2)', padding: '4px 10px', borderRadius: 'var(--dsw-radius-md, 8px)', border: '0.5px solid var(--dsw-alias-border-l2)', whiteSpace: 'nowrap' },
+      switchLabel: { fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap' },
+      headerDivider: { width: 1, height: 20, background: 'var(--dsw-alias-border-l3)', margin: '0 4px', flexShrink: 0 },
+      saveBtn: {
+        boxSizing: 'border-box',
+        background: 'var(--dsw-alias-brand-primary, #4A65E8)',
+        color: '#ffffff',
+        border: 'none',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        padding: '0 16px',
+        height: 34,
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        boxShadow: '0 2px 8px rgba(74,101,232,0.35)',
+        transition: 'all 0.15s ease',
+      },
+      saveBtnHighlight: {
+        background: 'linear-gradient(135deg, #4A65E8 0%, #3551db 100%)',
+        boxShadow: '0 0 10px rgba(74,101,232,0.5)',
+      },
+      saveBtnDisabled: {
+        background: 'var(--dsw-alias-bg-layer-3, rgba(255,255,255,0.08))',
+        color: 'var(--dsw-alias-label-tertiary, #888)',
+        boxShadow: 'none',
+        cursor: 'default',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        opacity: 0.6,
+      },
+      saveBtnSuccess: {
+        background: 'var(--dsw-alias-state-success, #10b981)',
+        color: '#ffffff',
+        boxShadow: '0 2px 10px rgba(16,185,129,0.4)',
+      },
+      discardBtnHeader: {
+        boxSizing: 'border-box',
+        background: 'transparent',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        color: 'var(--dsw-alias-label-secondary)',
+        padding: '0 12px',
+        height: 34,
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        fontSize: 12.5,
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 5,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        transition: 'all 0.15s ease',
+      },
+      kbdTag: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '1px 5px',
+        borderRadius: '4px',
+        background: 'rgba(0, 0, 0, 0.25)',
+        border: '0.5px solid rgba(255, 255, 255, 0.2)',
+        fontFamily: 'var(--ds-font-family-code, monospace)',
+        fontSize: '10.5px',
+        lineHeight: '12px',
+        color: 'rgba(255, 255, 255, 0.85)',
+        marginLeft: '4px',
+        letterSpacing: '0.2px',
+        flexShrink: 0,
+        whiteSpace: 'nowrap',
+      },
+      badgeRunning: {
+        fontSize: 11,
+        fontWeight: 600,
+        padding: '2px 8px',
+        borderRadius: 20,
+        background: 'rgba(16,185,129,0.12)',
+        color: 'var(--dsw-alias-state-success, #10b981)',
+        border: '0.5px solid rgba(16,185,129,0.3)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      },
+      badgePaused: {
+        fontSize: 11,
+        fontWeight: 500,
+        padding: '2px 8px',
+        borderRadius: 20,
+        background: 'var(--dsw-alias-bg-layer-3)',
+        color: 'var(--dsw-alias-label-tertiary)',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      },
+      badgeDirty: {
+        fontSize: 11,
+        fontWeight: 600,
+        padding: '2px 8px',
+        borderRadius: 20,
+        background: 'rgba(245,158,11,0.15)',
+        color: '#f59e0b',
+        border: '0.5px solid rgba(245,158,11,0.4)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      },
+      saveFailedBadge: {
+        fontSize: 11,
+        fontWeight: 600,
+        padding: '2px 8px',
+        borderRadius: 20,
+        background: 'rgba(239,68,68,0.15)',
+        color: 'var(--dsw-alias-state-error, #ef4444)',
+        border: '0.5px solid rgba(239,68,68,0.4)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      },
+      card: {
+        background: 'var(--dsw-alias-settings-card-fill, var(--dsw-alias-bg-layer-1))',
+        border: '0.5px solid var(--dsw-alias-settings-card-stroke, var(--dsw-alias-border-l3))',
+        borderRadius: 'var(--dsw-radius-xl, 16px)',
+        padding: '22px 24px',
+        marginBottom: 20,
+        boxShadow: 'var(--dsw-card-shadow, 0 1px 3px rgba(0,0,0,0.1))',
+        boxSizing: 'border-box',
+      },
       sectionHeader: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 12 },
-      sectionTitle: { fontSize: 15, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: 8 },
+      sectionTitle: { fontSize: 15, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' },
       sectionSubtitle: { fontSize: 12.5, color: 'var(--dsw-alias-label-tertiary)', margin: '3px 0 0' },
-      dangerBtn: { background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-state-error)', borderRadius: 'var(--dsw-radius-md, 12px)', padding: '4px 10px', fontSize: 12, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 },
+      dangerBtn: {
+        boxSizing: 'border-box',
+        background: 'transparent',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        color: 'var(--dsw-alias-state-error)',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        padding: '0 12px',
+        height: 28,
+        fontSize: 12,
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        transition: 'background 0.15s ease',
+      },
       node: { position: 'relative', paddingBottom: 16 },
-      nodeCard: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 12px)', padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 12 },
-      nodeCardPrimary: { borderColor: 'var(--dsw-alias-brand-primary)', background: 'linear-gradient(90deg, rgba(65,118,230,0.08) 0%, var(--dsw-alias-bg-layer-2) 100%)' },
+      nodeCard: {
+        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        borderRadius: 'var(--dsw-radius-lg, 12px)',
+        padding: '16px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+        boxSizing: 'border-box',
+      },
+      nodeCardPrimary: {
+        borderColor: 'var(--dsw-alias-brand-primary)',
+        background: 'linear-gradient(90deg, rgba(74,101,232,0.08) 0%, var(--dsw-alias-bg-layer-2) 100%)',
+        boxShadow: '0 0 0 1px rgba(74,101,232,0.2)',
+      },
       nodeMainRow: { display: 'flex', alignItems: 'center', gap: 16 },
-      rankBadge: { width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, flexShrink: 0, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l4)' },
-      rankBadgePrimary: { background: 'var(--dsw-alias-brand-primary)', color: '#ffffff', borderColor: 'transparent' },
+      rankBadge: {
+        width: 36,
+        height: 36,
+        borderRadius: 'var(--dsw-radius-sm, 8px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 13,
+        fontWeight: 700,
+        flexShrink: 0,
+        background: 'var(--dsw-alias-bg-layer-3)',
+        color: 'var(--dsw-alias-label-secondary)',
+        border: '0.5px solid var(--dsw-alias-border-l4)',
+      },
+      rankBadgePrimary: {
+        background: 'linear-gradient(135deg, #4A65E8 0%, #324ecc 100%)',
+        color: '#ffffff',
+        borderColor: 'transparent',
+        boxShadow: '0 2px 6px rgba(74,101,232,0.4)',
+      },
       nodeContent: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' },
       modelInfo: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 },
-      modelNameRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-      modelName: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-sm, 8px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500 },
-      primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-sm, 8px)', background: 'var(--dsw-alias-state-success-bg)', color: 'var(--dsw-alias-state-success)', fontWeight: 500 },
-      modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--dsh-font-code, monospace)' },
+      modelNameRow: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+      modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
+      primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(16,185,129,0.12)', color: 'var(--dsw-alias-state-success, #10b981)', border: '0.5px solid rgba(16,185,129,0.3)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
+      modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--ds-font-family-code, monospace)' },
       nodeTuning: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
-      attemptPicker: { display: 'flex', alignItems: 'center', gap: 6, background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '3px 8px', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' },
-      attemptInput: { width: 28, border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 12.5, fontWeight: 600, textAlign: 'center', outline: 'none' },
-      iconBtn: { width: 30, height: 30, borderRadius: 'var(--dsw-radius-sm, 8px)', border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', padding: 0 },
+      attemptPicker: { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 8px)', padding: '4px 10px', fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
+      stepperBtn: { width: 24, height: 24, borderRadius: 6, border: '0.5px solid var(--dsw-alias-border-l3)', background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, transition: 'background 0.12s', flexShrink: 0, whiteSpace: 'nowrap' },
+      attemptInput: { width: 26, border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 13, fontWeight: 700, textAlign: 'center', outline: 'none' },
+      iconBtn: { width: 32, height: 32, borderRadius: 'var(--dsw-radius-md, 8px)', border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', padding: 0, transition: 'background 0.15s, color 0.15s', flexShrink: 0 },
       iconBtnDisabled: { opacity: 0.25, cursor: 'not-allowed' },
       nodeActions: { display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 },
-      connector: { display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 6px 46px', fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)' },
-      connectorLine: { width: 2, alignSelf: 'stretch', minHeight: 18, background: 'repeating-linear-gradient(to bottom, var(--dsw-alias-border-l4) 0, var(--dsw-alias-border-l4) 4px, transparent 4px, transparent 8px)' },
-      failoverTag: { background: 'var(--dsw-alias-bg-layer-3)', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '2px 8px', fontWeight: 500 },
-      addBar: { marginLeft: 46, display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap' },
-      catalogBtn: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-primary)', padding: '7px 16px', borderRadius: 'var(--dsw-radius-md, 12px)', fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 },
-      manualBtn: { background: 'transparent', border: '0.5px dashed var(--dsw-alias-border-l4)', color: 'var(--dsw-alias-label-secondary)', padding: '7px 14px', borderRadius: 'var(--dsw-radius-md, 12px)', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
+      connector: { display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0 8px 48px', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' },
+      connectorLine: { width: 2, alignSelf: 'stretch', minHeight: 22, background: 'linear-gradient(to bottom, var(--dsw-alias-brand-primary, #4A65E8), var(--dsw-alias-border-l3))', borderRadius: 1 },
+      failoverTag: { background: 'var(--dsw-alias-bg-layer-3)', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '2px 10px', fontWeight: 600, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', flexShrink: 0 },
+      addBar: { marginLeft: 48, display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' },
+      catalogBtn: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-primary)', padding: '0 14px', height: 34, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, transition: 'background 0.15s', whiteSpace: 'nowrap', flexShrink: 0 },
+      manualBtn: { boxSizing: 'border-box', background: 'transparent', border: '0.5px dashed var(--dsw-alias-border-l4)', color: 'var(--dsw-alias-label-secondary)', padding: '0 14px', height: 34, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0 },
       tabBar: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 },
-      addProfileBtn: { border: '0.5px dashed var(--dsw-alias-border-l4)', background: 'transparent', color: 'var(--dsw-alias-label-tertiary)', padding: '6px 12px', borderRadius: 'var(--dsw-radius-md, 12px)', fontSize: 12.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 },
-      triggerGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12, marginTop: 6 },
-      triggerCard: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 12px)', padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer', userSelect: 'none' },
-      triggerCardChecked: { borderColor: 'var(--dsw-alias-brand-primary)', background: 'rgba(65,118,230,0.06)' },
+      addProfileBtn: { boxSizing: 'border-box', border: '0.5px dashed var(--dsw-alias-border-l4)', background: 'transparent', color: 'var(--dsw-alias-label-secondary)', padding: '0 14px', height: 30, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 12.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', flexShrink: 0, transition: 'border-color 0.15s, color 0.15s' },
+      triggerGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginTop: 8 },
+      triggerCard: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-lg, 12px)', padding: '14px 18px', display: 'flex', alignItems: 'flex-start', gap: 14, cursor: 'pointer', userSelect: 'none', transition: 'border-color 0.15s, background 0.15s, transform 0.12s', boxSizing: 'border-box' },
+      triggerCardChecked: { borderColor: 'var(--dsw-alias-brand-primary)', background: 'rgba(74,101,232,0.06)' },
       triggerChk: { width: 17, height: 17, accentColor: 'var(--dsw-alias-brand-primary)', marginTop: 2, cursor: 'pointer', flexShrink: 0 },
-      triggerName: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
-      triggerCode: { fontSize: 10.5, fontFamily: 'var(--dsh-font-code, monospace)', color: 'var(--dsw-alias-label-tertiary)', background: 'var(--dsw-alias-bg-layer-4)', padding: '0 5px', borderRadius: 4 },
-      triggerDesc: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', marginTop: 3, lineHeight: 1.4 },
-      safetyBox: { marginTop: 14, padding: '10px 14px', borderRadius: 'var(--dsw-radius-md, 12px)', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12, color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.5 },
-      budgetGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 },
-      budgetItem: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 12px)', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14 },
-      budgetTitle: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
-      budgetHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)' },
+      triggerName: { fontSize: 13.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
+      triggerCode: { fontSize: 11, fontFamily: 'var(--ds-font-family-code, monospace)', color: 'var(--dsw-alias-label-tertiary)', background: 'var(--dsw-alias-bg-layer-4)', padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' },
+      triggerDesc: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginTop: 4, lineHeight: 1.45 },
+      safetyBox: { marginTop: 16, padding: '14px 18px', borderRadius: 'var(--dsw-radius-md, 10px)', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.5 },
+      budgetGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 },
+      budgetItem: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-lg, 12px)', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, boxSizing: 'border-box' },
+      budgetTitle: { fontSize: 13.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
+      budgetHint: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' },
       budgetInput: { display: 'flex', alignItems: 'center', gap: 6, background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '4px 10px' },
-      budgetInputField: { width: 44, border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 13, fontWeight: 600, textAlign: 'right', outline: 'none' },
-      introBox: { background: 'rgba(59,130,246,0.08)', border: '0.5px solid rgba(59,130,246,0.25)', borderRadius: 'var(--dsw-radius-lg, 16px)', padding: '16px 20px', marginBottom: 20, display: 'flex', alignItems: 'flex-start', gap: 14 },
+      budgetInputField: { width: 44, border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 13.5, fontWeight: 600, textAlign: 'right', outline: 'none' },
+      introBox: { background: 'rgba(74,101,232,0.08)', border: '0.5px solid rgba(74,101,232,0.25)', borderRadius: 'var(--dsw-radius-lg, 16px)', padding: '16px 20px', marginBottom: 20, display: 'flex', alignItems: 'flex-start', gap: 14 },
       introTitle: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', margin: '0 0 4px' },
       introDesc: { fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', margin: 0, lineHeight: 1.5 },
       problemsBox: { background: 'var(--dsw-alias-state-error-bg)', border: '0.5px solid var(--dsw-alias-state-error)', borderRadius: 'var(--dsw-radius-md, 12px)', padding: '10px 14px', marginBottom: 16, fontSize: 12.5, color: 'var(--dsw-alias-label-primary)', lineHeight: 1.6 },
       discardBtn: { background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-secondary)', padding: '6px 14px', borderRadius: 'var(--dsw-radius-md, 12px)', fontSize: 13, cursor: 'pointer', marginBottom: 16 },
-      formGroup: { display: 'flex', flexDirection: 'column', gap: 6 },
-      formLabel: { fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
-      formHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)' },
-      formInput: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-sm, 8px)', color: 'var(--dsw-alias-label-primary)', padding: '8px 12px', fontSize: 13, outline: 'none', fontFamily: 'inherit' },
-      catalogGroupTitle: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-tertiary)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '10px 0 4px' },
-      catalogRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', cursor: 'pointer', fontSize: 13, color: 'var(--dsw-alias-label-primary)' },
-      countBadge: { fontSize: 11, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)' },
-      reasoningBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-sm, 8px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-tertiary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500 },
-      needsBtn: { background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', padding: '2px 8px', borderRadius: 4, fontSize: 11.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 },
-      needsPanel: { borderTop: '0.5px solid var(--dsw-alias-border-l2)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 10 },
+      formGroup: { display: 'flex', flexDirection: 'column', gap: 8 },
+      formLabel: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
+      formHint: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' },
+      formInput: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-sm, 8px)', color: 'var(--dsw-alias-label-primary)', padding: '8px 12px', fontSize: 13, height: 36, outline: 'none', fontFamily: 'inherit' },
+      catalogGroupTitle: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-tertiary)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '14px 0 6px' },
+      catalogRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px', borderRadius: 'var(--dsw-radius-sm, 6px)', cursor: 'pointer', fontSize: 13, color: 'var(--dsw-alias-label-primary)', transition: 'background 0.12s ease' },
+      countBadge: { fontSize: 11, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' },
+      reasoningBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-tertiary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, whiteSpace: 'nowrap' },
+      needsBtn: { boxSizing: 'border-box', background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', padding: '3px 10px', borderRadius: 'var(--dsw-radius-xs, 6px)', fontSize: 11.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', flexShrink: 0 },
+      needsPanel: { borderTop: '0.5px solid var(--dsw-alias-border-l2)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 12 },
       needsGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
-      needCard: { background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 6 },
-      needHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
-      needHint: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.4 },
-      needInput: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 4, color: 'var(--dsw-alias-label-primary)', padding: '3px 6px', fontSize: 11.5, outline: 'none', width: 120 },
-      drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', zIndex: 250 },
-      drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 460, maxWidth: '90vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 32px rgba(0,0,0,0.4)', zIndex: 251, display: 'flex', flexDirection: 'column' },
+      needCard: { background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 },
+      needHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
+      needHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.4 },
+      needInput: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 4, color: 'var(--dsw-alias-label-primary)', padding: '3px 8px', fontSize: 12, height: 26, outline: 'none', width: 120 },
+      drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: 250 },
+      drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, maxWidth: '92vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 36px rgba(0,0,0,0.5)', zIndex: 251, display: 'flex', flexDirection: 'column' },
       drawerHeader: { padding: '18px 24px', borderBottom: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
       drawerBody: { padding: '16px 24px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 },
       drawerHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', margin: 0 },
@@ -389,6 +734,113 @@ window.__ModuleLoader__.load({
       drawerEntry: { borderLeft: '2px solid var(--dsw-alias-brand-primary)', paddingLeft: 12, display: 'flex', flexDirection: 'column', gap: 3 },
       drawerEntryTime: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' },
       drawerEntryText: { fontSize: 12.5, color: 'var(--dsw-alias-label-primary)', lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+
+      // Sidebar action styles
+      sidebarActionWide: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        width: '100%',
+        height: 38,
+        minHeight: 38,
+        boxSizing: 'border-box',
+        margin: 0,
+        padding: '0 10px 0 8px',
+        border: 'none',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'inherit',
+        fontSize: 13.5,
+        fontWeight: 500,
+        lineHeight: '20px',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        transition: 'background 0.15s ease',
+      },
+      sidebarActionRail: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 36,
+        height: 36,
+        minHeight: 36,
+        margin: '0 auto',
+        padding: 0,
+        border: 'none',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        transition: 'background 0.15s ease',
+        position: 'relative',
+      },
+      sidebarLabel: { fontSize: 13.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      sidebarCountBadge: { fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
+      railDirtyDot: { position: 'absolute', top: 5, right: 5, width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', boxShadow: '0 0 4px #f59e0b' },
+
+      // Modal window styles
+      modalOverlay: {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0, 0, 0, 0.65)',
+        backdropFilter: 'blur(6px)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+      },
+      modalDialog: {
+        width: 1000,
+        maxWidth: '96vw',
+        height: '88vh',
+        maxHeight: 960,
+        background: 'var(--dsw-alias-bg-layer-1, #18181c)',
+        borderRadius: 'var(--dsw-radius-lg, 16px)',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        boxShadow: '0 24px 64px rgba(0, 0, 0, 0.55)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      },
+      modalTopBar: {
+        padding: '12px 20px',
+        borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
+        background: 'var(--dsw-alias-bg-layer-0, rgba(20,20,24,0.6))',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexShrink: 0,
+        gap: 16,
+      },
+      modalTopTitle: { fontSize: 16, fontWeight: 700, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap' },
+      modalTopSubtitle: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      modalCloseBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 'var(--dsw-radius-sm, 8px)',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-tertiary)',
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center',
+        transition: 'background 0.15s, color 0.15s',
+        flexShrink: 0,
+      },
+      modalContentArea: {
+        flex: 1,
+        overflowY: 'auto',
+        padding: '20px 24px 60px',
+        boxSizing: 'border-box',
+      },
     }
 
     // ---------- helpers ----------
@@ -695,13 +1147,44 @@ window.__ModuleLoader__.load({
     // ---------- components ----------
 
     function Icon(props) {
-      return h('svg', { width: props.size ?? 14, height: props.size ?? 14, viewBox: '0 0 16 16', fill: 'currentColor', style: { flexShrink: 0 } },
-        h('path', { d: props.d }))
+      return h('svg', {
+        width: props.size ?? 14,
+        height: props.size ?? 14,
+        viewBox: '0 0 16 16',
+        fill: 'currentColor',
+        style: Object.assign({ flexShrink: 0 }, props.spin ? { animation: 'dsh-spin 1s linear infinite' } : null),
+      }, h('path', { d: props.d }))
     }
+    function ModelRouterIcon(props) {
+      var size = props.size ?? 18
+      var color = props.color ?? 'currentColor'
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        strokeWidth: '1.4',
+        style: { flexShrink: 0 },
+      },
+        h('circle', { cx: '2.7', cy: '8', r: '1.45', stroke: color }),
+        h('path', { d: 'M3.9 7.2 C 6.2 6.2 7.6 5.2 9.2 4.4', stroke: color, strokeLinecap: 'round' }),
+        h('circle', { cx: '12.7', cy: '3.4', r: '1.45', stroke: color }),
+        h('path', { d: 'M3.9 8.8 C 6.4 9.8 8 11 11.2 12.5', stroke: color, strokeLinecap: 'round' }),
+        h('circle', { cx: '12.7', cy: '12.6', r: '1.45', stroke: color }))
+    }
+
     var ICON_UP = 'm8 3.5 4 4.5H4z'
     var ICON_DOWN = 'm8 12.5-4-4.5h8z'
     var ICON_CLOSE = 'M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z'
     var ICON_WARN = 'M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z'
+    var ICON_SAVE = 'M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5a.5.5 0 0 0-.146-.354l-2.5-2.5A.5.5 0 0 0 12 1H2zm0 1h9.293L13.5 4.207V14H2V2zm3 0v4h6V2H5zm1 1h4v2H6V3zM4 9h8v4H4V9z'
+    var ICON_CHECK = 'M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z'
+    var ICON_CLOCK = 'M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0-1A6 6 0 1 0 8 2a6 6 0 0 0 0 12zm.5-9a.5.5 0 0 0-1 0v4.293l2.854 1.712a.5.5 0 0 0 .515-.858L8.5 7.82V5z'
+    var ICON_UNDO = 'M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1zM8 4.414V1.586a.5.5 0 0 1 .854-.353l2.414 2.414a.5.5 0 0 1 0 .706L8.854 6.768A.5.5 0 0 1 8 6.414V4.414z'
+    var ICON_PLUS = 'M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z'
+    var ICON_MINUS = 'M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z'
+    var ICON_ARROW_DOWN = 'M8 3.5a.5.5 0 0 1 .5.5v6.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L7.5 10.793V4a.5.5 0 0 1 .5-.5z'
+    var ICON_SPINNER = 'M8 1.5a6.5 6.5 0 1 0 6.5 6.5A.75.75 0 0 0 13 8a5 5 0 1 1-5-5 .75.75 0 0 0 0-1.5z'
 
     /** The catalog's reasoning efforts for one route, for the node badge. */
     function reasoningLabelOf(catalog, provider, model) {
@@ -722,28 +1205,38 @@ window.__ModuleLoader__.load({
       var expanded = expandedState[0]
       var setExpanded = expandedState[1]
       var needs = candidate.needs ?? {}
+      var hasActiveNeeds = (needs.images === true) || (needs.minContextTokens > 0)
       var reasoning = reasoningLabelOf(props.catalog, candidate.provider, candidate.model)
       return h('div', { style: S.node },
         h('div', { style: Object.assign({}, S.nodeCard, isPrimary ? S.nodeCardPrimary : null) },
           h('div', { style: S.nodeMainRow },
-            h('div', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null) }, String(index + 1).padStart(2, '0')),
+            h('div', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null) },
+              isPrimary ? '★' : String(index + 1).padStart(2, '0')),
             h('div', { style: S.nodeContent },
               h('div', { style: S.modelInfo },
                 h('div', { style: S.modelNameRow },
-                  h('span', { style: S.modelName }, candidate.model || '—'),
+                  h('span', { style: S.modelName, title: candidate.model }, candidate.model || '—'),
                   h('span', { style: S.providerBadge }, candidate.provider),
-                  isPrimary ? h('span', { style: S.primaryBadge }, t('primaryModelBadge')) : null,
+                  isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null,
                   reasoning === undefined ? null : h('span', { style: S.reasoningBadge }, t('reasoningBadge') + ': ' + reasoning),
                   isPrimary ? null : h('button', {
                     type: 'button',
-                    style: S.needsBtn,
+                    style: Object.assign({}, S.needsBtn, hasActiveNeeds ? { borderColor: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)' } : null),
                     'aria-expanded': expanded,
                     onClick: function () { setExpanded(!expanded) },
-                  }, t('toggleNeedsBtn'))),
+                  }, hasActiveNeeds ? '⚙️ ● ' + t('toggleNeedsBtn') : '⚙️ ' + t('toggleNeedsBtn'))),
                 h('span', { style: S.modelPath }, routeOf(candidate))),
               h('div', { style: S.nodeTuning },
                 h('div', { style: S.attemptPicker, title: t('attemptLimitHint') },
-                  h('span', null, t('singleAttemptLimit')),
+                  h('span', { style: { whiteSpace: 'nowrap' } }, t('singleAttemptLimit')),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-router-stepper-btn',
+                    style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts <= 1) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
+                    disabled: props.disabled || candidate.maxAttempts <= 1,
+                    title: t('stepMinus'),
+                    onClick: function () { props.onMaxAttempts(index, Math.max(1, candidate.maxAttempts - 1)) },
+                  }, h(Icon, { d: ICON_MINUS, size: 10 })),
                   h('input', {
                     style: S.attemptInput,
                     type: 'text',
@@ -754,22 +1247,36 @@ window.__ModuleLoader__.load({
                     disabled: props.disabled,
                     onChange: function (event) { props.onMaxAttempts(index, event.target.value) },
                   }),
-                  h('span', null, t('timesUnit'))))),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-router-stepper-btn',
+                    style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts >= 5) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
+                    disabled: props.disabled || candidate.maxAttempts >= 5,
+                    title: t('stepPlus'),
+                    onClick: function () { props.onMaxAttempts(index, Math.min(5, candidate.maxAttempts + 1)) },
+                  }, h(Icon, { d: ICON_PLUS, size: 10 })),
+                  h('span', { style: { whiteSpace: 'nowrap' } }, t('timesUnit'))))),
             h('div', { style: S.nodeActions },
               h('button', {
-                type: 'button', style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
+                type: 'button',
+                className: 'dsh-router-icon-btn',
+                style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
                 disabled: index <= 0 || props.disabled,
                 title: isPrimary ? t('primaryPinnedHint') : t('moveUp'),
                 onClick: function () { props.onMove(index, -1) },
               }, h(Icon, { d: ICON_UP })),
               h('button', {
-                type: 'button', style: Object.assign({}, S.iconBtn, index >= props.total - 1 ? S.iconBtnDisabled : null),
+                type: 'button',
+                className: 'dsh-router-icon-btn',
+                style: Object.assign({}, S.iconBtn, index >= props.total - 1 ? S.iconBtnDisabled : null),
                 disabled: index >= props.total - 1 || props.disabled,
                 title: t('moveDown'),
                 onClick: function () { props.onMove(index, 1) },
               }, h(Icon, { d: ICON_DOWN })),
               h('button', {
-                type: 'button', style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
+                type: 'button',
+                className: 'dsh-router-icon-btn',
+                style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
                 disabled: index <= 0 || props.disabled,
                 title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
                 onClick: function () { props.onRemove(index) },
@@ -850,8 +1357,10 @@ window.__ModuleLoader__.load({
       var t = props.t
       return h('div', { style: S.connector },
         h('div', { style: S.connectorLine }),
-        h('span', null, t('failoverNotice')),
-        h('span', { style: S.failoverTag }, t('failoverTag') + ' #' + String(props.toIndex)))
+        h('span', { style: S.failoverTag },
+          h(Icon, { d: ICON_ARROW_DOWN, size: 11 }),
+          t('failoverTag') + ' #' + String(props.toIndex)),
+        h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('failoverNotice')))
     }
 
     /** The ordered pipeline editor for one chain. */
@@ -888,6 +1397,7 @@ window.__ModuleLoader__.load({
             var on = Boolean(props.value[entry.key])
             return h('label', {
               key: entry.key,
+              className: 'dsh-router-trigger-card',
               style: Object.assign({}, S.triggerCard, on ? S.triggerCardChecked : null),
             },
               h('input', {
@@ -915,7 +1425,7 @@ window.__ModuleLoader__.load({
       var t = props.t
       return h('div', { style: S.budgetGrid },
         h('div', { style: S.budgetItem },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
             h('span', { style: S.budgetTitle }, t('maxTotalAttempts')),
             h('span', { style: S.budgetHint }, t('maxTotalAttemptsHint'))),
           h('div', { style: S.budgetInput },
@@ -929,9 +1439,9 @@ window.__ModuleLoader__.load({
               disabled: props.disabled,
               onChange: function (event) { props.onMaxTotal(event.target.value) },
             }),
-            h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, t('timesUnit')))),
+            h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('timesUnit')))),
         h('div', { style: S.budgetItem },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
             h('span', { style: S.budgetTitle }, t('backoffTitle')),
             h('span', { style: S.budgetHint }, t('backoffHint'))),
           h(Tag, { tone: 'neutral' }, t('backoffBadge'))))
@@ -948,7 +1458,9 @@ window.__ModuleLoader__.load({
               h('h2', { style: S.sectionTitle }, t('pipelineTitle')),
               h('p', { style: S.sectionSubtitle }, t('pipelineSubtitle'))),
             h('button', {
-              type: 'button', style: S.dangerBtn,
+              type: 'button',
+              className: 'dsh-router-danger-btn',
+              style: S.dangerBtn,
               onClick: function () { props.onDeleteProfile(profile.id) },
             }, t('deleteProfileBtn'))),
           h(PipelineEditor, {
@@ -962,8 +1474,8 @@ window.__ModuleLoader__.load({
             onNeeds: function (index, patch) { props.onNeeds(profile.id, index, patch, false) },
           }),
           h('div', { style: S.addBar },
-            h('button', { type: 'button', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, t('addFromCatalog')),
-            h('button', { type: 'button', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(profile.id, false) } }, t('addManual')))),
+            h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, t('addFromCatalog')),
+            h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(profile.id, false) } }, t('addManual')))),
         h('section', { style: S.card },
           h('div', { style: S.sectionHeader },
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
@@ -1026,8 +1538,8 @@ window.__ModuleLoader__.load({
             onNeeds: function (index, patch) { props.onNeeds(null, index, patch, true) },
           }),
           h('div', { style: S.addBar },
-            h('button', { type: 'button', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(null, true) } }, t('addFromCatalog')),
-            h('button', { type: 'button', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(null, true) } }, t('addManual')))),
+            h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(null, true) } }, t('addFromCatalog')),
+            h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(null, true) } }, t('addManual')))),
         h('section', { style: S.card },
           h('div', { style: S.sectionHeader },
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
@@ -1279,22 +1791,82 @@ window.__ModuleLoader__.load({
       }
       var modal = state.ui.modal
       var routableProviders = state.catalog?.routableProviders ?? []
-      return h('div', { style: S.page },
-        h('header', { style: S.header },
+      var isModalView = Boolean(props.isModalView)
+
+      // Shortcut: Ctrl+S / Cmd+S save
+      React.useEffect(function () {
+        function onKeyDown(e) {
+          if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+            e.preventDefault()
+            if (state.dirty && state.writable && !state.saving && !state.invalid) {
+              props.onSave()
+            }
+          }
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return function () { window.removeEventListener('keydown', onKeyDown) }
+      }, [state.dirty, state.writable, state.saving, state.invalid, props.onSave])
+
+      return h('div', { className: 'dsh-router-page', style: isModalView ? S.pageModal : S.page },
+        // Enhanced Sticky Action Header
+        !isModalView ? h('header', { style: S.stickyHeader },
           h('div', { style: S.headerLeft },
-            h('h1', { style: S.titleRow }, t('pluginTitle')),
-            h('p', { style: S.desc }, t('pluginDesc'))),
-          h('div', { style: S.switchWrap },
-            h('span', { style: S.switchLabel }, t('globalSwitchLabel')),
-            h(Switch, {
-              checked: draft.enabled,
-              label: t('globalSwitchLabel'),
+            h(ModelRouterIcon, { size: 30, color: 'var(--dsw-alias-brand-primary, #4A65E8)' }),
+            h('div', { style: S.headerTitles },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                h('h1', { style: S.titleRow }, t('pluginTitle')),
+                h('span', { style: draft.enabled ? S.badgeRunning : S.badgePaused },
+                  draft.enabled ? '● ' + t('statusRunningBadge') : '○ ' + t('statusDisabledBadge')),
+                state.dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null),
+              h('p', { style: S.desc }, t('pluginDesc')))),
+          h('div', { style: S.headerActions },
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-catalog-btn',
+              style: S.catalogBtn,
+              onClick: props.onOpenDrawer,
+            }, h(Icon, { d: ICON_CLOCK, size: 14 }), t('failoverHistoryButton')),
+            h('div', { style: S.switchWrap },
+              h('span', { style: S.switchLabel }, t('globalSwitchLabel')),
+              h(Switch, {
+                checked: draft.enabled,
+                label: t('globalSwitchLabel'),
+                disabled: disabled,
+                title: t('globalSwitchDesc'),
+                onChange: function (next) { props.onEnabled(next) },
+              })),
+            state.dirty ? h('button', {
+              type: 'button',
+              className: 'dsh-router-discard-btn',
+              style: S.discardBtnHeader,
               disabled: disabled,
-              title: t('globalSwitchDesc'),
-              onChange: function (next) { props.onEnabled(next) },
-            }))),
-        h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 12 } },
-          h('button', { type: 'button', style: S.catalogBtn, onClick: props.onOpenDrawer }, t('failoverHistoryButton'))),
+              onClick: props.onDiscard,
+            }, h(Icon, { d: ICON_UNDO, size: 13 }), t('formDiscard')) : null,
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-save-btn',
+              style: Object.assign({}, S.saveBtn,
+                (state.dirty && state.writable && !state.saving && !state.invalid ? S.saveBtnHighlight : S.saveBtnDisabled)),
+              disabled: !state.dirty || disabled || state.invalid,
+              title: state.dirty ? t('saveShortcutHint') : t('savedStateTip'),
+              onClick: props.onSave,
+            },
+              state.saving ? h(Icon, { d: ICON_SPINNER, size: 14, spin: true }) : (state.dirty ? h(Icon, { d: ICON_SAVE, size: 14 }) : h(Icon, { d: ICON_CHECK, size: 14 })),
+              state.saving ? t('formSaving') : t('formSave'),
+              state.dirty ? h('kbd', { style: S.kbdTag }, 'Ctrl+S') : null))) : null,
+
+        // Top validation problems alert (if any)
+        state.problems.length > 0 ? h('div', { style: S.problemsBox, role: 'alert' },
+          h('strong', null, t('problemsTitle')),
+          h('ul', { style: { margin: '4px 0 0', paddingLeft: 18 } },
+            state.problems.map(function (problem, index) {
+              return h('li', { key: index }, fill(t(problem.key), problem.vars))
+            }))) : null,
+
+        state.failed ? h('div', { style: S.problemsBox, role: 'alert' },
+          h('strong', null, t('formSaveFailed'))) : null,
+
+        // SettingsForm container (preserves lifecycle and bottom save contract)
         h(SettingsForm, {
           labels: {
             unavailable: t('formUnavailable'),
@@ -1314,31 +1886,24 @@ window.__ModuleLoader__.load({
           onSave: props.onSave,
           onDiscard: props.onDiscard,
         },
-          state.problems.length > 0 ? h('div', { style: S.problemsBox, role: 'alert' },
-            h('strong', null, t('problemsTitle')),
-            h('ul', { style: { margin: '4px 0 0', paddingLeft: 18 } },
-              state.problems.map(function (problem, index) {
-                return h('li', { key: index }, fill(t(problem.key), problem.vars))
-              }))) : null,
-          h('button', {
-            type: 'button',
-            style: Object.assign({}, S.discardBtn, !state.dirty ? { opacity: 0.4 } : null),
-            disabled: !state.dirty || disabled,
-            onClick: props.onDiscard,
-          }, t('formDiscard')),
           h('section', { style: S.card },
-            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 12, flexWrap: 'wrap' } },
-              h('span', { style: { fontSize: 12.5, fontWeight: 600, color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 } }, t('profilesTitle')),
+            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 12, flexWrap: 'wrap' } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                h('span', { style: { fontSize: 13, fontWeight: 700, color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase', letterSpacing: 0.6 } }, t('profilesTitle')),
+                h('span', { style: S.countBadge }, String(draft.profiles.length))),
               h('button', {
-                type: 'button', style: S.addProfileBtn, disabled: disabled,
+                type: 'button',
+                className: 'dsh-router-add-profile-btn',
+                style: S.addProfileBtn,
+                disabled: disabled,
                 onClick: function () { props.onOpenNewProfile() },
-              }, t('addProfile'))),
+              }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addProfile'))),
             h(SegmentedTabs, {
               items: draft.profiles.map(function (profile) {
                 return {
                   value: profile.id,
                   label: h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
-                    h('span', null, profile.when.model),
+                    h('span', { style: { fontWeight: 500 } }, profile.when.model),
                     h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: profile.candidates.length }))),
                   id: 'tab-' + profile.id,
                   panelId: 'panel-' + profile.id,
@@ -1346,7 +1911,7 @@ window.__ModuleLoader__.load({
               }).concat([{
                 value: '__default__',
                 label: h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
-                  h('span', null, t('defaultProfileTab')),
+                  h('span', { style: { fontWeight: 500 } }, t('defaultProfileTab')),
                   h('span', { style: S.countBadge }, draft.default.enabled ? t('candidateCountTag').replace('{n}', String(draft.default.candidates.length)) : t('defaultProfileNotActive'))),
                 id: 'tab-default',
                 panelId: 'panel-default',
@@ -1386,6 +1951,9 @@ window.__ModuleLoader__.load({
               onOpenCatalog: props.onOpenCatalog,
               onOpenManual: props.onOpenManual,
             })),
+
+
+
         modal !== null && modal.kind === 'new-profile' ? h(NewProfileModal, {
           t: t,
           catalog: state.catalog,
@@ -1408,7 +1976,8 @@ window.__ModuleLoader__.load({
           onClose: props.onCloseModal,
           onAdd: function (entries) { props.onAddCandidates(modal.profileId, entries, modal.isDefault) },
         }) : null,
-        modal !== null && modal.kind === 'delete' ? h(RiskConfirmation, {          open: true,
+        modal !== null && modal.kind === 'delete' ? h(RiskConfirmation, {
+          open: true,
           title: t('riskConfirmTitle'),
           description: t('riskConfirmDesc'),
           acknowledgeLabel: t('riskConfirmCheckbox'),
@@ -1429,6 +1998,109 @@ window.__ModuleLoader__.load({
         }) : null)
     }
 
+    /** The sidebar entry button registered into `sidebar.footer.action`. */
+    function ModelRouterFooterAction(props) {
+      var t = props.t
+      var state = props.useRouterPage(function (s) { return s })
+      var openState = React.useState(false)
+      var open = openState[0]
+      var setOpen = openState[1]
+      var isWide = Boolean(props.wide)
+      var enabled = state?.draft?.enabled ?? true
+      var dirty = state?.dirty ?? false
+      var profileCount = (state?.draft?.profiles ?? []).length
+
+      React.useEffect(function () {
+        if (!open) return
+        function handleKeyDown(e) {
+          if (e.key === 'Escape') setOpen(false)
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        return function () { window.removeEventListener('keydown', handleKeyDown) }
+      }, [open])
+
+      var buttonProps = {
+        type: 'button',
+        className: 'dsh-router-footer-action' + (isWide ? '' : ' rail'),
+        style: isWide ? S.sidebarActionWide : S.sidebarActionRail,
+        title: t('sidebarActionTooltip'),
+        'aria-label': t('sidebarActionLabel'),
+        'aria-expanded': open,
+        onClick: function () { setOpen(true) },
+      }
+
+      var modalElement = open ? ReactDOM.createPortal(
+        h('div', {
+          style: S.modalOverlay,
+          onClick: function (e) { if (e.target === e.currentTarget) setOpen(false) },
+        },
+          h('div', { className: 'dsh-router-modal-dialog', style: S.modalDialog, role: 'dialog', 'aria-modal': true },
+            h('div', { style: S.modalTopBar },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 } },
+                h(ModelRouterIcon, { size: 24, color: 'var(--dsw-alias-brand-primary, #4A65E8)' }),
+                h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                    h('span', { style: S.modalTopTitle }, t('quickModalTitle')),
+                    h('span', {
+                      style: enabled ? S.badgeRunning : S.badgePaused,
+                    }, enabled ? '● ' + t('statusRunningBadge') : '○ ' + t('statusDisabledBadge')),
+                    dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null,
+                    state.failed ? h('span', { style: S.saveFailedBadge }, t('formSaveFailed')) : null),
+                  h('span', { style: S.modalTopSubtitle }, t('pluginDesc')))),
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 } },
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-catalog-btn',
+                  style: S.catalogBtn,
+                  onClick: props.onOpenDrawer,
+                }, h(Icon, { d: ICON_CLOCK, size: 14 }), t('failoverHistoryButton')),
+                dirty ? h('button', {
+                  type: 'button',
+                  className: 'dsh-router-discard-btn',
+                  style: S.discardBtnHeader,
+                  disabled: !state.writable || state.saving,
+                  onClick: props.onDiscard,
+                }, h(Icon, { d: ICON_UNDO, size: 13 }), t('formDiscard')) : null,
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-save-btn',
+                  style: Object.assign({}, S.saveBtn, (!dirty || !state.writable || state.saving || state.invalid) ? S.saveBtnDisabled : S.saveBtnHighlight),
+                  disabled: !dirty || !state.writable || state.saving || state.invalid,
+                  title: dirty ? t('saveShortcutHint') : t('savedStateTip'),
+                  onClick: props.onSave,
+                },
+                  state.saving ? h(Icon, { d: ICON_SPINNER, size: 14, spin: true }) : (dirty ? h(Icon, { d: ICON_SAVE, size: 14 }) : h(Icon, { d: ICON_CHECK, size: 14 })),
+                  state.saving ? t('formSaving') : t('formSave'),
+                  dirty ? h('kbd', { style: S.kbdTag }, 'Ctrl+S') : null),
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-modal-close-btn',
+                  style: S.modalCloseBtn,
+                  title: t('close'),
+                  onClick: function () { setOpen(false) },
+                }, h(Icon, { d: ICON_CLOSE, size: 16 })))),
+            h('div', { style: S.modalContentArea },
+              h(RouterPage, Object.assign({}, props, {
+                isModalView: true,
+                onCloseModalView: function () { setOpen(false) },
+              }))))),
+        document.body
+      ) : null
+
+      return h(React.Fragment, null,
+        h('button', buttonProps,
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
+            h(ModelRouterIcon, { size: isWide ? 17 : 19, color: enabled ? 'var(--dsw-alias-brand-primary, #4A65E8)' : 'var(--dsw-alias-label-tertiary, #888)' }),
+            isWide ? h('span', { style: S.sidebarLabel }, t('sidebarActionLabel')) : null),
+          isWide
+            ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+                dirty ? h('span', { style: { width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }, title: t('unsavedChangesBadge') }) : null,
+                h('span', { style: S.sidebarCountBadge }, String(profileCount)))
+            : (dirty ? h('span', { style: S.railDirtyDot }) : null)),
+        modalElement
+      )
+    }
+
     exports.name = NS + '/client'
     exports.inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
 
@@ -1441,6 +2113,7 @@ window.__ModuleLoader__.load({
       // never from the Config schema's `.description()`.
       var t = ctx.locale.bind(NS)
       ctx.effect(() => ctx.locale.register(NS, { zh: zh, en: en }), 'router: dictionaries')
+      ctx.effect(ensureStyles, 'router: global styles')
 
       var scope = ctx.configForms.get(CONFIG_NS)
       var controller = createController(ctx, scope, t)
@@ -1476,9 +2149,18 @@ window.__ModuleLoader__.load({
         locale: NS,
         inject: () => Object.assign({ hooks: { routerPage: controller.store } }, actions),
       }, RouterPage)), 'router: config page')
+
+      ctx.effect(() => ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+        name: 'sidebar.footer.action',
+        id: 'model-router',
+        order: 120,
+        locale: NS,
+        inject: () => Object.assign({ hooks: { routerPage: controller.store } }, actions),
+      }, ModelRouterFooterAction)), 'router: sidebar entry')
     }
 
     exports.RouterPage = RouterPage
+    exports.ModelRouterFooterAction = ModelRouterFooterAction
     return module.exports
   },
 })

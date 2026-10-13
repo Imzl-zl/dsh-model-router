@@ -87,7 +87,7 @@ assistant/message  provider=spike-backup served_by=spike-backup
 - **原生配置面复核（用户指正）**：Settings → Models 页面原生提供每模型输入类型（text/image）、contextWindow、maxTokens（`ui-settings-models` 的 ModelInputTypes/ModelRow；自定义网关走 CustomProviderCard+ModelListEditor，落 llm-pi-ai providers）。测试 overlay 写的 input/contextWindow/maxTokens 就是这套字段，非私货；真实使用走 Models 页面。
 - **开源门面已完成**：GitHub 仓库 `Imzl-zl/dsh-model-router`（公开），DSH 同构图标（tool-worktree 范式：#4A65E8/16 viewBox/stroke 1.3，断臂=失败、连通臂=接管），MIT，README 重写。`.agents/notes/implemented/2026-10-13-real-provider-failover-verified.md` 记录实测。
 - **项目主体已完整**：宿主（选路/两层预算/预校验/条件/lineage 投影）+ UI（表单/needs 面板/目录选择/遥测抽屉）+ 文档 + 测试（单测 23、组合 9、真实 provider 1、浏览器全链路）。剩余仅 Phase 3/4 明确推迟项（逻辑模型选择器、cooldown/breaker）。
-- 决策笔记状态：`implemented/` 六篇（外置插件实跑、砍 needs.tools、reasoningEffort 预校验、cap advance 过 switchOn 门、drop tools 资格、条件取数、真实 provider 实测）。
+- 决策笔记状态：`implemented/` 七篇（外置插件实跑、砍 needs.tools、reasoningEffort 预校验、cap advance 过 switchOn 门、drop tools 资格、条件取数、真实 provider 实测、侧边栏自适应入口与保存/视觉重构）。
 
 ## 仍需注意的坑点
 
@@ -113,8 +113,8 @@ assistant/message  provider=spike-backup served_by=spike-backup
 
 ## 最近活跃窗口
 
-- 核验了 DSH retry executor 的 projection、policy 及 UI partial-stream reset 行为。
-- **四路并行深挖 DSH 能力边界**：原生路由能力、持久化与身份、UI slots 与可观测性、Cordis composition 与次序；据此新增 `docs/design/dsh-capability-boundary.md` 并关闭九项未决问题。
-- **Phase 1 spike 实跑通过**：仓库外插件可加载、模块单副本、两个 waterfall 均可达、外层 listener 的 route 覆盖压过 `installModelSelection` 写回且 durable 归因跟着真实 route。
-- **Phase 1 host + UI 落地**（2026-10-12~13）：组合测试 9/9 + 单测 23/23 + 浏览器全链路；实现期共抓到并修 10 个真 bug（含 store devFreeze 冻结草稿、删除确认错接线、投影 kind 门禁、modelCatalog 信封），细节见 `tools.md` 与 `.agents/notes/implemented/`。
-- **真实 provider 实测 + 开源门面**（2026-10-13）：活网关真 500 → SERVER → 跨 key 切换全对（代理 127.0.0.1:7890 必需）；GitHub 仓库、DSH 同构图标、MIT、README 重写落成。
+- **四路并行深挖 DSH 能力边界**并关闭九项未决问题，Phase 1 spike 实跑通过。
+- **Phase 1~2 host + UI 落地**（2026-10-12~13）：组合测试 9/9 + 单测 23/23 + 浏览器全链路；抓到并修 10 个真 bug。
+- **真实 provider 实测 + 开源门面**（2026-10-13）：活网关真 500 → SERVER → 跨 key 切换全对；GitHub 公开仓库与同构图标落成。
+- **UI 与入口重构实测落地**（2026-10-13）：① `sidebar.footer.action` 侧栏自适应入口（通过 CSS 动态将 `footerActions` 转为纵向列排布，与 `dsh-toolbox-ui` 完美垂直自适应堆叠且 100% 满宽，宽/窄轨道自适应，Portal 唤起沉浸式控制中心）；② 保存交互统一与去重（彻底清理冗余 Floating Save Bar，以吸顶 Sticky Header / Modal Top Bar 为唯一主保存入口，隐藏底栏重复的 `SettingsForm` 按钮，解决“保存找半天”与“保存上下都有”，配以 `Ctrl+S`、防换行文案与状态徽标）；③ 视觉细节与微交互打磨（CandidateNode 引入 Stepper 微调器、主渠道微光渐变与金色星标、带箭头故障转移连接线、执行预算响应式自适应网格）；测试与类型检查全绿。
+- **隔离进程浏览器复验**（2026-10-14）：手搭 `.dshhome-view`（junction 共享只读 node_modules）起独立进程 `--port 3390`，跑的是 23:59 改后的 `client.js`；侧栏「模型路由」入口、控制中心吸顶保存栏、「● 未保存修改」琥珀徽标、Stepper、保存落盘全链路实测通过（`maxAttempts` 2→3 已写入隔离 home 的 `cordis.patch.yml`）。`.dshhome-view/` 与 boot log 已补进 `.gitignore`。
