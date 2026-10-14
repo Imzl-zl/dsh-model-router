@@ -96,9 +96,9 @@ DSH normal retry policy 的默认 eligible codes 是 `EMPTY_RESPONSE`、`RATE_LI
 
 - **request/step budget**：一个用户请求内每个 candidate 的次数与整个 route chain 上限。
 - **Agent/Session health**：跨请求失败统计，不隐式改变当前 route。
-- **global cooldown / circuit breaker**：跨 Agent provider 健康状态；需额外定义并发、时间窗口、持久化和多实例行为，不纳入首个验证阶段。
+- **auto-disable（熔断）**：命中用户配置的规则后把渠道凉一段时间，冷却到了自动放行重试；状态在插件进程内存，保存配置时重置。跨 Agent 共享、多实例一致性与持久化未做，见 [决策笔记](../../.agents/notes/implemented/2026-10-14-channel-health-rework.md)。
 
-不得将 provider retries、跨渠道 failover 和全局 breaker 当作同一计数。
+不得将 provider retries、跨渠道 failover 和跨请求健康/禁用当作同一计数。
 
 ## 配置格式草案
 
@@ -165,7 +165,7 @@ Models UI 有 `settings.models.provider-card` 和 `settings.models.footer` 扩�
 
 ## 主要设计约束
 
-- **优先级**：首个原型只采用显式 priority-first order，不叠加 round-robin、weighted 或 latency routing。
+- **起点策略**：`order` / `weight` / `round-robin` 三种，只决定从哪条候选开始，失败后的前进逻辑与策略无关。用户自己选的那一条永远在链上且永远被尝试，但权重/轮询下不一定是第一跳。
 - **Retry 预算**：Route 与 `llm-retry` 必须由真实 listener composition 证明不会互相嵌套；`always` policy 的无限重试需显式处置。
 - **能力校验**：对每个候选验证实际 request controls 和 model metadata；adapter `prepareCall()` 是最终能力权威。准备/配置错误不会自动进入 `agent/request-error`。
 - **日志**：request header 与 assistant source 保留真实物理 provider/model；逻辑 profile 需以可恢复方式单独记录。
@@ -181,7 +181,7 @@ Models UI 有 `settings.models.provider-card` 和 `settings.models.footer` 扩�
 2. **Agent-only 技术 spike**：在真实 Loader composition 验证候选选择、真实 prepare/dispatch、`llm-retry` 预算、取消、有界 attempt、partial settlement/UI、model selection 与热卸载。
 3. **MVP 插件**：仅在 spike 证明语义正确后确定 schema、状态 owner、Settings UI、diagnostics 与 replay/recovery tests。
 4. **逻辑模型/核心扩展**：仅当产品决定 selector 展示 profile 时，设计 catalog、selection、route identity 和 Session projection 的最小 DSH 扩展。
-5. **生产级调度**：由实证需求触发 cooldown、breaker、权重或跨进程 health store。
+5. **生产级调度**：跨进程 health store、latency/price 路由由实证需求触发；权重/轮询/熔断已在插件内实现，细节见 [决策笔记](../../.agents/notes/implemented/2026-10-14-channel-health-rework.md)。
 
 产品可见插件须有真实 Cordis Loader composition 测试，不能只靠手造 Context 单测。DSH 对应包规则见其 `packages/AGENTS.md`；本设计仓库未运行插件测试。
 

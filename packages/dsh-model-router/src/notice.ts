@@ -30,6 +30,8 @@ const CODE_LABELS: Readonly<Record<string, string>> = {
   TRANSPORT: '网络传输中断',
   EMPTY_RESPONSE: '空回复',
   INVALID_REQUEST: '请求被拒绝',
+  AUTH: '凭证或权限被拒',
+  QUOTA: '额度用尽',
 }
 
 export function codeLabel(code: string): string {
@@ -81,5 +83,21 @@ export function conditionSkipNotice(
 ): UserMessage {
   return notice(
     `[路由切换] 候选 ${candidate.provider}/${candidate.model} 的使用条件不满足（${reason}），已跳过`,
+  )
+}
+
+/**
+ * A candidate is sitting out a cooldown. The remaining time is stated because
+ * "skipped" alone reads like the channel is broken, and the whole point of a
+ * cooldown is that it comes back on its own.
+ */
+export function breakerNotice(
+  candidate: { provider: string; model: string },
+  until: number,
+  now: number = Date.now(),
+): UserMessage {
+  const seconds = Math.max(1, Math.ceil((until - now) / 1000))
+  return notice(
+    `[路由切换] 候选 ${candidate.provider}/${candidate.model} 已被自动禁用，约 ${seconds} 秒后自动重试，本次跳过`,
   )
 }

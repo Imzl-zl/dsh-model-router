@@ -76,7 +76,7 @@ last_updated: "2026-10-12"
 
 ### MVP 不做
 
-- global provider health daemon、跨 Session shared circuit breaker、auto latency benchmark、weighted/random load balance。
+- global provider health daemon、跨 Session shared circuit breaker、auto latency 路由：未做，见 Phase 4。
 - 替换 adapter、重复 provider 凭证 schema、model wire compatibility normalization。
 - 未讨论就修改 `SessionEventMap` 或复用 experimental `appendPluginRecord()` 写入决定重启恢复所需的真值。
 
@@ -95,4 +95,6 @@ last_updated: "2026-10-12"
 
 ## Phase 4：策略增强（需求触发）
 
-只在已有 request-level failover 生产证据后评估：共享 provider cooldown、breaker probe 和恢复；跨进程存储；权重/轮询/负载均衡；latency/price 路由。每项都需给出故障窗口、状态 owner、请求延迟预算、隔离行为与覆盖测试。
+已实现：起点策略（`order`/`weight`/`round-robin`）、按错误码/信息的自动禁用（熔断）、四档健康配置。见 [决策笔记](../../.agents/notes/implemented/2026-10-14-channel-health-rework.md)。
+
+仍未做：跨进程共享的 provider cooldown 与恢复、latency/price 路由。每项都需给出故障窗口、状态 owner、请求延迟预算、隔离行为与覆盖测试。

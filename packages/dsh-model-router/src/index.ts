@@ -30,11 +30,12 @@ import {
   type Profile,
   type RouterOptions,
 } from './config.ts'
-import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, skipTo, startStep, unmetCondition } from './router.ts'
+import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, unmetCondition } from './router.ts'
 import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
-import { conditionSkipNotice, failoverNotice, skipNotice } from './notice.ts'
+import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice } from './notice.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
-import { HealthMonitor, RouterHealthService, channelHealthProjection } from './health.ts'
+import { channelHealthProjection } from './health.ts'
+import { CircuitBreaker } from './breaker.ts'
 
 export const name = 'model-router'
 export const inject = ['llm']
@@ -43,50 +44,10 @@ export { Config } from './config.ts'
 
 export function apply(ctx: Context, config: Config): void {
   const states = new RouterState()
-  const healthMonitor = new HealthMonitor(ctx)
+  const breaker = new CircuitBreaker()
 
   // Structural validation at load: wrong in every environment, so it fails loud.
   assertStructural(readConfig(config))
-
-  const getHealthCandidates = (): readonly { provider: string; model: string }[] => {
-    const list: { provider: string; model: string }[] = []
-    const profiles = config.profiles.get() as readonly Profile[] | undefined
-    if (profiles) {
-      for (const p of profiles) {
-        for (const c of p.candidates) list.push({ provider: c.provider, model: c.model })
-      }
-    }
-    const def = config.default.get() as DefaultProfile | undefined
-    if (def?.candidates) {
-      for (const c of def.candidates) list.push({ provider: c.provider, model: c.model })
-    }
-    return list
-  }
-
-  // Register Host Typert Remote service for health checks
-  new RouterHealthService(ctx, healthMonitor, () => {
-    const h = config.health?.get() as HealthConfig | undefined
-    return {
-      prompt: h?.prompt ?? 'hi',
-      timeoutSeconds: h?.timeoutSeconds ?? 8,
-      getCandidates: getHealthCandidates,
-    }
-  })
-
-  const updateHealthSchedule = (): void => {
-    const h = config.health?.get() as HealthConfig | undefined
-    if (h?.enabled !== false && (h?.intervalMinutes ?? 0) > 0) {
-      healthMonitor.updateInterval(getHealthCandidates, h!.intervalMinutes, h!.prompt || 'hi', h!.timeoutSeconds || 8)
-    } else {
-      healthMonitor.updateInterval(getHealthCandidates, 0, 'hi', 8)
-    }
-  }
-  updateHealthSchedule()
-
-  ctx.effect(() => () => {
-    healthMonitor.dispose()
-  })
-
   // Hot updates are validated before Cordis restarts this fiber, so a bad edit
   // is rejected at save time instead of killing the running plugin.
   ctx.on('internal/config', function (this: Fiber, _raw, next) {
@@ -98,7 +59,6 @@ export function apply(ctx: Context, config: Config): void {
       default: candidate.default.get() as DefaultProfile,
       health: candidate.health?.get() as HealthConfig | undefined,
     })
-    updateHealthSchedule()
     return raw
   })
 
@@ -108,31 +68,23 @@ export function apply(ctx: Context, config: Config): void {
   // after this plugin loads are not visible here.
   warnUnregisteredProviders(ctx, readConfig(config))
 
-  // The durable failover ledger. Registered through an inject intercept (the
-  // llm-pi-ai pattern for an optional service): the child fiber waits for the
-  // projection registry instead of reading it once at apply time, so this
-  // plugin loads and routes even in a composition without the registry — the
-  // child simply stays pending there and only the history view degrades.
-  // The durable failover ledger. The registry is a core service in every real
-  // profile; read it through `ctx.get` (the optional-service rule) so a
-  // composition without it still routes — only the history view degrades.
+  // The durable failover ledger and the channel-health fold, both registered
+  // through `ctx.get` (the optional-service rule): a composition without the
+  // registry still routes — only the two views degrade.
   const projections = ctx.get('sessionProjections') as ProjectionRegistryFace | undefined
   projections?.register(failoverHistoryProjection)
   projections?.register(channelHealthProjection)
 
-  // Failure and success observation. `session/event` is the sanctioned post-commit feed;
-  // `agent/request-error` records synchronously for delegated failures. Both
-  // write the same fact, and the notice reads whichever arrived.
+  // The router's own failure ledger. `agent/request-error` records synchronously
+  // for the failure it is handed, but a delegated failure reaches the next
+  // attempt through the durable log first, so the committed `assistant/attempt`
+  // is what `mayAdvance` reads when it decides whether the chain may advance.
+  // This listener exists for the router's state alone — channel health is folded
+  // by the `router/channel-health` projection, which the registry drives itself.
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
-    if (event.type === 'assistant/attempt') {
-      const failure = failureCodeOfStream(event.data.stream)
-      if (failure !== undefined) states.noteFailure(session, event.data.turn, event.data.step, failure)
-    } else if (event.type === 'assistant/message') {
-      const source = (event.data as unknown as { message?: { source?: { provider?: string; model?: string } } })?.message?.source
-      if (source?.provider && source?.model) {
-        healthMonitor.noteSuccess(source.provider, source.model)
-      }
-    }
+    if (event.type !== 'assistant/attempt') return
+    const failure = failureCodeOfStream(event.data.stream)
+    if (failure !== undefined) states.noteFailure(session, event.data.turn, event.data.step, failure)
   })
 
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
@@ -164,7 +116,9 @@ export function apply(ctx: Context, config: Config): void {
             config.default.get() as DefaultProfile,
           )
           if (chain === undefined) return resolved
-          state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step))
+          // 策略只决定从哪条开始；起点之后的前进逻辑与策略无关。
+          const start = resolveStartIndex(chain.candidates, chain.strategy, states.nextCursor(agent.session, chain.candidates.length))
+          state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step), start)
           states.start(agent, state)
         }
 
@@ -179,12 +133,23 @@ export function apply(ctx: Context, config: Config): void {
         let index = plan.state.index
         const skipped: Candidate[] = []
         const conditionSkipped: { candidate: Candidate; reason: string }[] = []
+        const blocked: { candidate: Candidate; until: number }[] = []
         let outgoing: LlmCallConfig | undefined
+        const now = Date.now()
+        breaker.sweep(now)
         while (index < candidates.length) {
           const candidate = candidates[index]!
           if (candidate.provider === resolved.provider && candidate.model === resolved.model) {
             outgoing = candidateConfig(resolved, candidate)
             break
+          }
+          // 禁用的渠道直接跳过——但用户自己选的那一条永远不跳过：那是他明确
+          // 要用的，禁用名单不该能覆盖人的显式选择。
+          const until = breaker.blockedUntil(candidate.provider, candidate.model, now)
+          if (until !== undefined) {
+            blocked.push({ candidate, until })
+            index += 1
+            continue
           }
           const unmet = unmetCondition(candidate, plan.state.conditions)
           if (unmet !== undefined) {
@@ -212,13 +177,15 @@ export function apply(ctx: Context, config: Config): void {
         states.start(agent, skipped.length === 0 && conditionSkipped.length === 0 && index === plan.state.index ? plan.state : skipTo(plan.state, index))
 
         if (plan.advanced) {
+          const order = plan.state.chain.order
           agent.session.append(
             'user/message',
             failoverNotice(
               candidates[plan.fromIndex]!,
               candidates[index]!,
-              index + 1,
-              candidates.length,
+              // 用户自己排的编号，不是策略旋转后的位置。
+              (order[index] ?? index) + 1,
+              order.length,
               states.failureCodeOf(agent.session, turn, step),
             ),
             { surfaceOp: 'append' },
@@ -229,6 +196,9 @@ export function apply(ctx: Context, config: Config): void {
         }
         for (const candidate of skipped) {
           agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
+        }
+        for (const entry of blocked) {
+          agent.session.append('user/message', breakerNotice(entry.candidate, entry.until), { surfaceOp: 'append' })
         }
         return outgoing
       },
@@ -244,7 +214,10 @@ export function apply(ctx: Context, config: Config): void {
       if (state === undefined) return next()
       states.noteFailure(agent.session, turn, step, failure.code)
       const current = state.chain.candidates[state.index]!
-      healthMonitor.noteFailure(current.provider, current.model, failure.code)
+      // A failure the user said should disqualify the channel takes it out of
+      // rotation; the block always expires, so this is a cooldown, not a ban.
+      const rules = (config.health?.get() as HealthConfig | undefined)?.breaker.rules ?? []
+      breaker.note(current.provider, current.model, failure.code, failure.message ?? '', rules, Date.now())
       if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return next()
       ctx.logger.warn(
         `model-router: ${failure.code} on ${current.provider}/${current.model} `

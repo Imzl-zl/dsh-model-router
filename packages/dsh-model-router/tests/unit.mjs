@@ -17,10 +17,14 @@ import {
   hasImageContent,
   planFire,
   resolveChain,
+  resolveStartIndex,
+  rotate,
   startStep,
   unmetCondition,
 } from '../src/router.ts'
 import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, MAX_ENTRIES } from '../src/lineage.ts'
+import { breakerNotice } from '../src/notice.ts'
+import { assertStructural } from '../src/config.ts'
 import { emptyConditions } from '../src/state.ts'
 
 let passed = 0
@@ -83,10 +87,12 @@ test('conditionsMet is the negation of unmetCondition', () => {
 
 // ---- planFire (attempt accounting) ----
 
-const chainOf = (maxAttempts, count = 3) => ({
-  candidates: Array.from({ length: count }, (_, index) => ({ provider: 'p', model: `m${index}`, maxAttempts })),
+const chainOf = (maxAttempts, count = 3, strategy = 'order') => ({
+  candidates: Array.from({ length: count }, (_, index) => ({ provider: 'p', model: `m${index}`, maxAttempts, weight: 0 })),
+  order: Array.from({ length: count }, (_, index) => index),
   switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
   maxTotalAttempts: 10,
+  strategy,
 })
 
 test('planFire gives each candidate exactly maxAttempts fires before advancing', () => {
@@ -145,9 +151,10 @@ test('recovery retries an eligible code within budget, terminates at the cap', (
 const profile = (provider, model) => ({
   id: 'p1',
   when: { provider, model },
-  candidates: [{ provider, model, maxAttempts: 2 }],
+  candidates: [{ provider, model, maxAttempts: 2, weight: 0 }],
   switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
   maxTotalAttempts: 6,
+  strategy: 'order',
 })
 
 test('resolveChain matches the exact route, else the enabled default pool with an implicit first hop', () => {
@@ -156,13 +163,229 @@ test('resolveChain matches the exact route, else the enabled default pool with a
   assert.equal(resolveChain(resolved, [profile('b', 'y')], { enabled: false, candidates: [], switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }, maxTotalAttempts: 3 }), undefined)
   const pooled = resolveChain(resolved, [], {
     enabled: true,
-    candidates: [{ provider: 'c', model: 'z', maxAttempts: 1 }],
+    candidates: [{ provider: 'c', model: 'z', maxAttempts: 1, weight: 0 }],
     switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
     maxTotalAttempts: 3,
+    strategy: 'order',
   })
   assert.equal(pooled?.candidates.length, 2)
   assert.equal(pooled?.candidates[0].provider, 'a')
   assert.equal(pooled?.candidates[0].maxAttempts, 1)
+})
+
+// ---- strategy: the start index ----
+
+test('resolveStartIndex always starts at the head for the order strategy', () => {
+  const chain = chainOf(1, 4)
+  for (let cursor = 0; cursor < 8; cursor += 1) {
+    assert.equal(resolveStartIndex(chain.candidates, 'order', cursor), 0)
+  }
+})
+
+test('resolveStartIndex walks the chain one step per cursor for round-robin', () => {
+  const chain = chainOf(1, 3)
+  assert.deepEqual([0, 1, 2, 3, 4].map(cursor => resolveStartIndex(chain.candidates, 'round-robin', cursor)), [0, 1, 2, 0, 1])
+})
+
+test('resolveStartIndex draws by weight, and never picks a zero-weight candidate', () => {
+  const candidates = [
+    { provider: 'free', model: 'm', weight: 0 },
+    { provider: 'paid', model: 'm', weight: 30 },
+    { provider: 'spare', model: 'm', weight: 70 },
+  ]
+  const picked = new Set()
+  for (let i = 0; i < 400; i += 1) picked.add(resolveStartIndex(candidates, 'weight', 0))
+  // 权重 0 的那条永远不会被抽中，另外两条都出现过。
+  assert.deepEqual([...picked].sort(), [1, 2])
+})
+
+test('resolveStartIndex falls back to the head when no candidate has weight', () => {
+  const chain = chainOf(1, 3)
+  assert.equal(resolveStartIndex(chain.candidates, 'weight', 7), 0)
+})
+
+test('resolveStartIndex ignores the cursor for a single-candidate chain', () => {
+  assert.equal(resolveStartIndex([{ weight: 5 }], 'round-robin', 9), 0)
+  assert.equal(resolveStartIndex([{ weight: 5 }], 'weight', 9), 0)
+})
+
+test('rotate wraps so the start is the head and the rest follow in order', () => {
+  assert.deepEqual(rotate(['a', 'b', 'c'], 1), ['b', 'c', 'a'])
+  assert.deepEqual(rotate(['a', 'b', 'c'], 3), ['a', 'b', 'c'])
+  assert.deepEqual(rotate(['a', 'b', 'c'], 5), ['c', 'a', 'b'])
+  assert.deepEqual(rotate([], 2), [])
+})
+
+test('startStep rotates the chain but keeps the user-visible order', () => {
+  const chain = chainOf(1, 3)
+  const state = startStep(1, 1, chain, emptyConditions(), 1)
+  assert.deepEqual(state.chain.candidates.map(c => c.model), ['m1', 'm2', 'm0'])
+  // 界面和通知说的"第几条"仍是用户自己排的那一套。
+  assert.deepEqual(state.chain.order, [1, 2, 0])
+  assert.equal(state.index, 0)
+})
+
+test('startStep at the head leaves the chain untouched', () => {
+  const chain = chainOf(1, 3)
+  const state = startStep(1, 1, chain, emptyConditions(), 0)
+  assert.deepEqual(state.chain.candidates.map(c => c.model), ['m0', 'm1', 'm2'])
+  assert.deepEqual(state.chain.order, [0, 1, 2])
+})
+
+// ---- Circuit breaker ----
+import { CircuitBreaker, matchBreakRule } from '../src/breaker.ts'
+
+const RULES = [
+  { code: 'AUTH', message: '', cooldownSeconds: 3600 },
+  { code: 'RATE_LIMIT', message: '', cooldownSeconds: 60 },
+  { code: '', message: 'quota', cooldownSeconds: 7200 },
+]
+
+test('matchBreakRule matches on code alone', () => {
+  assert.equal(matchBreakRule('RATE_LIMIT', 'too many requests', RULES), 60)
+  assert.equal(matchBreakRule('AUTH', 'bad key', RULES), 3600)
+})
+
+test('matchBreakRule matches on message when the code says nothing', () => {
+  assert.equal(matchBreakRule('PROVIDER_SPECIFIC', 'monthly quota exceeded', RULES), 7200)
+})
+
+test('matchBreakRule requires every filled field to match', () => {
+  const both = [{ code: 'SERVER', message: 'overloaded', cooldownSeconds: 30 }]
+  assert.equal(matchBreakRule('SERVER', 'upstream overloaded', both), 30)
+  assert.equal(matchBreakRule('SERVER', 'connection reset', both), undefined)
+  assert.equal(matchBreakRule('TIMEOUT', 'upstream overloaded', both), undefined)
+})
+
+test('matchBreakRule returns undefined for a failure no rule names', () => {
+  assert.equal(matchBreakRule('SERVER', 'internal error', RULES), undefined)
+  assert.equal(matchBreakRule('ABORTED', 'user aborted', RULES), undefined)
+})
+
+test('matchBreakRule takes the first matching rule', () => {
+  const ordered = [
+    { code: '', message: 'e', cooldownSeconds: 10 },
+    { code: 'SERVER', message: '', cooldownSeconds: 20 },
+  ]
+  assert.equal(matchBreakRule('SERVER', 'internal error', ordered), 10)
+})
+
+test('CircuitBreaker blocks a matched route and lifts it when the cooldown ends', () => {
+  const breaker = new CircuitBreaker()
+  const t0 = 1_000_000
+  assert.equal(breaker.note('real-a', 'm1', 'AUTH', 'bad key', RULES, t0)?.until, t0 + 3_600_000)
+  assert.equal(breaker.blockedUntil('real-a', 'm1', t0 + 1_000), t0 + 3_600_000)
+  // 冷却到了就自动放行——不是永久拉黑。
+  assert.equal(breaker.blockedUntil('real-a', 'm1', t0 + 3_600_001), undefined)
+})
+
+test('CircuitBreaker leaves an unmatched failure alone', () => {
+  const breaker = new CircuitBreaker()
+  assert.equal(breaker.note('real-a', 'm1', 'SERVER', 'boom', RULES, 1000), undefined)
+  assert.equal(breaker.blockedUntil('real-a', 'm1', 2000), undefined)
+})
+
+test('CircuitBreaker blocks per route, not per provider', () => {
+  const breaker = new CircuitBreaker()
+  breaker.note('real-a', 'm1', 'AUTH', 'bad key', RULES, 1000)
+  assert.equal(breaker.blockedUntil('real-a', 'm2', 2000), undefined)
+  assert.equal(breaker.blockedUntil('real-b', 'm1', 2000), undefined)
+})
+
+test('CircuitBreaker.sweep drops expired blocks only', () => {
+  const breaker = new CircuitBreaker()
+  breaker.note('p', 'short', 'RATE_LIMIT', 'x', RULES, 0)      //  lifts at 60s
+  breaker.note('p', 'long', 'AUTH', 'x', RULES, 0)      //  lifts at 3600s
+  breaker.sweep(61_000)
+  assert.equal(breaker.blockedUntil('p', 'short', 62_000), undefined)
+  assert.equal(breaker.blockedUntil('p', 'long', 62_000), 3_600_000)
+})
+
+test('breakerNotice states the remaining cooldown', () => {
+  const text = breakerNotice({ provider: 'real-a', model: 'm1' }, 10_500, 10_000)
+  const rendered = text.content.find(block => block.type === 'text').text
+  assert.ok(rendered.includes('已被自动禁用'))
+  assert.ok(rendered.includes('1 秒后自动重试'))
+})
+
+// ---- config round-trip: the shape the client saves must land where the host reads ----
+import { Config } from '../src/config.ts'
+
+const hostConfig = raw => {
+  const c = Config(raw)
+  return {
+    health: c.health.get(),
+    default: c.default.get(),
+  }
+}
+
+test('the client save shape lands where the host reads it', () => {
+  // 这正是 client.js 的 save() 写进去的形状：四档全在 health 底下。
+  // 曾经 breaker 被提到顶层 schema，客户端却存进 health——保存成功、Host 读到
+  // 默认值，整个功能静默失效。这条用例守住那个错误。
+  const raw = {
+    enabled: true,
+    profiles: [],
+    default: { enabled: false, candidates: [], switchOn: {}, maxTotalAttempts: 3, strategy: 'order' },
+    health: {
+      passive: true,
+      discover: { enabled: true, intervalSeconds: 5 },
+      probe: { enabled: true, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 },
+      breaker: { enabled: true, rules: [{ code: 'AUTH', message: '', cooldownSeconds: 3600 }] },
+    },
+  }
+  const seen = hostConfig(raw)
+  assert.equal(seen.health.breaker.enabled, true)
+  assert.equal(seen.health.breaker.rules.length, 1)
+  assert.equal(seen.health.breaker.rules[0].code, 'AUTH')
+  assert.equal(seen.health.discover.intervalSeconds, 5)
+})
+
+test('a legacy flat health config keeps its schedule by converting minutes to seconds', () => {
+  const seen = hostConfig({
+    enabled: true,
+    profiles: [],
+    default: { enabled: false, candidates: [], switchOn: {}, maxTotalAttempts: 3, strategy: 'order' },
+    health: { enabled: true, prompt: 'hi', intervalMinutes: 5, timeoutSeconds: 8 },
+  })
+  // normalizeHealth 负责迁移；这里断言的是 Host 不会因为旧形状而丢字段或报错。
+  assert.ok(seen.health.discover !== undefined)
+  assert.ok(seen.health.probe !== undefined)
+})
+
+test('assertStructural rejects a weight strategy with no positive weight', () => {
+  const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+  const base = { profiles: [], default: { enabled: false, candidates: [], switchOn: so, maxTotalAttempts: 3, strategy: 'weight' } }
+  assert.throws(() => assertStructural(base), /weight strategy but no candidate has a positive weight/)
+  assert.doesNotThrow(() => assertStructural({
+    ...base,
+    default: { ...base.default, candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 5 }] },
+  }))
+})
+
+test('assertStructural rejects a breaker rule that matches nothing', () => {
+  const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+  const emptyPool = { enabled: false, candidates: [], switchOn: so, maxTotalAttempts: 3, strategy: 'order' }
+  assert.throws(() => assertStructural({
+    profiles: [],
+    default: emptyPool,
+    health: { passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker: { enabled: true, rules: [{ code: '', message: '', cooldownSeconds: 60 }] } },
+  }), /matches nothing/)
+  // 关着的时候不校验——没启用的规则不该挡住保存。
+  assert.doesNotThrow(() => assertStructural({
+    profiles: [],
+    default: emptyPool,
+    health: { passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker: { enabled: false, rules: [{ code: '', message: '', cooldownSeconds: 60 }] } },
+  }))
+})
+
+test('classifyHealth uses DSH own codes, not invented ones', () => {
+  // DSH 的码是 AUTH / QUOTA（llm/src/error.ts 的 QUOTA_EXCEEDED_CODE），
+  // 全树没有 AUTH_FAILED。写成不存在的码会让密钥失效永远不标记渠道异常。
+  assert.equal(classifyHealth('AUTH'), 'unhealthy')
+  assert.equal(classifyHealth('QUOTA'), 'unhealthy')
+  assert.equal(classifyHealth('AUTH_FAILED'), undefined)
+  assert.equal(classifyHealth('QUOTA_EXCEEDED'), undefined)
 })
 
 console.log(`\n${passed} unit test(s) passed`)
@@ -268,92 +491,97 @@ test('projection key is namespaced and stateVersion is a positive integer', () =
   assert.ok(Number.isSafeInteger(failoverHistoryProjection.stateVersion) && failoverHistoryProjection.stateVersion >= 1)
 })
 
-// ---- Health Monitoring unit tests ----
-import { HealthMonitor, classifyHealth, routeKeyOf, channelHealthProjection, CHANNEL_HEALTH_KEY, pushTimelinePoint, MAX_TIMELINE_POINTS } from '../src/health.ts'
+// ---- Channel Health unit tests ----
+import { classifyHealth, routeKeyOf, channelHealthProjection, CHANNEL_HEALTH_KEY, pushTimelinePoint, MAX_TIMELINE_POINTS } from '../src/health.ts'
 
-test('pushTimelinePoint caps at 24 points and recalculates availability percentage', () => {
+test('pushTimelinePoint caps the window at MAX_TIMELINE_POINTS', () => {
   let timeline
-  let availabilityPct
   for (let i = 0; i < 30; i++) {
-    const res = pushTimelinePoint(timeline, {
+    timeline = pushTimelinePoint(timeline, {
       time: 1000 + i * 10,
       status: i % 2 === 0 ? 'healthy' : 'degraded',
       latencyMs: 100,
     })
-    timeline = res.timeline
-    availabilityPct = res.availabilityPct
   }
   assert.equal(timeline.length, MAX_TIMELINE_POINTS)
   assert.equal(timeline.length, 24)
-  // In the last 24 items (i = 6..29), exactly 12 are even (healthy), so 12/24 = 50%
-  assert.equal(availabilityPct, 50)
+  // The oldest points are the ones dropped, so the survivor is the newest.
+  assert.equal(timeline[timeline.length - 1].time, 1000 + 29 * 10)
+  assert.equal(timeline[0].time, 1000 + 6 * 10)
 })
 
-test('channelHealthProjection calculates throughput from real assistant/message tokens', () => {
+test('pushTimelinePoint does not mutate the timeline it was given', () => {
+  const original = [{ time: 1, status: 'healthy' }]
+  const next = pushTimelinePoint(original, { time: 2, status: 'healthy' })
+  assert.equal(original.length, 1)
+  assert.equal(next.length, 2)
+})
+
+test('channelHealthProjection reads throughput from the usage beside message', () => {
   let state = channelHealthProjection.init()
   state = channelHealthProjection.apply(state, {
     type: 'request/header',
     time: 1000,
     data: { reason: 'initial', header: { config: { provider: 'prov-fast', model: 'mod-fast' } } },
   })
-  // 100 tokens generated in 0.5s = 200 tok/s
+  // 100 tokens over the 500ms the turn took = 200 tok/s.
+  // `usage` is a sibling of `message` on the event data — core/session/src/types.ts:341-349.
   state = channelHealthProjection.apply(state, {
     type: 'assistant/message',
     time: 1500,
     data: {
-      message: {
-        source: { provider: 'prov-fast', model: 'mod-fast' },
-        usage: { outputTokens: 100 },
-      },
+      turn: 1,
+      step: 1,
+      message: { id: 'm1', role: 'assistant', content: [], source: { kind: 'model', provider: 'prov-fast', model: 'mod-fast' } },
+      stream: [],
+      usage: { inputTokens: 10, outputTokens: 100 },
     },
   })
   const rec = state.records['prov-fast/mod-fast']
   assert.ok(rec)
   assert.equal(rec.status, 'healthy')
+  assert.equal(rec.latencyMs, 500)
   assert.equal(rec.throughputTps, 200)
-  assert.equal(rec.timeline?.length, 1)
+  assert.equal(rec.timeline.length, 1)
   assert.equal(rec.timeline[0].throughputTps, 200)
 })
 
-test('classifyHealth classifies RATE_LIMIT as degraded and SERVER/TIMEOUT as unhealthy', () => {
+test('channelHealthProjection ignores usage nested inside message', () => {
+  // The wrong shape must yield no throughput rather than a silently wrong one:
+  // a fixture that restates the implementation proves nothing when it changes.
+  let state = channelHealthProjection.init()
+  state = channelHealthProjection.apply(state, {
+    type: 'request/header',
+    time: 1000,
+    data: { reason: 'initial', header: { config: { provider: 'prov-fast', model: 'mod-fast' } } },
+  })
+  state = channelHealthProjection.apply(state, {
+    type: 'assistant/message',
+    time: 1500,
+    data: { message: { usage: { outputTokens: 100 } }, stream: [] },
+  })
+  const rec = state.records['prov-fast/mod-fast']
+  assert.ok(rec)
+  assert.equal(rec.throughputTps, undefined)
+})
+
+test('classifyHealth scores only faults that belong to the channel', () => {
   assert.equal(classifyHealth('RATE_LIMIT'), 'degraded')
   assert.equal(classifyHealth('SERVER'), 'unhealthy')
   assert.equal(classifyHealth('TIMEOUT'), 'unhealthy')
   assert.equal(classifyHealth('TRANSPORT'), 'unhealthy')
-  assert.equal(classifyHealth('AUTH_FAILED'), 'unhealthy')
+  assert.equal(classifyHealth('AUTH'), 'unhealthy')
+  assert.equal(classifyHealth('QUOTA'), 'unhealthy')
+  // A rejected request, an empty reply and a user-initiated abort say nothing
+  // about the channel; scoring them would paint a working route red.
+  assert.equal(classifyHealth('INVALID_REQUEST'), undefined)
+  assert.equal(classifyHealth('EMPTY_RESPONSE'), undefined)
+  assert.equal(classifyHealth('ABORTED'), undefined)
+  assert.equal(classifyHealth('NO_ADAPTER'), undefined)
 })
 
 test('routeKeyOf formats provider and model as provider/model', () => {
   assert.equal(routeKeyOf('deepseek-official', 'deepseek-chat'), 'deepseek-official/deepseek-chat')
-})
-
-test('HealthMonitor passively notes successes and failures', () => {
-  const fakeCtx = { llm: {} }
-  const monitor = new HealthMonitor(fakeCtx)
-
-  monitor.noteSuccess('prov-a', 'mod-a', 150)
-  const recA = monitor.getRecord('prov-a', 'mod-a')
-  assert.ok(recA)
-  assert.equal(recA.status, 'healthy')
-  assert.equal(recA.latencyMs, 150)
-  assert.equal(recA.source, 'passive')
-
-  monitor.noteFailure('prov-b', 'mod-b', 'RATE_LIMIT', 300)
-  const recB = monitor.getRecord('prov-b', 'mod-b')
-  assert.ok(recB)
-  assert.equal(recB.status, 'degraded')
-  assert.equal(recB.lastError, 'RATE_LIMIT')
-
-  monitor.noteFailure('prov-c', 'mod-c', 'SERVER')
-  const recC = monitor.getRecord('prov-c', 'mod-c')
-  assert.ok(recC)
-  assert.equal(recC.status, 'unhealthy')
-  assert.equal(recC.lastError, 'SERVER')
-
-  const snap = monitor.getSnapshot()
-  assert.equal(Object.keys(snap).length, 3)
-  assert.equal(snap['prov-a/mod-a'].status, 'healthy')
-  monitor.dispose()
 })
 
 test('channelHealthProjection folds session headers and attempts into channel records', () => {
@@ -394,13 +622,62 @@ test('channelHealthProjection folds session headers and attempts into channel re
   state = channelHealthProjection.apply(state, {
     type: 'assistant/message',
     time: 2400,
-    data: { message: { source: { provider: 'prov-2', model: 'mod-2' } } },
+    data: { message: { content: [] }, stream: [], usage: { inputTokens: 5, outputTokens: 40 } },
   })
   assert.ok(state.records['prov-2/mod-2'])
   assert.equal(state.records['prov-2/mod-2'].status, 'healthy')
   assert.equal(state.records['prov-2/mod-2'].latencyMs, 400)
+  // 40 tokens over 400ms = 100 tok/s.
+  assert.equal(state.records['prov-2/mod-2'].throughputTps, 100)
+  // A settlement clears the error the failed attempt left behind.
+  assert.equal(state.records['prov-2/mod-2'].lastError, undefined)
 
   // Wire view returns records
   assert.equal(channelHealthProjection.wire.view(state), state.records)
+})
+
+test('channelHealthProjection leaves the record alone for a non-channel fault', () => {
+  let state = channelHealthProjection.init()
+  state = channelHealthProjection.apply(state, {
+    type: 'request/header',
+    time: 1000,
+    data: { reason: 'initial', header: { config: { provider: 'prov-1', model: 'mod-1' } } },
+  })
+  const before = state
+  state = channelHealthProjection.apply(state, {
+    type: 'assistant/attempt',
+    time: 1500,
+    data: {
+      turn: 1,
+      step: 1,
+      stream: [
+        { type: 'chunk', chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'INVALID_REQUEST' } } } },
+      ],
+    },
+  })
+  assert.deepEqual(state.records, {})
+  assert.equal(state, before)
+})
+
+test('channelHealthProjection returns the same state reference for events it ignores', () => {
+  const state = channelHealthProjection.init()
+  for (const type of ['turn/start', 'tool/call', 'user/message', 'step/start']) {
+    assert.equal(channelHealthProjection.apply(state, { type, time: 1, data: {} }), state)
+  }
+  // A settlement with no preceding header has no route to attribute to.
+  assert.equal(
+    channelHealthProjection.apply(state, { type: 'assistant/message', time: 1, data: { message: {}, stream: [] } }),
+    state,
+  )
+})
+
+test('channelHealthProjection tolerates a header that names no route', () => {
+  const state = channelHealthProjection.init()
+  const next = channelHealthProjection.apply(state, {
+    type: 'request/header',
+    time: 1,
+    data: { reason: 'initial', header: { config: { provider: '', model: '' } } },
+  })
+  assert.equal(next, state)
 })
 

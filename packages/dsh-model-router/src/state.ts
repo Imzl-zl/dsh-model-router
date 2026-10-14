@@ -16,13 +16,21 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import type { Candidate, SwitchOn } from './config.ts'
+import type { Candidate, Strategy, SwitchOn } from './config.ts'
 
 /** The candidate chain snapshot for one step, frozen at the step's first request. */
 export interface StepChain {
   readonly candidates: readonly Candidate[]
+  /**
+   * 每条候选在用户列表里的原始下标，与 `candidates` 平行。
+   *
+   * 策略决定起点后链会被旋转，`index` 指的是旋转后的位置；界面和通知要说的
+   * "第几条"必须是用户自己排的那一套，否则用户会看到对不上的编号。
+   */
+  readonly order: readonly number[]
   readonly switchOn: SwitchOn
   readonly maxTotalAttempts: number
+  readonly strategy: Strategy
 }
 
 /** Mutable per-step cursor. Owned by the router; never shared across Agents. */
@@ -77,6 +85,11 @@ export class RouterState {
   private readonly steps = new WeakMap<Agent, StepState>()
   private readonly failures = new WeakMap<Session, FailureNote>()
   private readonly conditions = new WeakMap<Agent, StepConditions & { turn: number; step: number }>()
+  /**
+   * 轮询游标，按会话各自计数：同时开几个聊天窗口时互不干扰，也天然随会话结束重置。
+   * 进程重启归零——轮询是分配手段，不是需要记住的状态。
+   */
+  private readonly cursors = new WeakMap<Session, number>()
 
   /** The state for this (agent, turn, step), or undefined when the slot moved on. */
   current(agent: Agent, turn: number, step: number): StepState | undefined {
@@ -111,6 +124,17 @@ export class RouterState {
     const note = this.conditions.get(agent)
     if (note === undefined || note.turn !== turn || note.step !== step) return emptyConditions()
     return { hasImages: note.hasImages, projectedTokens: note.projectedTokens }
+  }
+
+  /**
+   * 取本会话的下一个轮询游标并前进一位。只有「轮询」策略会读它；其他策略下
+   * 它照样计数，代价是一次 Map 读写，换来的是切换策略时不必解释计数从哪开始。
+   */
+  nextCursor(session: Session, size: number): number {
+    if (size <= 0) return 0
+    const current = this.cursors.get(session) ?? 0
+    this.cursors.set(session, current + 1)
+    return current % size
   }
 }
 

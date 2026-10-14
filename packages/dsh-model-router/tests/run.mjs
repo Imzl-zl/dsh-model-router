@@ -43,6 +43,12 @@ function profile(candidates, overrides = {}) {
 
 const C = (provider, maxAttempts = 1) => ({ provider, model: 'stub-model', maxAttempts })
 
+// The health projection folds the real durable log, so the fold is asserted
+// against events a real boot produced rather than a hand-made fixture. This is
+// the check that catches a wrong assumption about an event's shape: the usage a
+// settlement reports sits beside `message`, and only real events carry it there.
+import { channelHealthProjection } from '../src/health.ts'
+
 const SCENARIOS = [
   {
     name: 'primary-success',
@@ -76,6 +82,17 @@ const SCENARIOS = [
       ok('notice names candidate 2/2', notices(events)[0]?.text.includes('候选 2/2'))
       eq('final route', finalRoute(events), 'stub-backup/stub-model')
       eq('turn end', turnEnd(events), 'completed')
+      // Channel health, folded from the same durable log by the production
+      // projection: the throttled route degrades, the route that answered is
+      // healthy, and a route nobody used has no record at all.
+      const health = channelHealth(events)
+      eq('health: throttled route degrades', health['stub-primary/stub-model']?.status, 'degraded')
+      eq('health: throttled route keeps the code', health['stub-primary/stub-model']?.lastError, 'RATE_LIMIT')
+      eq('health: answering route is healthy', health['stub-backup/stub-model']?.status, 'healthy')
+      eq('health: answering route clears the error', health['stub-backup/stub-model']?.lastError, undefined)
+      ok('health: answering route measures a turn cost', typeof health['stub-backup/stub-model']?.latencyMs === 'number')
+      ok('health: answering route measures throughput', typeof health['stub-backup/stub-model']?.throughputTps === 'number')
+      eq('health: timeline is bounded', health['stub-primary/stub-model']?.timeline.length, 2)
     },
   },
   {
@@ -179,6 +196,33 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'breaker-does-not-break-failover',
+    note: '自动禁用开着也不破坏正常故障转移（跨 step 的跳过由单测覆盖）',
+    // 这个 harness 一次 boot 只有一个 step（stub 不调工具），而熔断的"下一轮跳过"
+    // 本质是跨 step 行为，所以端到端只能断言"开着熔断不坏事"。跳过逻辑本身在
+    // unit.mjs 的 CircuitBreaker 用例里覆盖。
+    router: {
+      enabled: true,
+      profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      breaker: { enabled: true, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 3600 }] },
+    },
+    script: {
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT', 'RATE_LIMIT'])
+      eq('notice count', notices(events).length, 1)
+      ok('notice mentions 限流', notices(events)[0]?.text.includes('限流'))
+      // 用户自己选的那一条永远不跳过——禁用名单不该能覆盖人的显式选择。
+      eq('no breaker notice in a single-step boot', notices(events).filter(n => n.text.includes('已被自动禁用')).length, 0)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'invalid-config-rejected',
     note: '结构错误（重复 ID）在加载时响亮失败，不静默跳过',
     router: { enabled: true, profiles: [profile([C('stub-primary', 1)], { id: 'dup' }), profile([C('stub-backup', 1)], { id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
@@ -236,6 +280,11 @@ ${p.candidates.map(c => candidateYaml(c, '              ')).join('\n')}
 ${router.default.candidates.map(c => candidateYaml(c, '            ')).join('\n')}
           switchOn: { rateLimit: ${router.default.switchOn.rateLimit}, server: ${router.default.switchOn.server}, timeout: ${router.default.switchOn.timeout}, transport: ${router.default.switchOn.transport}, emptyResponse: ${router.default.switchOn.emptyResponse}, invalidRequest: ${router.default.switchOn.invalidRequest} }
           maxTotalAttempts: ${router.default.maxTotalAttempts}
+${router.breaker === undefined ? '' : `        health:
+          breaker:
+            enabled: ${router.breaker.enabled}
+            rules:
+${router.breaker.rules.map(r => `              - { code: '${r.code}', message: '${r.message}', cooldownSeconds: ${r.cooldownSeconds} }`).join('\n')}`}
 `
 }
 
@@ -295,6 +344,13 @@ const finalRoute = events => {
 }
 
 const turnEnd = events => events.filter(e => e.type === 'turn/end').at(-1)?.data.reason.kind
+
+/** Fold one boot's durable log through the real health projection. */
+const channelHealth = events => {
+  let state = channelHealthProjection.init()
+  for (const event of events) state = channelHealthProjection.apply(state, event)
+  return state.records
+}
 
 // ---------- assertions ----------
 

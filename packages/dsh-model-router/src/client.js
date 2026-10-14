@@ -61,6 +61,16 @@ window.__ModuleLoader__.load({
       candidateCountTag: '{n} 候选',
       deleteProfileBtn: '删除此规则',
       pipelineTitle: '降级链路 (Fallback Chain)',
+      strategyLabel: '选路策略',
+      strategySharedHint: '三种策略只决定「从哪条渠道开始」；任一渠道失败，都会继续尝试链上其余渠道，直到成功或用尽预算。',
+      strategyorder: '按顺序',
+      strategyweight: '按权重',
+      'strategyround-robin': '轮询',
+      strategyHintorder: '永远从第一条开始。最可预测，出问题时一眼能看懂它会怎么走。',
+      strategyHintweight: '按权重比例随机选起点。适合把负载摊到多个渠道，比如免费渠道 30%、稳定渠道 70%。注意：换了渠道 prompt 缓存就废了，每条请求都在丢缓存。',
+      'strategyHintround-robin': '每条请求顺移到下一条起点。适合后端完全对等的场景；渠道不对等时通常不如按权重，而且同样每条都丢缓存。',
+      weightLabel: '权重',
+      weightHint: '只有「按权重」策略会读这个数；0 表示永远不会被选为起点，但别的渠道失败后仍可能试到它',
       pipelineSubtitle: '请求优先发送至首选主渠道。若达到单渠道尝试上限或触发指定异常，将自动流转至下一备用渠道。',
       primaryModelBadge: '用户默认首选',
       singleAttemptLimit: '单渠道尝试',
@@ -95,7 +105,7 @@ window.__ModuleLoader__.load({
       invalidRequestName: '请求被拒绝 / 能力不兼容',
       invalidRequestDesc: '工具等能力不被候选支持时出现；分类依赖 provider，不保证精确。',
       safetyNoticeTitle: '零浪费熔断安全机制：',
-      safetyNoticeText: '用户主动中断 (ABORTED)、凭证失效 (AUTH_FAILED) 及不可达的模型配置 (NO_ADAPTER) 属于永久性错误，将绝不进行盲目转移，立即向用户提示。',
+      safetyNoticeText: '用户主动中断 (ABORTED)、凭证或权限被拒 (AUTH) 及不可达的模型配置 (NO_ADAPTER) 属于永久性错误，将绝不进行盲目转移，立即向用户提示。',
       budgetTitle: '重试预算与退避 (Execution Budget)',
       budgetSubtitle: '防止坏请求陷入无限重试死循环，限制单个 Agent 轮次的总调用成本。',
       maxTotalAttempts: '单请求最多总尝试次数',
@@ -118,11 +128,12 @@ window.__ModuleLoader__.load({
       templateCopy: '复制现有的规则候选链',
       confirmCreateProfile: '确认创建规则',
       manualModalTitle: '手动添加候选渠道',
-      providerLabel: 'Provider 标识 (提供方 ID)',
-      providerHint: '需与 DSH 已注册的 Adapter 或官方 Provider 标识一致。',
-      providerUnregistered: '该 provider 未在已注册列表中找到，保存后将被运行时跳过',
+      providerLabel: '渠道 (Provider)',
+      providerSelectHint: '只能从 DSH 已注册的渠道里选——写错的名字不会报错，只会在运行时被静默跳过，所以这里不给你打错的机会。',
+      providerPickPlaceholder: '-- 选择一个已注册的渠道 --',
+      manualNoRegisteredProvider: 'DSH 里还没有已注册的渠道。请先到「设置 → Models」添加一个 provider，再回来加候选。',
       modelIdLabel: '模型 ID (Model ID)',
-      modelIdHint: '该 Provider 支持的具体物理模型名称。',
+      modelIdFreeHint: '自由输入。网关支持的模型常常不在任何目录里，所以这里不限制；输入框会按所选渠道的目录模型给建议。',
       confirmAddManual: '添加至链路',
       catalogModalTitle: '从模型目录添加候选',
       searchModelPlaceholder: '按模型名称或 Provider 搜索...',
@@ -158,6 +169,8 @@ window.__ModuleLoader__.load({
       problemEmptyRoute: '规则 {id} 的第 {index} 个候选缺少 provider 或模型 ID',
       problemBadTotal: '规则 {id} 的总尝试上限必须 ≥ 1',
       problemBadDefaultTotal: '全局兜底的总尝试上限必须 ≥ 1',
+      problemWeightNoPositive: '选路策略是「按权重」，但没有任何候选的权重大于 0——这样永远从第一条开始，等于没配',
+      problemBreakerEmptyRule: '自动禁用里有一条规则既没填错误码也没填错误信息，它永远命中不了任何东西',
       formUnavailable: '配置当前不可用',
       formReadOnly: '当前配置为只读',
       formSaveFailed: '保存失败，请重试',
@@ -181,27 +194,51 @@ window.__ModuleLoader__.load({
       stepPlus: '增加重试次数',
       savedStateTip: '配置已是最新',
       healthSectionTitle: '渠道健康监控',
-      healthEnabledLabel: '启用健康监控',
-      healthPromptLabel: '探测消息内容 (Prompt)',
-      healthPromptHint: '发送极小 Token 消息探测渠道存活。可自定义以避开特定渠道违禁词拦截（默认 "hi"）',
-      healthIntervalLabel: '自动探测周期 (分钟)',
-      healthIntervalHint: '设为 0 表示仅手动探测与对话被动记录，不产生后台 Token 费用',
-      healthTimeoutLabel: '单次探测超时 (秒)',
-      healthTimeoutHint: '单渠道探测超时限制（默认 8 秒）',
-      probeAllBtn: '探测全部渠道',
-      probingText: '探测中...',
-      probeDoneNotice: '全部渠道探测完成',
+      healthTiersIntro: '三档各自独立，按你需要的开。「运行时记录」免费，但只能反映已经发生过的事；「连通性检查」不生成内容、不花 Token，能知道渠道现在通不通；「发送测试消息」是真的发一条消息，也是唯一能证明模型真能出字的方式，但要花 Token。插件不替你选。',
+      healthPassiveLabel: '运行时记录',
+      healthPassiveHint: '正常对话的结果自动记入渠道健康，零成本、不发任何额外请求。缺点是要等事情发生过才知道。',
+      healthDiscoverLabel: '连通性检查',
+      healthDiscoverHint: '向渠道要一份模型清单（DSH 原生接口，不生成内容）。能发现端点不通、密钥失效、模型不在清单里；不花 Token。',
+      healthDiscoverIntervalLabel: '检查周期 (秒)',
+      healthDiscoverIntervalHint: '0 表示只手动跑，不后台轮询。定时只在 DSH 界面开着的时候跑；限流是每个渠道各自的，按你自己渠道的承受能力设，多密都行',
+      healthProbeLabel: '发送测试消息',
+      healthProbeUnavailable: '需要一条从浏览器到服务器的通道才能触发和回收结果。DSH 的插件远程接口要求构建管线生成的 Typert 贡献，而这个插件是手写单文件、没有构建步骤——所以这一档的开关和配置先不做，等构建管线就绪再开。',
+      healthProbeHint: '真的发一条最小消息。配额打满、上游容量不足、模型被下线但仍在清单里，只有这个能发现。会花 Token，所以默认关闭。',
+      breakerLabel: '自动禁用',
+      breakerHint: '渠道命中规则后凉一段时间，冷却到了自动放行重试——不是永久拉黑',
+      breakerSharedHint: '禁用是"过一会儿再试"：冷却结束后的下一个请求会真的去试它，又失败就再禁。用户自己选的那一条永远不跳过。',
+      breakerRulesLabel: '禁用规则',
+      breakerRulesHint: '错误码精确匹配 + 错误信息包含匹配，填几个就按几个匹配，都填就是两条都要满足。码可以手输任意值——常用码只是快捷方式。',
+      breakerCodeLabel: '错误码（精确匹配，可留空）',
+      breakerCodePlaceholder: '例如 AUTH',
+      breakerMessageLabel: '错误信息包含（可留空）',
+      breakerMessagePlaceholder: '例如 quota',
+      breakerCooldownLabel: '禁用时长（秒）',
+      breakerSecondsUnit: '秒',
+      breakerAddRule: '+ 添加规则',
+      breakerRemoveRule: '删除这条规则',
+      breakerAlreadyAdded: '已经加过了',
+      checkAllBtn: '检查全部渠道',
+      checkingText: '检查中...',
       healthStatusHealthy: '正常',
       healthStatusDegraded: '降级',
       healthStatusUnhealthy: '异常',
       healthStatusUnknown: '未探测',
       healthConfigBtn: '健康监控设置',
-      healthModalTitle: '渠道健康监控与探测设置',
-      healthPassiveHint: '💡 零消耗机制：对话过程中成功的请求自动标记正常并记录延迟；异常错误（429/500/超时）自动标记降级或异常，日常使用不产生任何额外 Token 费用。主动探测仅消耗 1 Token 并于首字到达时立即断开。',
-      healthMetricStatus: '状态',
-      healthMetricLatency: '延迟',
+      healthModalTitle: '渠道健康监控',
+      healthMetricHistory: '近期记录',
+      healthMetricLatency: '整轮耗时',
       healthMetricThroughput: '吞吐',
       healthBarIdle: '暂无请求 / 闲置时段',
+      passiveDotTitle: '运行时记录',
+      passiveNeverObserved: '运行时记录：这个渠道还没有被真实对话用过',
+      connectivityNotRun: '连通性检查：还没跑过',
+      connectivityReachable: '连通性检查：端点应答，且这个模型在它的清单里',
+      connectivityNotAdvertised: '连通性检查：端点应答，但这个模型不在它的清单里',
+      connectivityAdvertisedCount: '清单里有',
+      connectivityNotConfigurable: '连通性检查：这个渠道不是可配置 provider，问不出端点',
+      connectivityUnavailable: '连通性检查：DSH 的发现接口当前不可用',
+      connectivityUnreachable: '连通性检查：端点没应答',
     }
     var en = {
       pluginTitle: 'Model Router',
@@ -214,6 +251,16 @@ window.__ModuleLoader__.load({
       candidateCountTag: '{n} candidates',
       deleteProfileBtn: 'Delete this profile',
       pipelineTitle: 'Fallback Chain Pipeline',
+      strategyLabel: 'Start strategy',
+      strategySharedHint: 'The three strategies decide one thing only: where the chain starts. Any channel that fails still hands off to the rest of the chain, until one answers or the budget runs out.',
+      strategyorder: 'In order',
+      strategyweight: 'By weight',
+      'strategyround-robin': 'Round-robin',
+      strategyHintorder: 'Always start at the first entry. The most predictable — when something breaks you can read the order and know exactly what it will do.',
+      strategyHintweight: 'Draw the start by weight. For spreading load across channels, e.g. free 30% / stable 70%. Note: switching channels throws away the prompt cache, so every request pays a cache miss.',
+      'strategyHintround-robin': 'Move the start one step per request. For genuinely interchangeable backends; with unequal channels "by weight" is usually better, and it costs a cache miss on every request too.',
+      weightLabel: 'Weight',
+      weightHint: 'Only the "by weight" strategy reads this. 0 means never chosen as the start, but it can still be tried after another channel fails.',
       pipelineSubtitle: 'Requests route to the primary channel first. On failure reaching the attempt limit, flow steps down to the next fallback candidate.',
       primaryModelBadge: 'Primary Choice',
       singleAttemptLimit: 'Attempts per candidate',
@@ -248,7 +295,7 @@ window.__ModuleLoader__.load({
       invalidRequestName: 'Request Rejected / Incompatible',
       invalidRequestDesc: 'Raised when a capability like tools is unsupported; classification is provider-dependent.',
       safetyNoticeTitle: 'Zero-Waste Circuit Breaker:',
-      safetyNoticeText: 'Permanent failures such as User Abort (ABORTED), Bad Credentials (AUTH_FAILED), or Missing Adapter (NO_ADAPTER) will NEVER failover blindly.',
+      safetyNoticeText: 'Permanent failures such as User Abort (ABORTED), Rejected Credentials (AUTH), or Missing Adapter (NO_ADAPTER) will NEVER failover blindly.',
       budgetTitle: 'Execution Budget & Backoff',
       budgetSubtitle: 'Prevents infinite retry loops and bounds total token invocation costs.',
       maxTotalAttempts: 'Max total attempts per request',
@@ -271,11 +318,12 @@ window.__ModuleLoader__.load({
       templateCopy: 'Copy an existing profile chain',
       confirmCreateProfile: 'Create Profile',
       manualModalTitle: 'Add Custom Channel Manually',
-      providerLabel: 'Provider Identifier',
-      providerHint: 'Must match a registered DSH adapter or official provider id.',
-      providerUnregistered: 'This provider is not in the registered list; it will be skipped at runtime',
-      modelIdLabel: 'Model Identifier',
-      modelIdHint: 'The exact physical model name this provider accepts.',
+      providerLabel: 'Channel (provider)',
+      providerSelectHint: 'Pick from the channels DSH has registered. A mistyped name would not error — it would just be skipped at runtime — so this does not give you the chance to mistype it.',
+      providerPickPlaceholder: '-- Pick a registered channel --',
+      manualNoRegisteredProvider: 'DSH has no registered channel yet. Add one under Settings → Models first, then come back to add candidates.',
+      modelIdLabel: 'Model ID',
+      modelIdFreeHint: 'Free text. Gateways often serve models no catalog lists, so this is not restricted; the field suggests the selected channel\'s catalog models.',
       confirmAddManual: 'Add to Chain',
       catalogModalTitle: 'Add Candidates from Catalog',
       searchModelPlaceholder: 'Search model name or provider...',
@@ -311,6 +359,8 @@ window.__ModuleLoader__.load({
       problemEmptyRoute: 'Profile {id} candidate {index} is missing provider or model id',
       problemBadTotal: 'Profile {id} maxTotalAttempts must be >= 1',
       problemBadDefaultTotal: 'The default pool maxTotalAttempts must be >= 1',
+      problemWeightNoPositive: 'The start strategy is "by weight" but no candidate has a positive weight — every request would start at the first entry, which is the same as not configuring it.',
+      problemBreakerEmptyRule: 'One auto-disable rule has neither a code nor a message, so it can never match anything.',
       formUnavailable: 'Configuration is currently unavailable',
       formReadOnly: 'The configuration is read-only',
       formSaveFailed: 'Save failed, please retry',
@@ -334,28 +384,68 @@ window.__ModuleLoader__.load({
       stepPlus: 'Increase attempts',
       savedStateTip: 'Up to date',
       healthSectionTitle: 'Channel Health Monitor',
-      healthEnabledLabel: 'Enable Health Monitoring',
-      healthPromptLabel: 'Probe Prompt',
-      healthPromptHint: 'Sends minimal token prompt. Customize to avoid provider content filter rejections (default "hi").',
-      healthIntervalLabel: 'Auto Probe Interval (min)',
-      healthIntervalHint: 'Set 0 for manual/passive only; avoids background token costs.',
-      healthTimeoutLabel: 'Probe Timeout (sec)',
-      healthTimeoutHint: 'Per-channel timeout limit (default 8s).',
-      probeAllBtn: 'Probe All Channels',
-      probingText: 'Probing...',
-      probeDoneNotice: 'All channels probed successfully',
+      healthTiersIntro: 'Three independent tiers — enable what you need. Runtime observation is free but only knows the past. A connectivity check sends no content and costs no tokens, and tells you whether the channel answers right now. Sending a test message really sends one, and is the only thing that proves a model can answer — but it costs tokens. The plugin does not choose for you.',
+      healthPassiveLabel: 'Runtime observation',
+      healthPassiveHint: 'Real conversation outcomes folded into channel health. Zero cost, no extra requests — but you only learn about something after it happened.',
+      healthDiscoverLabel: 'Connectivity check',
+      healthDiscoverHint: 'Ask each channel for its model list through DSH\'s own discovery interface. Catches a dead endpoint, a bad key, or a model missing from the list. Costs no tokens.',
+      healthDiscoverIntervalLabel: 'Check interval (sec)',
+      healthDiscoverIntervalHint: '0 means manual only. The schedule runs while the DSH UI is open; rate limits are per channel, so set whatever your own channels tolerate',
+      healthProbeLabel: 'Send a test message',
+      healthProbeUnavailable: 'Triggering this and reading its result back both need a browser-to-host channel. DSH\'s plugin remote interface requires a Typert contribution generated by the build pipeline, and this plugin is a hand-written single file with no build step — so this tier\'s switch and settings stay off until that exists.',
+      healthProbeHint: 'Actually send one minimal message. An exhausted quota, an upstream capacity shortage, or a model delisted but still advertised — only this catches those. Costs tokens, so it is off by default.',
+      breakerLabel: 'Auto-disable',
+      breakerHint: 'Take a channel out of rotation when it fails in a way you said should disqualify it. The block always expires — a cooldown, not a ban.',
+      breakerSharedHint: 'A block lifts on its own: the first request after the cooldown really tries the channel again, and a fresh failure re-arms it. The route you picked yourself is never skipped.',
+      breakerRulesLabel: 'Disable rules',
+      breakerRulesHint: 'Match on the error code exactly and/or the error message containing a string. Every field you fill must match. Any code can be typed — the presets are only shortcuts.',
+      breakerCodeLabel: 'Error code (exact, optional)',
+      breakerCodePlaceholder: 'e.g. AUTH',
+      breakerMessageLabel: 'Message contains (optional)',
+      breakerMessagePlaceholder: 'e.g. quota',
+      breakerCooldownLabel: 'Cooldown (seconds)',
+      breakerSecondsUnit: 'sec',
+      breakerAddRule: '+ Add rule',
+      breakerRemoveRule: 'Remove this rule',
+      breakerAlreadyAdded: 'Already added',
+      checkAllBtn: 'Check all channels',
+      checkingText: 'Checking...',
       healthStatusHealthy: 'Healthy',
       healthStatusDegraded: 'Degraded',
       healthStatusUnhealthy: 'Unhealthy',
       healthStatusUnknown: 'Untested',
       healthConfigBtn: 'Health Settings',
-      healthModalTitle: 'Channel Health & Proactive Probe Settings',
-      healthPassiveHint: '💡 Zero-Cost Mechanism: Successful conversation requests automatically record latency and mark channels healthy; failures (429/500/timeout) mark degraded/unhealthy. Active probes limit to 1 token and abort immediately on first token (TTFT).',
-      healthMetricStatus: 'Status',
-      healthMetricLatency: 'Latency',
+      healthModalTitle: 'Channel Health Monitor',
+      healthMetricHistory: 'Recent',
+      healthMetricLatency: 'Turn cost',
       healthMetricThroughput: 'Throughput',
       healthBarIdle: 'No requests / Idle',
+      passiveDotTitle: 'Runtime observation',
+      passiveNeverObserved: 'Runtime observation: no real conversation has used this channel yet',
+      connectivityNotRun: 'Connectivity check: not run yet',
+      connectivityReachable: 'Connectivity check: endpoint answered and this model is on its list',
+      connectivityNotAdvertised: 'Connectivity check: endpoint answered, but this model is not on its list',
+      connectivityAdvertisedCount: 'advertised',
+      connectivityNotConfigurable: 'Connectivity check: this route is not a configurable provider, so it has no endpoint to ask',
+      connectivityUnavailable: 'Connectivity check: DSH\'s discovery interface is unavailable',
+      connectivityUnreachable: 'Connectivity check: endpoint did not answer',
     }
+
+    /** The three start strategies, in the order the selector shows them. */
+    var STRATEGY_OPTIONS = ['order', 'weight', 'round-robin']
+
+    /**
+     * 常用错误码的快捷选项。只是少打几个字——错误码本身永远可以手输任何值，
+     * 因为 `LlmFailure.code` 是开放字符串，provider 自己的码也归它管。
+     */
+    var BREAKER_CODE_PRESETS = [
+      { code: 'RATE_LIMIT', desc: '限流，通常几十秒就恢复', seconds: 60 },
+      { code: 'SERVER', desc: '上游 5xx，几分钟', seconds: 300 },
+      { code: 'TIMEOUT', desc: '超时，几分钟', seconds: 300 },
+      { code: 'TRANSPORT', desc: '网络中断，几分钟', seconds: 300 },
+      { code: 'AUTH', desc: '密钥或权限被拒（DSH 对 401/403 都用这个码），禁到人改配置为止', seconds: 3600 },
+      { code: 'QUOTA', desc: '额度用尽（DSH 的 QUOTA_EXCEEDED_CODE），按账单周期', seconds: 7200 },
+    ]
 
     /** The six switchOn codes: `key` is the config field, `labelKey` the dictionary stem. */
     var SWITCH_ON_CODES = [
@@ -723,10 +813,12 @@ window.__ModuleLoader__.load({
       modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
       providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
       primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(16,185,129,0.12)', color: 'var(--dsw-alias-state-success, #10b981)', border: '0.5px solid rgba(16,185,129,0.3)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
-      healthBadgeHealthy: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(39, 174, 96, 0.12)', color: '#27ae60', border: '0.5px solid rgba(39, 174, 96, 0.3)', fontWeight: 600, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
-      healthBadgeDegraded: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(243, 156, 18, 0.12)', color: '#e67e22', border: '0.5px solid rgba(243, 156, 18, 0.3)', fontWeight: 600, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
-      healthBadgeUnhealthy: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(231, 76, 60, 0.12)', color: '#e74c3c', border: '0.5px solid rgba(231, 76, 60, 0.3)', fontWeight: 600, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
-      healthBadgeUnknown: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-tertiary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'help' },
+      healthDots: { display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 },
+      healthDot: { width: 7, height: 7, borderRadius: '50%', display: 'inline-block', flexShrink: 0, cursor: 'help' },
+      dotHealthy: { background: 'var(--dsw-alias-state-success-primary, #22c55e)' },
+      dotDegraded: { background: 'var(--dsw-alias-state-warn-primary, #f59e0b)' },
+      dotUnhealthy: { background: 'var(--dsw-alias-state-error-primary, #ef4444)' },
+      dotUnknown: { background: 'var(--dsw-alias-bg-layer-4)', border: '0.5px solid var(--dsw-alias-border-l3)' },
       modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--ds-font-family-code, monospace)' },
       nodeTuning: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
       attemptPicker: { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 8px)', padding: '4px 10px', fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
@@ -907,6 +999,11 @@ window.__ModuleLoader__.load({
         boxSizing: 'border-box',
         flexWrap: 'wrap',
       },
+      healthTierCard: { background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 8px)', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 },
+      breakerChips: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+      chipBtn: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-secondary)', padding: '0 10px', height: 26, borderRadius: 'var(--dsw-radius-sm, 8px)', fontSize: 11.5, fontFamily: 'var(--ds-font-family-code, monospace)', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 },
+      breakerRuleRow: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' },
+      strategyRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' },
       metricsColStatus: {
         display: 'flex',
         flexDirection: 'column',
@@ -981,10 +1078,6 @@ window.__ModuleLoader__.load({
       if (typeof tps !== 'number' || isNaN(tps) || tps <= 0) return '—'
       return tps.toFixed(1) + 't/s'
     }
-    function formatAvailability(pct) {
-      if (typeof pct !== 'number' || isNaN(pct)) return '—'
-      return pct.toFixed(2) + '%'
-    }
     function formatTime(ts) {
       if (!ts) return ''
       var d = new Date(ts)
@@ -1016,7 +1109,65 @@ window.__ModuleLoader__.load({
         if (!(profile.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: { id: profile.id } })
       })
       if (!(draft.default.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadDefaultTotal', vars: {} })
+      // 与 host 的 assertStructural 保持同步：这里漏一条，用户就会存一个被 Host
+      // 拒绝、且看不到原因的配置。
+      if (draft.default.strategy === 'weight' && draft.default.candidates.every(function (c) { return !(c.weight > 0) })) {
+        problems.push({ key: 'problemWeightNoPositive', vars: {} })
+      }
+      var breaker = draft.health && draft.health.breaker
+      if (breaker && breaker.enabled) {
+        breaker.rules.forEach(function (rule) {
+          if (!rule.code && !rule.message) problems.push({ key: 'problemBreakerEmptyRule', vars: {} })
+        })
+      }
       return problems
+    }
+
+    /**
+     * The four health tiers with their defaults, tolerating a legacy flat shape.
+     *
+     * A config saved before the rework carried `health: { enabled, prompt,
+     * intervalMinutes, timeoutSeconds }`. Those minutes are converted rather than
+     * dropped — silently losing a user's schedule is the same class of bug as the
+     * save that never landed.
+     */
+    function normalizeHealth(value) {
+      var health = value || {}
+      var discover = health.discover || {}
+      var probe = health.probe || {}
+      var breaker = health.breaker || {}
+      // 旧字段是分钟，新字段是秒；只在没有新字段时采用，避免覆盖已迁移的值。
+      var legacyMinutes = typeof health.intervalMinutes === 'number' ? health.intervalMinutes : undefined
+      var discoverSeconds = typeof discover.intervalSeconds === 'number'
+        ? discover.intervalSeconds
+        : legacyMinutes !== undefined ? legacyMinutes * 60 : 0
+      var probeSeconds = typeof probe.intervalSeconds === 'number'
+        ? probe.intervalSeconds
+        : legacyMinutes !== undefined ? legacyMinutes * 60 : 0
+      return {
+        passive: health.passive !== false,
+        discover: {
+          enabled: discover.enabled === true,
+          intervalSeconds: discoverSeconds,
+        },
+        probe: {
+          enabled: probe.enabled === true,
+          intervalSeconds: probeSeconds,
+          prompt: typeof probe.prompt === 'string' && probe.prompt ? probe.prompt : '1',
+          prompts: Array.isArray(probe.prompts) ? probe.prompts.slice() : [],
+          timeoutSeconds: typeof probe.timeoutSeconds === 'number' ? probe.timeoutSeconds : 8,
+        },
+        breaker: {
+          enabled: breaker.enabled === true,
+          rules: Array.isArray(breaker.rules) ? breaker.rules.map(function (rule) {
+            return {
+              code: typeof rule.code === 'string' ? rule.code : '',
+              message: typeof rule.message === 'string' ? rule.message : '',
+              cooldownSeconds: typeof rule.cooldownSeconds === 'number' ? rule.cooldownSeconds : 300,
+            }
+          }) : [],
+        },
+      }
     }
 
     // ---------- controller ----------
@@ -1034,12 +1185,10 @@ window.__ModuleLoader__.load({
           enabled: value.enabled ?? true,
           profiles: clone(value.profiles ?? []),
           default: clone(value.default ?? defaultProfileValue()),
-          health: clone(value.health ?? {
-            enabled: true,
-            prompt: 'hi',
-            intervalMinutes: 0,
-            timeoutSeconds: 8,
-          }),
+          // A config saved by an older build carries the flat health shape; the
+          // three tiers are re-derived here so one old row cannot leave the UI
+          // reading `undefined` for a tier that has a perfectly good default.
+          health: normalizeHealth(value.health),
         }
       }
       var host = seed()
@@ -1056,8 +1205,13 @@ window.__ModuleLoader__.load({
         drawerLoading: false,
         drawerError: false,
         drawerRows: [],
-        healthRecords: {},
-        healthProbing: false,
+        // Passive observation, folded by the host projection out of real
+        // conversation outcomes. Keyed by route, merged across recent sessions.
+        passive: {},
+        // Verdicts from the last connectivity check, keyed by route. Ephemeral
+        // by nature: a check answers "right now", so it is never persisted.
+        discover: {},
+        checking: false,
       }
       var saving = false
       var failed = false
@@ -1087,14 +1241,31 @@ window.__ModuleLoader__.load({
             drawerLoading: ui.drawerLoading,
             drawerError: ui.drawerError,
             drawerRows: ui.drawerRows,
-            healthRecords: ui.healthRecords,
-            healthProbing: ui.healthProbing,
+            passive: ui.passive,
+            discover: ui.discover,
+            checking: ui.checking,
           },
           catalog: ui.catalog,
         }
       }
       var store = createSnapshotStore(project())
-      function publish() { store.set(project()) }
+      function publish() { store.set(project()); armDiscoverTimer() }
+
+      /**
+       * 定时连通性检查。跑在浏览器/桌面壳里，所以只在整个 DSH 界面开着的时候有效——
+       * 这一点在设置里写明了，不假装是后台常驻。周期由用户按自己渠道的限流承受
+       * 能力定，插件不设下限：限流是每个渠道各自的，不是几个渠道加起来算的。
+       */
+      var discoverTimer = null
+      var armedSeconds = -1
+      function armDiscoverTimer() {
+        var health = draft.health || {}
+        var seconds = health.discover && health.discover.enabled ? (health.discover.intervalSeconds || 0) : 0
+        if (seconds === armedSeconds) return
+        armedSeconds = seconds
+        if (discoverTimer !== null) { clearInterval(discoverTimer); discoverTimer = null }
+        if (seconds > 0) discoverTimer = setInterval(function () { controller.checkAll() }, seconds * 1000)
+      }
 
       /** Load the model catalog on first use; the modals render the loading state. */
       function ensureCatalog() {
@@ -1115,36 +1286,121 @@ window.__ModuleLoader__.load({
         })
       }
 
-      var callHealth = async function (method, args) {
-        var svc = (typeof ctx.get === 'function' ? ctx.get('remote.routerHealth') : null) || null
-        if (!svc || typeof svc[method] !== 'function') return null
-        try {
-          var r = args === undefined ? await svc[method]() : await svc[method](args)
-          if (r && r.ok) return r.value
-          return r
-        } catch (e) {
+      /**
+       * Read the host projection's passive records. Health is a cross-session
+       * fact, so this merges the same window the failover drawer reads rather
+       * than pretending one session is the whole story.
+       */
+      function loadPassive() {
+        var session = ctx.remote && ctx.remote.session
+        if (!session) return
+        session.list({}).then(function (result) {
+          if (!result.ok) return
+          var sessions = (result.value?.items ?? []).slice()
+            .sort(function (a, b) { return (b.updatedAt ?? 0) - (a.updatedAt ?? 0) })
+            .slice(0, 20)
+          return Promise.all(sessions.map(function (entry) {
+            return session.projections({ sessionId: entry.sessionId }).then(function (read) {
+              // The live read is `{ asOfSeq, values }`; a migration-required
+              // read carries cached values only. Either way the key is read
+              // straight out of `values` — no `kind` gate (the wire payload
+              // does not carry one).
+              var values = read.ok && read.value !== null ? (read.value.values ?? {}) : {}
+              var records = values['router/channel-health']
+              if (records) {
+                // 先拷贝再写入：store 的 set 会 dev-freeze 它收到的对象，之后往
+                // 原对象上赋值在 dev 构建里会静默失败（圆点永远显示"未探测"）。
+                ui.passive = Object.assign({}, ui.passive, records)
+              }
+            }).catch(function () {})
+          }))
+        }).then(function () { publish() }).catch(function () {})
+      }
+      loadPassive()
+
+      /**
+       * Connectivity check: ask one route for its model list through DSH's own
+       * discovery remote — the same call the Models page's "fetch available
+       * models" button makes. It sends no content, so it costs no tokens, and
+       * it proves three things a stale config cannot: the endpoint answers,
+       * the credential is accepted, and this model id is advertised.
+       *
+       * The request names only the namespace and the route. A configured route
+       * supplies its own endpoint and credential inside the Host, so the client
+       * reads the namespace from `listConfigurableProviders` and the stored
+       * baseURL from `settings.describe` — both are DSH's own reads, which is why
+       * this never guesses a provider's settings shape.
+       */
+      /**
+       * provider → (settingsNs, baseURL) 的映射。这是配置事实，可以缓存；但缓存
+       * 必须在 Host 推送新配置时作废，否则用户后来加的 provider 会一直查不到。
+       * 探测本身不缓存——每一轮都重新问，那才是"定时检查"的意义。
+       */
+      var discoverFacts = null
+
+      function loadDiscoverFacts() {
+        if (discoverFacts !== null) return Promise.resolve(discoverFacts)
+        var llm = ctx.remote && ctx.remote.llm
+        var settings = ctx.remote && ctx.remote.settings
+        if (!llm || !settings) return Promise.resolve(null)
+        return Promise.all([
+          llm.listConfigurableProviders(),
+          settings.describe(),
+        ]).then(function (results) {
+          var providers = results[0] && results[0].ok ? results[0].value : []
+          var namespaces = results[1] && results[1].ok ? results[1].value.namespaces : []
+          var byNs = {}
+          namespaces.forEach(function (entry) { byNs[entry.ns] = entry })
+          var facts = {}
+          providers.forEach(function (entry) {
+            var namespace = byNs[entry.settingsNs]
+            if (namespace === undefined) return
+            var profile = namespace.value
+            for (var i = 0; i < entry.settingsPath.length; i++) {
+              profile = profile && typeof profile === 'object' ? profile[entry.settingsPath[i]] : undefined
+            }
+            if (profile === undefined || profile === null || typeof profile !== 'object') return
+            facts[entry.provider] = {
+              settingsNs: entry.settingsNs,
+              baseURL: typeof profile.baseURL === 'string' ? profile.baseURL : undefined,
+            }
+          })
+          discoverFacts = facts
+          return facts
+        }).catch(function () {
+          discoverFacts = null
           return null
-        }
+        })
       }
 
-      function loadHealthSnapshot() {
-        callHealth('getSnapshot').then(function (snapshot) {
-          if (snapshot && typeof snapshot === 'object') {
-            ui.healthRecords = Object.assign({}, ui.healthRecords, snapshot)
-            publish()
-          }
-        }).catch(function () {})
+      /** Ask one route whether its endpoint answers and advertises this model. */      function checkRoute(provider, model) {
+        return loadDiscoverFacts().then(function (facts) {
+          if (facts === null) return { kind: 'unavailable', reason: 'discoveryUnavailable' }
+          var fact = facts[provider]
+          if (fact === undefined) return { kind: 'unavailable', reason: 'notConfigurable' }
+          var request = { provider: provider }
+          if (fact.baseURL !== undefined) request.baseURL = fact.baseURL
+          return ctx.remote.llm.discoverModels(fact.settingsNs, request).then(function (response) {
+            if (!response.ok) return { kind: 'unreachable', reason: response.error.message }
+            var models = response.value || []
+            return models.some(function (entry) { return entry.id === model })
+              ? { kind: 'reachable' }
+              : { kind: 'notAdvertised', advertised: models.length }
+          })
+        }).catch(function (error) {
+          return { kind: 'unreachable', reason: String(error && error.message ? error.message : error) }
+        })
       }
-      loadHealthSnapshot()
 
       scope.subscribe(function () {
         host = seed()
         draft = seed()
         failed = false
+        // 配置变了，provider 目录也可能变了：旧的端点映射不能再拿去问。
+        discoverFacts = null
         // The first snapshot can arrive after the controller was built (status
         // loading, no value), so the active tab is re-established here too.
         ensureActive()
-        loadHealthSnapshot()
         publish()
       })
 
@@ -1182,6 +1438,7 @@ window.__ModuleLoader__.load({
             { op: 'set', path: ['enabled'], value: draft.enabled },
             { op: 'set', path: ['profiles'], value: draft.profiles },
             { op: 'set', path: ['default'], value: draft.default },
+            { op: 'set', path: ['health'], value: draft.health },
           ], scope.getSnapshot().revision).then(function (accepted) {
             saving = false
             failed = !accepted
@@ -1275,6 +1532,22 @@ window.__ModuleLoader__.load({
           target[key] = !target[key]
           publish()
         },
+        setStrategy: function (value) {
+          // 策略只管起点，所以名单本身不动——只改"从哪条开始"。
+          if (draft.default.enabled && activeProfile() === null) draft.default.strategy = value
+          else {
+            var profile = activeProfile()
+            if (profile !== null) profile.strategy = value
+          }
+          publish()
+        },
+        setWeight: function (index, value, isDefault) {
+          var parsed = Number(value)
+          var clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 0
+          var list = isDefault ? draft.default.candidates : activeProfile().candidates
+          if (list[index] !== undefined) list[index].weight = clamped
+          publish()
+        },
         setDefaultEnabled: function (value) { draft.default.enabled = value; publish() },
         openModal: function (modal) {
           ui.modal = modal
@@ -1306,9 +1579,8 @@ window.__ModuleLoader__.load({
                 // straight out of `values` — no `kind` gate (the wire payload
                 // does not carry one).
                 var values = read.ok && read.value !== null ? (read.value.values ?? {}) : {}
-                if (values['router/channel-health']) {
-                  ui.healthRecords = Object.assign({}, values['router/channel-health'], ui.healthRecords)
-                }
+                var records = values['router/channel-health']
+                if (records) ui.passive = Object.assign({}, ui.passive, records)
                 return { sessionId: session.sessionId, entries: values['router/failover-history'] ?? [] }
               })
             }))
@@ -1323,36 +1595,35 @@ window.__ModuleLoader__.load({
           })
         },
         closeDrawer: function () { ui.drawerOpen = false; publish() },
-        probeAll: function () {
-          if (ui.healthProbing) return
-          ui.healthProbing = true
+        /** Run a connectivity check on every configured route: profiles and the default pool alike. */
+        checkAll: function () {
+          if (ui.checking) return
+          ui.checking = true
           publish()
-          var candidates = []
-          var seen = {}
-          draft.profiles.forEach(function (p) {
-            p.candidates.forEach(function (c) {
-              var k = routeOf(c)
-              if (!seen[k]) { seen[k] = true; candidates.push({ provider: c.provider, model: c.model }) }
-            })
-          })
-          if (draft.default.enabled) {
-            draft.default.candidates.forEach(function (c) {
-              var k = routeOf(c)
-              if (!seen[k]) { seen[k] = true; candidates.push({ provider: c.provider, model: c.model }) }
-            })
+          var routes = {}
+          var collect = function (candidate) {
+            var key = routeOf(candidate)
+            if (routes[key]) return
+            routes[key] = { provider: candidate.provider, model: candidate.model }
           }
-          callHealth('probeAll', {
-            prompt: draft.health?.prompt || 'hi',
-            timeoutSeconds: draft.health?.timeoutSeconds || 8,
-            candidates: candidates,
-          }).then(function (records) {
-            if (records && typeof records === 'object') {
-              ui.healthRecords = Object.assign({}, ui.healthRecords, records)
-            }
-            ui.healthProbing = false
+          draft.profiles.forEach(function (profile) {
+            profile.candidates.forEach(collect)
+          })
+          ;(draft.default.candidates || []).forEach(collect)
+          var keys = Object.keys(routes)
+          Promise.all(keys.map(function (key) {
+            var route = routes[key]
+            return checkRoute(route.provider, route.model).then(function (verdict) {
+              // 先拷贝后写入——store 的 set 会 dev-freeze 它收到的对象，往原对象
+              // 上赋值在 dev 构建里会静默失败。
+              ui.discover = Object.assign({}, ui.discover)
+              ui.discover[key] = verdict
+            })
+          })).then(function () {
+            ui.checking = false
             publish()
           }).catch(function () {
-            ui.healthProbing = false
+            ui.checking = false
             publish()
           })
         },
@@ -1364,7 +1635,11 @@ window.__ModuleLoader__.load({
           ui.modal = { kind: 'health' }
           publish()
         },
-        loadHealthSnapshot: loadHealthSnapshot,
+        /** 供插件半包卸载时调用：停掉定时轮询，别留下孤儿 interval。 */
+        dispose: function () {
+          if (discoverTimer !== null) { clearInterval(discoverTimer); discoverTimer = null }
+          armedSeconds = -1
+        },
       }
       return controller
     }
@@ -1422,40 +1697,74 @@ window.__ModuleLoader__.load({
       return efforts.map(function (effort) { return effort.name }).join(' / ')
     }
 
-    /** Channel health badge showing status and latency or error. */
-    function HealthBadge(props) {
+    /**
+     * One dot for one way of knowing a channel's state. There is deliberately
+     * no combined lamp: "the door is open" and "it can actually answer" are
+     * different facts, and folding them into one light would be this plugin
+     * deciding on the user's behalf which evidence to trust.
+     *
+     * A dot only appears for a dimension the user turned on, so a channel the
+     * user only passively observes shows one dot, never three grey ones.
+     */
+    function HealthDot(props) {
       var t = props.t
-      var record = props.record
-      if (!record || record.status === 'unknown') {
-        return h('span', {
-          style: S.healthBadgeUnknown,
-          title: t('healthStatusUnknown'),
-        }, '⚪ ' + t('healthStatusUnknown'))
-      }
-      var status = record.status
-      var latency = typeof record.latencyMs === 'number' ? record.latencyMs + 'ms' : null
-      var tooltip = status === 'healthy'
-        ? (t('healthStatusHealthy') + (latency ? ' (' + latency + ')' : ''))
-        : status === 'degraded'
-          ? (t('healthStatusDegraded') + (latency ? ' (' + latency + ')' : '') + (record.lastError ? ': ' + record.lastError : ''))
-          : (t('healthStatusUnhealthy') + (record.lastError ? ': ' + record.lastError : ''))
+      var tone = props.tone
+      var style = tone === 'healthy' ? S.dotHealthy
+        : tone === 'degraded' ? S.dotDegraded
+          : tone === 'unhealthy' ? S.dotUnhealthy
+            : S.dotUnknown
+      return h('span', { style: Object.assign({}, S.healthDot, style), title: props.title ?? '' })
+    }
 
-      if (status === 'healthy') {
-        return h('span', {
-          style: S.healthBadgeHealthy,
-          title: tooltip,
-        }, '🟢 ' + (latency ?? t('healthStatusHealthy')))
+    /** The three dots for one route, each from its own dimension. */
+    function HealthDots(props) {
+      var t = props.t
+      var route = props.route
+      var passive = props.passive ? props.passive[route] : undefined
+      var discover = props.discover ? props.discover[route] : undefined
+      var showPassive = props.showPassive !== false
+      var showDiscover = props.showDiscover === true
+      var dots = []
+      if (showPassive) {
+        if (passive === undefined) {
+          dots.push(h(HealthDot, { key: 'passive', t: t, tone: 'unknown', title: t('passiveNeverObserved') }))
+        } else {
+          var detail = t(passive.status === 'healthy' ? 'healthStatusHealthy' : passive.status === 'degraded' ? 'healthStatusDegraded' : 'healthStatusUnhealthy')
+          if (typeof passive.latencyMs === 'number') detail += ' · ' + passive.latencyMs + 'ms'
+          if (typeof passive.throughputTps === 'number') detail += ' · ' + passive.throughputTps.toFixed(1) + 't/s'
+          if (passive.lastError) detail += ' · ' + passive.lastError
+          dots.push(h(HealthDot, {
+            key: 'passive',
+            t: t,
+            tone: passive.status,
+            title: t('passiveDotTitle') + '：' + detail,
+          }))
+        }
       }
-      if (status === 'degraded') {
-        return h('span', {
-          style: S.healthBadgeDegraded,
-          title: tooltip,
-        }, '🟡 ' + (latency ?? t('healthStatusDegraded')))
+      if (showDiscover) {
+        if (discover === undefined) {
+          dots.push(h(HealthDot, { key: 'discover', t: t, tone: 'unknown', title: t('connectivityNotRun') }))
+        } else if (discover.kind === 'reachable') {
+          dots.push(h(HealthDot, { key: 'discover', t: t, tone: 'healthy', title: t('connectivityReachable') }))
+        } else if (discover.kind === 'notAdvertised') {
+          dots.push(h(HealthDot, {
+            key: 'discover',
+            t: t,
+            tone: 'degraded',
+            title: t('connectivityNotAdvertised') + '（' + t('connectivityAdvertisedCount') + ' ' + discover.advertised + '）',
+          }))
+        } else if (discover.kind === 'unavailable') {
+          dots.push(h(HealthDot, {
+            key: 'discover',
+            t: t,
+            tone: 'unknown',
+            title: discover.reason === 'notConfigurable' ? t('connectivityNotConfigurable') : t('connectivityUnavailable'),
+          }))
+        } else {
+          dots.push(h(HealthDot, { key: 'discover', t: t, tone: 'unhealthy', title: t('connectivityUnreachable') + '：' + discover.reason }))
+        }
       }
-      return h('span', {
-        style: S.healthBadgeUnhealthy,
-        title: tooltip,
-      }, '🔴 ' + t('healthStatusUnhealthy'))
+      return h('span', { style: S.healthDots }, dots)
     }
 
     /** Sparkline timeline and metrics dashboard matching channel monitor specification. */
@@ -1463,16 +1772,8 @@ window.__ModuleLoader__.load({
       var t = props.t
       var record = props.record
       var timeline = (record && Array.isArray(record.timeline)) ? record.timeline : []
-      var availabilityPct = record ? record.availabilityPct : undefined
       var latencyMs = record ? record.latencyMs : undefined
       var throughputTps = record ? record.throughputTps : undefined
-
-      var availColor = 'var(--dsw-alias-label-tertiary)'
-      if (typeof availabilityPct === 'number') {
-        if (availabilityPct >= 99) availColor = '#00e599'
-        else if (availabilityPct >= 90) availColor = '#f59e0b'
-        else availColor = '#ef4444'
-      }
 
       var slots = []
       var padCount = Math.max(0, 24 - timeline.length)
@@ -1493,13 +1794,15 @@ window.__ModuleLoader__.load({
             title: t('healthBarIdle'),
           })
         }
-        var barBg = '#00e599'
+        // DSH's own state tokens, so the bars follow the active theme instead
+        // of hard-coded hex that only looks right on one of them.
+        var barBg = 'var(--dsw-alias-state-success-primary, #22c55e)'
         var statusLabel = t('healthStatusHealthy')
         if (item.status === 'degraded') {
-          barBg = '#f59e0b'
+          barBg = 'var(--dsw-alias-state-warn-primary, #f59e0b)'
           statusLabel = t('healthStatusDegraded')
         } else if (item.status === 'unhealthy') {
-          barBg = '#ef4444'
+          barBg = 'var(--dsw-alias-state-error-primary, #ef4444)'
           statusLabel = t('healthStatusUnhealthy')
         }
         var tip = '[' + formatTime(item.time) + '] ' + statusLabel
@@ -1518,8 +1821,8 @@ window.__ModuleLoader__.load({
       return h('div', { style: S.channelMetricsCard },
         h('div', { style: S.metricsColStatus },
           h('div', { style: S.metricsStatusHeader },
-            h('span', { style: S.metricsLabel }, t('healthMetricStatus')),
-            h('span', { style: Object.assign({}, S.metricsStatusValue, { color: availColor }) }, formatAvailability(availabilityPct))),
+            h('span', { style: S.metricsLabel }, t('healthMetricHistory')),
+            h('span', { style: S.metricsStatusValue }, String(timeline.length) + '/' + 24)),
           h('div', { style: S.timelineBarContainer }, barElements)),
         h('div', { style: S.metricsColValue },
           h('span', { style: S.metricsLabel }, t('healthMetricLatency')),
@@ -1552,7 +1855,14 @@ window.__ModuleLoader__.load({
                   h('span', { style: S.modelName, title: candidate.model }, candidate.model || '—'),
                   h('span', { style: S.providerBadge }, candidate.provider),
                   isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null,
-                  h(HealthBadge, { t: t, record: props.healthRecords ? props.healthRecords[routeOf(candidate)] : null }),
+                  h(HealthDots, {
+                    t: t,
+                    route: routeOf(candidate),
+                    passive: props.passive,
+                    discover: props.discover,
+                    showPassive: props.showPassive,
+                    showDiscover: props.showDiscover,
+                  }),
                   reasoning === undefined ? null : h('span', { style: S.reasoningBadge }, t('reasoningBadge') + ': ' + reasoning),
                   isPrimary ? null : h('button', {
                     type: 'button',
@@ -1591,6 +1901,20 @@ window.__ModuleLoader__.load({
                     onClick: function () { props.onMaxAttempts(index, Math.min(5, candidate.maxAttempts + 1)) },
                   }, h(Icon, { d: ICON_PLUS, size: 10 })),
                   h('span', { style: { whiteSpace: 'nowrap' } }, t('timesUnit'))))),
+            // 权重只在「按权重」策略下出现；其他策略下它不被读，摆着只会让人以为有用。
+            props.showWeight ? h('div', { style: S.attemptPicker, title: t('weightHint') },
+              h('span', { style: { whiteSpace: 'nowrap' } }, t('weightLabel')),
+              h('input', {
+                style: S.attemptInput,
+                type: 'text',
+                inputMode: 'numeric',
+                maxLength: 3,
+                'aria-label': t('weightLabel'),
+                value: String(candidate.weight || 0),
+                disabled: props.disabled,
+                onChange: function (event) { props.onWeight(index, event.target.value) },
+              }),
+              h('span', { style: { whiteSpace: 'nowrap' } }, props.weightShare + '%')) : null,
             h('div', { style: S.nodeActions },
               h('button', {
                 type: 'button',
@@ -1616,7 +1940,7 @@ window.__ModuleLoader__.load({
                 title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
                 onClick: function () { props.onRemove(index) },
               }, h(Icon, { d: ICON_CLOSE })))),
-          h(ChannelMetricsDashboard, { t: t, record: props.healthRecords ? props.healthRecords[routeOf(candidate)] : null }),
+          h(ChannelMetricsDashboard, { t: t, record: props.passive ? props.passive[routeOf(candidate)] : null }),
           !isPrimary && expanded ? h('div', { style: S.needsPanel },
             h('div', { style: S.needsGrid },
               h('div', { style: S.needCard },
@@ -1703,6 +2027,8 @@ window.__ModuleLoader__.load({
     function PipelineEditor(props) {
       var t = props.t
       var candidates = props.candidates
+      var strategy = props.strategy === 'weight' || props.strategy === 'round-robin' ? props.strategy : 'order'
+      var weightTotal = candidates.reduce(function (sum, c) { return sum + Math.max(0, c.weight || 0) }, 0)
       var nodes = []
       candidates.forEach(function (candidate, index) {
         if (index > 0) nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: index }))
@@ -1715,14 +2041,33 @@ window.__ModuleLoader__.load({
           isDefault: props.isDefault,
           disabled: props.disabled,
           catalog: props.catalog,
-          healthRecords: props.healthRecords,
+          passive: props.passive,
+          discover: props.discover,
+          showPassive: props.showPassive,
+          showDiscover: props.showDiscover,
+          // 权重只在「按权重」策略下出现——其他策略下它不被读，摆着只会让人以为有用。
+          showWeight: strategy === 'weight',
+          weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
           onMaxAttempts: props.onMaxAttempts,
+          onWeight: props.onWeight,
           onMove: props.onMove,
           onRemove: props.onRemove,
           onNeeds: props.onNeeds,
         }))
       })
-      return h('div', null, nodes)
+      return h('div', null,
+        h('div', { style: S.strategyRow },
+          h('span', { style: S.formLabel }, t('strategyLabel')),
+          h(SegmentedTabs, {
+            items: STRATEGY_OPTIONS.map(function (entry) {
+              return { value: entry, label: t('strategy' + entry), id: 'strategy-' + entry, panelId: 'strategy-panel-' + entry }
+            }),
+            value: strategy,
+            onChange: function (value) { if (props.onStrategy) props.onStrategy(value) },
+          })),
+        h('p', { style: S.formHint }, t('strategySharedHint')),
+        h('p', { style: S.formHint }, t('strategyHint' + strategy)),
+        nodes)
     }
 
     /** The six switchOn cards. */
@@ -1803,13 +2148,19 @@ window.__ModuleLoader__.load({
           h(PipelineEditor, {
             t: t,
             candidates: profile.candidates,
+            strategy: profile.strategy,
+            onStrategy: function (value) { props.onStrategy(value) },
             disabled: props.disabled,
             catalog: props.catalog,
-            healthRecords: props.healthRecords,
+            passive: props.passive,
+            discover: props.discover,
+            showPassive: props.showPassive,
+            showDiscover: props.showDiscover,
             onMaxAttempts: function (index, value) { props.onMaxAttempts(profile.id, index, value, false) },
             onMove: function (index, direction) { props.onMove(profile.id, index, direction, false) },
             onRemove: function (index) { props.onRemove(profile.id, index, false) },
             onNeeds: function (index, patch) { props.onNeeds(profile.id, index, patch, false) },
+            onWeight: function (index, value) { props.onWeight(index, value, false) },
           }),
           h('div', { style: S.addBar },
             h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, t('addFromCatalog')),
@@ -1867,14 +2218,20 @@ window.__ModuleLoader__.load({
           h(PipelineEditor, {
             t: t,
             candidates: pool.candidates,
+            strategy: pool.strategy,
             isDefault: true,
             disabled: props.disabled,
             catalog: props.catalog,
-            healthRecords: props.healthRecords,
+            passive: props.passive,
+            discover: props.discover,
+            showPassive: props.showPassive,
+            showDiscover: props.showDiscover,
+            onStrategy: props.onStrategy,
             onMaxAttempts: function (index, value) { props.onMaxAttempts(null, index, value, true) },
             onMove: function (index, direction) { props.onMove(null, index, direction, true) },
             onRemove: function (index) { props.onRemove(null, index, true) },
             onNeeds: function (index, patch) { props.onNeeds(null, index, patch, true) },
+            onWeight: function (index, value) { props.onWeight(index, value, true) },
           }),
           h('div', { style: S.addBar },
             h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(null, true) } }, t('addFromCatalog')),
@@ -1904,13 +2261,46 @@ window.__ModuleLoader__.load({
     }
 
     /** Health Settings Modal dialog. */
+    /**
+     * Health settings: three independent tiers, each with its own switch.
+     *
+     * The plugin does not pick a winner between them. Runtime observation is
+     * free but only knows the past; a connectivity check sends no content and
+     * present; a real probe is the only thing that proves a model can answer,
+     * and it costs tokens — so the user decides which of those they want.
+     */
+    /**
+     * Health settings: the tiers the user can actually choose between.
+     *
+     * Runtime observation and the connectivity check are offered. Sending a
+     * test message is described but not offered — it needs a browser-to-host
+     * channel this plugin cannot declare without a build step, and a switch
+     * that saves while doing nothing is the same lie as a save that never
+     * landed.
+     */
     function HealthSettingsModal(props) {
       var t = props.t
       var health = props.health || {}
-      var [enabled, setEnabled] = React.useState(health.enabled ?? true)
-      var [prompt, setPrompt] = React.useState(health.prompt ?? 'hi')
-      var [intervalMinutes, setIntervalMinutes] = React.useState(String(health.intervalMinutes ?? 0))
-      var [timeoutSeconds, setTimeoutSeconds] = React.useState(String(health.timeoutSeconds ?? 8))
+      var discover = health.discover || {}
+      var [passiveOn, setPassiveOn] = React.useState(health.passive !== false)
+      var [discoverOn, setDiscoverOn] = React.useState(discover.enabled === true)
+      var [discoverInterval, setDiscoverInterval] = React.useState(String(discover.intervalSeconds ?? 0))
+      var breaker = health.breaker || {}
+      var [breakerOn, setBreakerOn] = React.useState(breaker.enabled === true)
+      var [rules, setRules] = React.useState((breaker.rules || []).map(function (rule) {
+        return { code: rule.code || '', message: rule.message || '', cooldownSeconds: rule.cooldownSeconds ?? 300 }
+      }))
+
+      function patchRule(index, patch) {
+        var next = rules.slice()
+        next[index] = Object.assign({}, next[index], patch)
+        setRules(next)
+      }
+
+      function intervalOf(text) {
+        var n = Math.round(Number(text))
+        return isFinite(n) && n > 0 ? n : 0
+      }
 
       return h(Modal, {
         open: true,
@@ -1922,13 +2312,17 @@ window.__ModuleLoader__.load({
           h(Button, {
             variant: 'primary',
             onClick: function () {
-              var intervalNum = Math.max(0, Math.round(Number(intervalMinutes) || 0))
-              var timeoutNum = Math.min(60, Math.max(1, Math.round(Number(timeoutSeconds) || 8)))
+              // The probe tier is not offered, so whatever a previous save left
+              // in it is preserved rather than overwritten with defaults.
+              var current = props.health || {}
               props.onUpdateHealth({
-                enabled: enabled,
-                prompt: prompt.trim() || 'hi',
-                intervalMinutes: intervalNum,
-                timeoutSeconds: timeoutNum,
+                passive: passiveOn,
+                discover: { enabled: discoverOn, intervalSeconds: intervalOf(discoverInterval) },
+                probe: current.probe,
+                breaker: {
+                  enabled: breakerOn,
+                  rules: rules.filter(function (rule) { return rule.code || rule.message }),
+                },
               })
               props.onClose()
             },
@@ -1938,51 +2332,134 @@ window.__ModuleLoader__.load({
           h(Icon, { d: ICON_WARN, size: 20 }),
           h('div', null,
             h('h3', { style: S.introTitle }, t('healthSectionTitle')),
-            h('p', { style: S.introDesc }, t('healthPassiveHint')))),
+            h('p', { style: S.introDesc }, t('healthTiersIntro')))),
+
+        // --- Tier 1: runtime observation ---
         h('div', { style: Object.assign({}, S.formGroup, { display: 'flex', alignItems: 'center', justifyContent: 'space-between' }) },
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-            h('span', { style: S.formLabel }, t('healthEnabledLabel')),
+            h('span', { style: S.formLabel }, t('healthPassiveLabel')),
             h('span', { style: S.formHint }, t('healthPassiveHint'))),
           h(Switch, {
-            checked: enabled,
-            label: t('healthEnabledLabel'),
-            onChange: function (next) { setEnabled(next) },
+            checked: passiveOn,
+            label: t('healthPassiveLabel'),
+            onChange: function (next) { setPassiveOn(next) },
           })),
-        h('div', { style: S.formGroup },
-          h('span', { style: S.formLabel }, t('healthPromptLabel')),
-          h('span', { style: S.formHint }, t('healthPromptHint')),
-          h('input', {
-            style: S.formInput,
-            type: 'text',
-            placeholder: 'hi',
-            'aria-label': t('healthPromptLabel'),
-            value: prompt,
-            onChange: function (event) { setPrompt(event.target.value) },
-          })),
-        h('div', { style: S.formGroup },
-          h('span', { style: S.formLabel }, t('healthIntervalLabel')),
-          h('span', { style: S.formHint }, t('healthIntervalHint')),
-          h('input', {
-            style: S.formInput,
-            type: 'text',
-            inputMode: 'numeric',
-            placeholder: '0',
-            'aria-label': t('healthIntervalLabel'),
-            value: intervalMinutes,
-            onChange: function (event) { setIntervalMinutes(event.target.value) },
-          })),
-        h('div', { style: S.formGroup },
-          h('span', { style: S.formLabel }, t('healthTimeoutLabel')),
-          h('span', { style: S.formHint }, t('healthTimeoutHint')),
-          h('input', {
-            style: S.formInput,
-            type: 'text',
-            inputMode: 'numeric',
-            placeholder: '8',
-            'aria-label': t('healthTimeoutLabel'),
-            value: timeoutSeconds,
-            onChange: function (event) { setTimeoutSeconds(event.target.value) },
-          })))
+
+        // --- Tier 2: connectivity check ---
+        h('div', { style: S.healthTierCard },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+              h('span', { style: S.formLabel }, t('healthDiscoverLabel')),
+              h('span', { style: S.formHint }, t('healthDiscoverHint'))),            h(Switch, {
+              checked: discoverOn,
+              label: t('healthDiscoverLabel'),
+              onChange: function (next) { setDiscoverOn(next) },
+            })),
+          h('div', { style: S.formGroup },
+            h('span', { style: S.formLabel }, t('healthDiscoverIntervalLabel')),
+            h('span', { style: S.formHint }, t('healthDiscoverIntervalHint')),
+            h('input', {
+              style: S.formInput,
+              type: 'text',
+              inputMode: 'numeric',
+              placeholder: '0',
+              'aria-label': t('healthDiscoverIntervalLabel'),
+              value: discoverInterval,
+              onChange: function (event) { setDiscoverInterval(event.target.value) },
+            }))),
+
+        // --- Tier 3: real probe ---
+        h('div', { style: S.healthTierCard },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+              h('span', { style: S.formLabel }, t('healthProbeLabel')),
+              h('span', { style: S.formHint }, t('healthProbeHint'))),
+            h(Switch, {
+              checked: false,
+              disabled: true,
+              label: t('healthProbeLabel'),
+            })),
+          // The tier is described, not offered: a switch that saves but does
+          // nothing is the same lie as the save that never landed. Its settings
+          // come back with the channel that makes them mean something.
+          h('p', { style: S.formHint }, t('healthProbeUnavailable'))),
+
+        // --- Tier 4: circuit breaker ---
+        h('div', { style: S.healthTierCard },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+              h('span', { style: S.formLabel }, t('breakerLabel')),
+              h('span', { style: S.formHint }, t('breakerHint'))),
+            h(Switch, {
+              checked: breakerOn,
+              label: t('breakerLabel'),
+              onChange: function (next) { setBreakerOn(next) },
+            })),
+          h('p', { style: S.formHint }, t('breakerSharedHint')),
+          breakerOn ? h('div', { style: S.formGroup },
+            h('span', { style: S.formLabel }, t('breakerRulesLabel')),
+            h('span', { style: S.formHint }, t('breakerRulesHint')),
+            h('div', { style: S.breakerChips },
+              BREAKER_CODE_PRESETS.map(function (preset) {
+                var exists = rules.some(function (rule) { return rule.code === preset.code && !rule.message })
+                return h('button', {
+                  key: preset.code,
+                  type: 'button',
+                  className: 'dsh-router-catalog-btn',
+                  style: Object.assign({}, S.chipBtn, exists ? { borderColor: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)' } : null),
+                  disabled: exists,
+                  title: exists ? t('breakerAlreadyAdded') : preset.desc,
+                  onClick: function () {
+                    setRules(rules.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds }]))
+                  },
+                }, preset.code)
+              })),
+            rules.map(function (rule, index) {
+              return h('div', { key: 'br' + index, style: S.breakerRuleRow },
+                h('input', {
+                  style: Object.assign({}, S.formInput, { flex: 1 }),
+                  type: 'text',
+                  placeholder: t('breakerCodePlaceholder'),
+                  'aria-label': t('breakerCodeLabel'),
+                  value: rule.code,
+                  onChange: function (event) { patchRule(index, { code: event.target.value }) },
+                }),
+                h('input', {
+                  style: Object.assign({}, S.formInput, { flex: 1 }),
+                  type: 'text',
+                  placeholder: t('breakerMessagePlaceholder'),
+                  'aria-label': t('breakerMessageLabel'),
+                  value: rule.message,
+                  onChange: function (event) { patchRule(index, { message: event.target.value }) },
+                }),
+                h('input', {
+                  style: Object.assign({}, S.formInput, { width: 76 }),
+                  type: 'text',
+                  inputMode: 'numeric',
+                  placeholder: '300',
+                  'aria-label': t('breakerCooldownLabel'),
+                  value: String(rule.cooldownSeconds),
+                  onChange: function (event) { patchRule(index, { cooldownSeconds: event.target.value }) },
+                }),
+                h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('breakerSecondsUnit')),
+                h('button', {
+                  type: 'button',
+                  style: S.iconBtn,
+                  title: t('breakerRemoveRule'),
+                  'aria-label': t('breakerRemoveRule'),
+                  onClick: function () {
+                    var next = rules.slice()
+                    next.splice(index, 1)
+                    setRules(next)
+                  },
+                }, h(Icon, { d: ICON_CLOSE })))
+            }),
+            h('button', {
+              type: 'button',
+              style: Object.assign({}, S.manualBtn, { marginTop: 8 }),
+              onClick: function () { setRules(rules.concat([{ code: '', message: '', cooldownSeconds: 300 }])) },
+            }, t('breakerAddRule'))) : null)
+      )
     }
 
     /** New-profile dialog: pick an unconfigured model, choose a template. */
@@ -2073,14 +2550,23 @@ window.__ModuleLoader__.load({
     }
 
     /** Manual candidate dialog: provider checked against the registered list. */
+    /**
+     * 手动添加候选：provider 只能从已注册的里选，model 自由输入。
+     *
+     * provider 名是人猜不出来的——写错不会报错，只会在运行时被静默跳过，所以这里
+     * 根本不给他打错的机会。模型 ID 相反：网关支持的模型常常不在任何目录里，所以
+     * 保留自由输入，只用目录里的同名模型做建议（datalist），不强制。
+     */
     function ManualChannelModal(props) {
       var t = props.t
+      var registered = props.routableProviders ?? []
       var [provider, setProvider] = React.useState('')
       var [model, setModel] = React.useState('')
       var [maxAttempts, setMaxAttempts] = React.useState('1')
-      var registered = props.routableProviders ?? []
-      var providerKnown = provider.trim() === '' || registered.length === 0 || registered.indexOf(provider.trim()) >= 0
-      var canAdd = provider.trim() !== '' && model.trim() !== ''
+      // 目录里这个 provider 的模型，仅作为输入建议，不影响能否保存。
+      var group = (props.catalog?.groups ?? []).find(function (entry) { return entry.id === provider })
+      var suggestions = (group?.models ?? []).map(function (entry) { return entry.id })
+      var canAdd = provider !== '' && model.trim() !== ''
       return h(Modal, {
         open: true,
         title: t('manualModalTitle'),
@@ -2093,32 +2579,37 @@ window.__ModuleLoader__.load({
             disabled: !canAdd,
             onClick: function () {
               if (!canAdd) return
-              props.onAdd([{ provider: provider.trim(), model: model.trim(), maxAttempts: Math.min(5, Math.max(1, Number(maxAttempts) || 1)) }])
+              props.onAdd([{ provider: provider, model: model.trim(), maxAttempts: Math.min(5, Math.max(1, Number(maxAttempts) || 1)) }])
             },
           }, t('confirmAddManual'))),
       },
-        h('div', { style: S.formGroup },
-          h('span', { style: S.formLabel }, t('providerLabel')),
-          h('span', { style: S.formHint }, t('providerHint')),
-          h('input', {
-            style: S.formInput,
-            placeholder: 'pi-ai-siliconflow, openai',
-            'aria-label': t('providerLabel'),
-            value: provider,
-            onChange: function (event) { setProvider(event.target.value) },
-          }),
-          !providerKnown ? h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-state-warn)' } }, t('providerUnregistered')) : null),
-        h('div', { style: S.formGroup },
+        registered.length === 0
+          ? h('p', { style: S.formHint }, t('manualNoRegisteredProvider'))
+          : h('div', { style: S.formGroup },
+            h('span', { style: S.formLabel }, t('providerLabel')),
+            h('span', { style: S.formHint }, t('providerSelectHint')),
+            h('select', {
+              style: S.formInput,
+              'aria-label': t('providerLabel'),
+              value: provider,
+              onChange: function (event) { setProvider(event.target.value) },
+            },
+              h('option', { value: '' }, t('providerPickPlaceholder')),
+              registered.map(function (id) { return h('option', { key: id, value: id }, id) }))),
+        registered.length === 0 ? null : h('div', { style: S.formGroup },
           h('span', { style: S.formLabel }, t('modelIdLabel')),
-          h('span', { style: S.formHint }, t('modelIdHint')),
+          h('span', { style: S.formHint }, t('modelIdFreeHint')),
           h('input', {
             style: S.formInput,
-            placeholder: 'deepseek-ai/DeepSeek-V3',
+            list: 'dsh-router-model-suggestions',
+            placeholder: suggestions.length > 0 ? suggestions[0] : 'deepseek-ai/DeepSeek-V3',
             'aria-label': t('modelIdLabel'),
             value: model,
             onChange: function (event) { setModel(event.target.value) },
-          })),
-        h('div', { style: S.formGroup },
+          }),
+          suggestions.length > 0 ? h('datalist', { id: 'dsh-router-model-suggestions' },
+            suggestions.map(function (id) { return h('option', { key: id, value: id }) })) : null),
+        registered.length === 0 ? null : h('div', { style: S.formGroup },
           h('span', { style: S.formLabel }, t('singleAttemptLimit') + ' (' + t('attemptRangeHint') + ')'),
           h('input', {
             style: S.formInput,
@@ -2244,11 +2735,11 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               className: 'dsh-router-catalog-btn',
-              style: Object.assign({}, S.catalogBtn, state.ui.healthProbing ? { opacity: 0.6, cursor: 'wait' } : null),
-              disabled: disabled || state.ui.healthProbing,
-              title: t('probeAllBtn'),
-              onClick: props.onProbeAll,
-            }, h(Icon, { d: state.ui.healthProbing ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state.ui.healthProbing }), state.ui.healthProbing ? t('probingText') : t('probeAllBtn')),
+              style: Object.assign({}, S.catalogBtn, state.ui.checking ? { opacity: 0.6, cursor: 'wait' } : null),
+              disabled: disabled || state.ui.checking,
+              title: t('checkAllBtn'),
+              onClick: props.onCheckAll,
+            }, h(Icon, { d: state.ui.checking ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state.ui.checking }), state.ui.checking ? t('checkingText') : t('checkAllBtn')),
             h('button', {
               type: 'button',
               className: 'dsh-router-catalog-btn',
@@ -2363,8 +2854,13 @@ window.__ModuleLoader__.load({
               pool: draft.default,
               disabled: disabled,
               catalog: state.catalog,
-              healthRecords: state.ui.healthRecords,
+              passive: state.ui.passive,
+              discover: state.ui.discover,
+              showPassive: draft.health.passive !== false,
+              showDiscover: draft.health.discover?.enabled === true,
               onDefaultEnabled: props.onDefaultEnabled,
+              onStrategy: props.onStrategy,
+              onWeight: props.onWeight,
               onMaxAttempts: props.onMaxAttempts,
               onMove: props.onMove,
               onRemove: props.onRemove,
@@ -2379,8 +2875,13 @@ window.__ModuleLoader__.load({
               profile: activeProfile,
               disabled: disabled,
               catalog: state.catalog,
-              healthRecords: state.ui.healthRecords,
+              passive: state.ui.passive,
+              discover: state.ui.discover,
+              showPassive: draft.health.passive !== false,
+              showDiscover: draft.health.discover?.enabled === true,
               onDeleteProfile: props.onDeleteProfile,
+              onStrategy: props.onStrategy,
+              onWeight: props.onWeight,
               onMaxAttempts: props.onMaxAttempts,
               onMove: props.onMove,
               onRemove: props.onRemove,
@@ -2411,6 +2912,7 @@ window.__ModuleLoader__.load({
         modal !== null && modal.kind === 'manual' ? h(ManualChannelModal, {
           t: t,
           routableProviders: routableProviders,
+          catalog: state.catalog,
           onClose: props.onCloseModal,
           onAdd: function (entries) { props.onAddCandidates(modal.profileId, entries, modal.isDefault) },
         }) : null,
@@ -2496,11 +2998,11 @@ window.__ModuleLoader__.load({
                 h('button', {
                   type: 'button',
                   className: 'dsh-router-catalog-btn',
-                  style: Object.assign({}, S.catalogBtn, state?.ui?.healthProbing ? { opacity: 0.6, cursor: 'wait' } : null),
-                  disabled: !state?.writable || state?.saving || state?.ui?.healthProbing,
-                  title: t('probeAllBtn'),
-                  onClick: props.onProbeAll,
-                }, h(Icon, { d: state?.ui?.healthProbing ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state?.ui?.healthProbing }), state?.ui?.healthProbing ? t('probingText') : t('probeAllBtn')),
+                  style: Object.assign({}, S.catalogBtn, state?.ui?.checking ? { opacity: 0.6, cursor: 'wait' } : null),
+                  disabled: !state?.writable || state?.saving || state?.ui?.checking,
+                  title: t('checkAllBtn'),
+                  onClick: props.onCheckAll,
+                }, h(Icon, { d: state?.ui?.checking ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state?.ui?.checking }), state?.ui?.checking ? t('checkingText') : t('checkAllBtn')),
                 h('button', {
                   type: 'button',
                   className: 'dsh-router-catalog-btn',
@@ -2562,36 +3064,13 @@ window.__ModuleLoader__.load({
       )
     }
 
-    var ROUTER_HEALTH_CONTRIBUTION = {
-      package: '@sudy/dsh-model-router',
-      descriptors: [
-        {
-          namespace: 'routerHealth',
-          method: 'getSnapshot',
-          parameters: [],
-          uplink: null,
-          result: { mode: 'src-json' },
-        },
-        {
-          namespace: 'routerHealth',
-          method: 'probeAll',
-          parameters: [
-            {
-              name: 'payload',
-              wire: 'payload',
-              kind: 'value',
-              codec: { mode: 'src-json' },
-              optional: true,
-            },
-          ],
-          uplink: null,
-          result: { mode: 'src-json' },
-        },
-      ],
-    }
-
     exports.name = NS + '/client'
-    exports.inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
+    // `remote.llm` carries the connectivity check (DSH's own model discovery)
+    // and `remote.settings` carries the endpoint facts it needs. Both are native
+    // remotes — nothing here declares a remote of its own, because a plugin
+    // remote needs a Typert contribution generated by a build step this
+    // package does not have.
+    exports.inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings']
 
     /**
      * Mount the config page for this bundle.
@@ -2603,6 +3082,12 @@ window.__ModuleLoader__.load({
       var t = ctx.locale.bind(NS)
       ctx.effect(() => ctx.locale.register(NS, { zh: zh, en: en }), 'router: dictionaries')
       ctx.effect(ensureStyles, 'router: global styles')
+      // 定时器随插件半包的生命周期一起销毁，不在设置改动后留下孤儿轮询。
+      // 它声明在 createController 里，所以由控制器交回 disposer，而不是在这里
+      // 直接够那个变量——function 作用域够不到，只会在每次卸载时抛 ReferenceError。
+      ctx.effect(function () {
+        return function () { controller.dispose() }
+      }, 'router: discover timer')
 
       var scope = ctx.configForms.get(CONFIG_NS)
       var controller = createController(ctx, scope, t)
@@ -2619,6 +3104,8 @@ window.__ModuleLoader__.load({
         onRemove: function (profileId, index, isDefault) { controller.removeCandidate(profileId, index, isDefault) },
         onMaxTotal: function (profileId, value, isDefault) { controller.setMaxTotalAttempts(profileId, value, isDefault) },
         onToggleSwitchOn: function (profileId, key, isDefault) { controller.toggleSwitchOn(profileId, key, isDefault) },
+        onStrategy: function (value) { controller.setStrategy(value) },
+        onWeight: function (index, value, isDefault) { controller.setWeight(index, value, isDefault) },
         onOpenNewProfile: function () { controller.openModal({ kind: 'new-profile' }) },
         onOpenManual: function (profileId, isDefault) { controller.openModal({ kind: 'manual', profileId: profileId, isDefault: isDefault }) },
         onOpenCatalog: function (profileId, isDefault) { controller.openModal({ kind: 'catalog', profileId: profileId, isDefault: isDefault }) },
@@ -2630,26 +3117,9 @@ window.__ModuleLoader__.load({
         onRiskAck: function (value) { controller.setRiskAck(value) },
         onOpenDrawer: function () { controller.openDrawer() },
         onCloseDrawer: function () { controller.closeDrawer() },
-        onProbeAll: function () { controller.probeAll() },
+        onCheckAll: function () { controller.checkAll() },
         onOpenHealthModal: function () { controller.openHealthModal() },
         onUpdateHealth: function (patch) { controller.updateHealth(patch) },
-      }
-
-      if (ctx.remote && typeof ctx.remote.$mount === 'function') {
-        ctx.effect(function () {
-          var unmount = null
-          ctx.remote.$mount(ROUTER_HEALTH_CONTRIBUTION).then(function (dispose) {
-            unmount = dispose
-            if (typeof controller.loadHealthSnapshot === 'function') {
-              controller.loadHealthSnapshot()
-            }
-          }).catch(function () {})
-          return function () {
-            if (typeof unmount === 'function') {
-              void unmount().catch(function () {})
-            }
-          }
-        }, 'router: remote health mount')
       }
 
       ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
