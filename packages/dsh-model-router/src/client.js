@@ -271,6 +271,10 @@ window.__ModuleLoader__.load({
       compactHealthHealthy: '健康',
       compactHealthDegraded: '降级',
       compactHealthUnhealthy: '异常',
+      toolCheckAll: '检查全部',
+      toolHealthConfig: '健康设置',
+      toolHistory: '转移历史',
+      telemetryEmpty: '当前链路暂无候选渠道，请先在「降级流水线」中添加模型渠道。',
     }
     var en = {
       pluginTitle: 'Model Router',
@@ -493,6 +497,10 @@ window.__ModuleLoader__.load({
       compactHealthHealthy: 'Healthy',
       compactHealthDegraded: 'Degraded',
       compactHealthUnhealthy: 'Unhealthy',
+      toolCheckAll: 'Check All',
+      toolHealthConfig: 'Health Settings',
+      toolHistory: 'History',
+      telemetryEmpty: 'No candidates configured in this chain yet. Add candidates in the Fallback Chain tab.',
     }
 
     /** The three start strategies, in the order the selector shows them. */
@@ -952,7 +960,7 @@ window.__ModuleLoader__.load({
         background: 'linear-gradient(90deg, rgba(74,101,232,0.08) 0%, var(--dsw-alias-bg-layer-2) 100%)',
         boxShadow: '0 0 0 1px rgba(74,101,232,0.2)',
       },
-      nodeMainRow: { display: 'flex', alignItems: 'center', gap: 16 },
+      nodeMainRow: { display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' },
       rankBadge: {
         width: 36,
         height: 36,
@@ -973,10 +981,10 @@ window.__ModuleLoader__.load({
         borderColor: 'transparent',
         boxShadow: '0 2px 6px rgba(74,101,232,0.4)',
       },
-      nodeContent: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' },
+      nodeContent: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' },
       modelInfo: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 },
-      modelNameRow: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-      modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      modelNameRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+      modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'min(260px, 36vw)' },
       providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
       primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(16,185,129,0.12)', color: 'var(--dsw-alias-state-success, #10b981)', border: '0.5px solid rgba(16,185,129,0.3)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
       healthDots: { display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 },
@@ -986,10 +994,11 @@ window.__ModuleLoader__.load({
       dotUnhealthy: { background: 'var(--dsw-alias-state-error-primary, #ef4444)' },
       dotUnknown: { background: 'var(--dsw-alias-bg-layer-4)', border: '0.5px solid var(--dsw-alias-border-l3)' },
       modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--ds-font-family-code, monospace)' },
+      nodeControls: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' },
       nodeTuning: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
       attemptPicker: { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 8px)', padding: '4px 10px', fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
       stepperBtn: { width: 24, height: 24, borderRadius: 6, border: '0.5px solid var(--dsw-alias-border-l3)', background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, transition: 'background 0.12s', flexShrink: 0, whiteSpace: 'nowrap' },
-      attemptInput: { width: 26, border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 13, fontWeight: 700, textAlign: 'center', outline: 'none' },
+      attemptInput: { width: 26, border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-primary)', fontSize: 13, fontWeight: 700, textAlign: 'center', outline: 'none', padding: 0, margin: 0, boxSizing: 'border-box' },
       iconBtn: { width: 32, height: 32, borderRadius: 'var(--dsw-radius-md, 8px)', border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', padding: 0, transition: 'background 0.15s, color 0.15s', flexShrink: 0 },
       iconBtnDisabled: { opacity: 0.25, cursor: 'not-allowed' },
       nodeActions: { display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 },
@@ -1030,7 +1039,7 @@ window.__ModuleLoader__.load({
       reasoningBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-tertiary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, whiteSpace: 'nowrap' },
       needsBtn: { boxSizing: 'border-box', background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', padding: '3px 10px', borderRadius: 'var(--dsw-radius-xs, 6px)', fontSize: 11.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', flexShrink: 0 },
       needsPanel: { borderTop: '0.5px solid var(--dsw-alias-border-l2)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 12 },
-      needsGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
+      needsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 },
       needCard: { background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 },
       needHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
       needHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.4 },
@@ -2102,7 +2111,7 @@ window.__ModuleLoader__.load({
       var t = props.t
       var record = props.record
       var status = record ? record.status : 'unknown'
-      var dotColor = 'var(--dsw-alias-bg-layer-4)'
+      var dotColor = 'var(--dsw-alias-border-l4, #888)'
       var statusText = t('compactHealthIdle')
       if (status === 'healthy') {
         dotColor = 'var(--dsw-alias-state-success-primary, #22c55e)'
@@ -2170,74 +2179,75 @@ window.__ModuleLoader__.load({
                     onClick: function () { setExpanded(!expanded) },
                   }, hasActiveNeeds ? '⚙️ ● ' + t('toggleNeedsBtn') : '⚙️ ' + t('toggleNeedsBtn'))),
                 h('span', { style: S.modelPath }, routeOf(candidate))),
-              h('div', { style: S.nodeTuning },
-                h('div', { style: S.attemptPicker, title: t('attemptLimitHint') },
-                  h('span', { style: { whiteSpace: 'nowrap' } }, t('singleAttemptLimit')),
+              h('div', { style: S.nodeControls },
+                h('div', { style: S.nodeTuning },
+                  h('div', { style: S.attemptPicker, title: t('attemptLimitHint') },
+                    h('span', { style: { whiteSpace: 'nowrap' } }, t('singleAttemptLimit')),
+                    h('button', {
+                      type: 'button',
+                      className: 'dsh-router-stepper-btn',
+                      style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts <= 1) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
+                      disabled: props.disabled || candidate.maxAttempts <= 1,
+                      title: t('stepMinus'),
+                      onClick: function () { props.onMaxAttempts(index, Math.max(1, candidate.maxAttempts - 1)) },
+                    }, h(Icon, { d: ICON_MINUS, size: 10 })),
+                    h('input', {
+                      style: S.attemptInput,
+                      type: 'text',
+                      inputMode: 'numeric',
+                      maxLength: 2,
+                      'aria-label': t('singleAttemptLimit') + ' (' + t('attemptRangeHint') + ')',
+                      value: String(candidate.maxAttempts),
+                      disabled: props.disabled,
+                      onChange: function (event) { props.onMaxAttempts(index, event.target.value) },
+                    }),
+                    h('button', {
+                      type: 'button',
+                      className: 'dsh-router-stepper-btn',
+                      style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts >= 5) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
+                      disabled: props.disabled || candidate.maxAttempts >= 5,
+                      title: t('stepPlus'),
+                      onClick: function () { props.onMaxAttempts(index, Math.min(5, candidate.maxAttempts + 1)) },
+                    }, h(Icon, { d: ICON_PLUS, size: 10 })),
+                    h('span', { style: { whiteSpace: 'nowrap' } }, t('timesUnit'))),
+                  props.showWeight ? h('div', { style: S.attemptPicker, title: t('weightHint') },
+                    h('span', { style: { whiteSpace: 'nowrap' } }, t('weightLabel')),
+                    h('input', {
+                      style: S.attemptInput,
+                      type: 'text',
+                      inputMode: 'numeric',
+                      maxLength: 3,
+                      'aria-label': t('weightLabel'),
+                      value: String(candidate.weight || 0),
+                      disabled: props.disabled,
+                      onChange: function (event) { props.onWeight(index, event.target.value) },
+                    }),
+                    h('span', { style: { whiteSpace: 'nowrap' } }, props.weightShare + '%')) : null),
+                h('div', { style: S.nodeActions },
                   h('button', {
                     type: 'button',
-                    className: 'dsh-router-stepper-btn',
-                    style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts <= 1) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
-                    disabled: props.disabled || candidate.maxAttempts <= 1,
-                    title: t('stepMinus'),
-                    onClick: function () { props.onMaxAttempts(index, Math.max(1, candidate.maxAttempts - 1)) },
-                  }, h(Icon, { d: ICON_MINUS, size: 10 })),
-                  h('input', {
-                    style: S.attemptInput,
-                    type: 'text',
-                    inputMode: 'numeric',
-                    maxLength: 2,
-                    'aria-label': t('singleAttemptLimit') + ' (' + t('attemptRangeHint') + ')',
-                    value: String(candidate.maxAttempts),
-                    disabled: props.disabled,
-                    onChange: function (event) { props.onMaxAttempts(index, event.target.value) },
-                  }),
+                    className: 'dsh-router-icon-btn',
+                    style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
+                    disabled: index <= 0 || props.disabled,
+                    title: isPrimary ? t('primaryPinnedHint') : t('moveUp'),
+                    onClick: function () { props.onMove(index, -1) },
+                  }, h(Icon, { d: ICON_UP })),
                   h('button', {
                     type: 'button',
-                    className: 'dsh-router-stepper-btn',
-                    style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts >= 5) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
-                    disabled: props.disabled || candidate.maxAttempts >= 5,
-                    title: t('stepPlus'),
-                    onClick: function () { props.onMaxAttempts(index, Math.min(5, candidate.maxAttempts + 1)) },
-                  }, h(Icon, { d: ICON_PLUS, size: 10 })),
-                  h('span', { style: { whiteSpace: 'nowrap' } }, t('timesUnit'))))),
-            props.showWeight ? h('div', { style: S.attemptPicker, title: t('weightHint') },
-              h('span', { style: { whiteSpace: 'nowrap' } }, t('weightLabel')),
-              h('input', {
-                style: S.attemptInput,
-                type: 'text',
-                inputMode: 'numeric',
-                maxLength: 3,
-                'aria-label': t('weightLabel'),
-                value: String(candidate.weight || 0),
-                disabled: props.disabled,
-                onChange: function (event) { props.onWeight(index, event.target.value) },
-              }),
-              h('span', { style: { whiteSpace: 'nowrap' } }, props.weightShare + '%')) : null,
-            h('div', { style: S.nodeActions },
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-icon-btn',
-                style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
-                disabled: index <= 0 || props.disabled,
-                title: isPrimary ? t('primaryPinnedHint') : t('moveUp'),
-                onClick: function () { props.onMove(index, -1) },
-              }, h(Icon, { d: ICON_UP })),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-icon-btn',
-                style: Object.assign({}, S.iconBtn, index >= props.total - 1 ? S.iconBtnDisabled : null),
-                disabled: index >= props.total - 1 || props.disabled,
-                title: t('moveDown'),
-                onClick: function () { props.onMove(index, 1) },
-              }, h(Icon, { d: ICON_DOWN })),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-icon-btn',
-                style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
-                disabled: index <= 0 || props.disabled,
-                title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
-                onClick: function () { props.onRemove(index) },
-              }, h(Icon, { d: ICON_CLOSE })))),
+                    className: 'dsh-router-icon-btn',
+                    style: Object.assign({}, S.iconBtn, index >= props.total - 1 ? S.iconBtnDisabled : null),
+                    disabled: index >= props.total - 1 || props.disabled,
+                    title: t('moveDown'),
+                    onClick: function () { props.onMove(index, 1) },
+                  }, h(Icon, { d: ICON_DOWN })),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-router-icon-btn',
+                    style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
+                    disabled: index <= 0 || props.disabled,
+                    title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
+                    onClick: function () { props.onRemove(index) },
+                  }, h(Icon, { d: ICON_CLOSE })))))),
           expanded ? h('div', { style: S.needsPanel },
             h('div', { style: S.needsGrid },
               h('div', { style: S.needCard },
@@ -2472,20 +2482,32 @@ window.__ModuleLoader__.load({
               onClick: props.onOpenHealthModal,
             }, h(Icon, { d: ICON_GEAR, size: 14 }), t('telemetryBreakerBtn')))),
 
-        candidates.map(function (candidate, index) {
-          var route = routeOf(candidate)
-          var record = passive[route] || null
-          var isPrimary = index === 0 && !isDefault
-          return h('div', { key: route + index, style: S.telemetryCard },
-            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' } },
-              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
-                h('span', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null, { width: 28, height: 28, fontSize: 12 }) }, isPrimary ? '★' : String(index + 1).padStart(2, '0')),
-                h('span', { style: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, candidate.model || '—'),
-                h('span', { style: S.providerBadge }, candidate.provider),
-                isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null),
-              h(HealthDots, { t: t, route: route, passive: props.passive, discover: props.discover, showPassive: props.showPassive, showDiscover: props.showDiscover })),
-            h(ChannelMetricsDashboard, { t: t, record: record }))
-        }))
+        candidates.length === 0
+          ? h('div', {
+            style: {
+              padding: '36px 20px',
+              textAlign: 'center',
+              color: 'var(--dsw-alias-label-tertiary)',
+              background: 'var(--dsw-alias-bg-layer-2)',
+              border: '0.5px dashed var(--dsw-alias-border-l3)',
+              borderRadius: 'var(--dsw-radius-lg, 12px)',
+              fontSize: 13,
+            },
+          }, t('telemetryEmpty'))
+          : candidates.map(function (candidate, index) {
+            var route = routeOf(candidate)
+            var record = passive[route] || null
+            var isPrimary = index === 0 && !isDefault
+            return h('div', { key: route + index, style: S.telemetryCard },
+              h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' } },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                  h('span', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null, { width: 28, height: 28, fontSize: 12 }) }, isPrimary ? '★' : String(index + 1).padStart(2, '0')),
+                  h('span', { style: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, candidate.model || '—'),
+                  h('span', { style: S.providerBadge }, candidate.provider),
+                  isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null),
+                h(HealthDots, { t: t, route: route, passive: props.passive, discover: props.discover, showPassive: props.showPassive, showDiscover: props.showDiscover })),
+              h(ChannelMetricsDashboard, { t: t, record: record }))
+          }))
     }
 
     /**
@@ -3189,7 +3211,7 @@ window.__ModuleLoader__.load({
                 disabled: disabled || state.ui.checking,
                 title: t('checkAllBtn'),
                 onClick: props.onCheckAll,
-              }, h(Icon, { d: state.ui.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state.ui.checking }), state.ui.checking ? t('checkingText') : t('checkAllBtn')),
+              }, h(Icon, { d: state.ui.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state.ui.checking }), state.ui.checking ? t('checkingText') : t('toolCheckAll')),
               h('button', {
                 type: 'button',
                 className: 'dsh-router-tool-btn',
@@ -3197,14 +3219,14 @@ window.__ModuleLoader__.load({
                 disabled: disabled,
                 title: t('healthConfigBtn'),
                 onClick: props.onOpenHealthModal,
-              }, h(Icon, { d: ICON_GEAR, size: 13 }), t('healthConfigBtn')),
+              }, h(Icon, { d: ICON_GEAR, size: 13 }), t('toolHealthConfig')),
               h('button', {
                 type: 'button',
                 className: 'dsh-router-tool-btn',
                 style: S.toolBtn,
                 title: t('failoverHistoryButton'),
                 onClick: props.onOpenDrawer,
-              }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('failoverHistoryButton'))),
+              }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory'))),
             h('div', { style: S.headerDivider }),
             h('div', { style: S.switchWrap },
               h('span', { style: S.switchLabel }, t('globalSwitchLabel')),
@@ -3459,7 +3481,7 @@ window.__ModuleLoader__.load({
                     disabled: !state?.writable || state?.saving || state?.ui?.checking,
                     title: t('checkAllBtn'),
                     onClick: props.onCheckAll,
-                  }, h(Icon, { d: state?.ui?.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state?.ui?.checking }), state?.ui?.checking ? t('checkingText') : t('checkAllBtn')),
+                  }, h(Icon, { d: state?.ui?.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state?.ui?.checking }), state?.ui?.checking ? t('checkingText') : t('toolCheckAll')),
                   h('button', {
                     type: 'button',
                     className: 'dsh-router-tool-btn',
@@ -3467,14 +3489,14 @@ window.__ModuleLoader__.load({
                     disabled: !state?.writable || state?.saving,
                     title: t('healthConfigBtn'),
                     onClick: props.onOpenHealthModal,
-                  }, h(Icon, { d: ICON_GEAR, size: 13 }), t('healthConfigBtn')),
+                  }, h(Icon, { d: ICON_GEAR, size: 13 }), t('toolHealthConfig')),
                   h('button', {
                     type: 'button',
                     className: 'dsh-router-tool-btn',
                     style: S.toolBtn,
                     title: t('failoverHistoryButton'),
                     onClick: props.onOpenDrawer,
-                  }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('failoverHistoryButton'))),
+                  }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory'))),
                 h('div', { style: S.headerDivider }),
                 dirty ? h('button', {
                   type: 'button',
