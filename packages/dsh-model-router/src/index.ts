@@ -30,7 +30,7 @@ import {
   type Profile,
   type RouterOptions,
 } from './config.ts'
-import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, unmetCondition } from './router.ts'
+import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
 import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
 import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice } from './notice.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
@@ -45,6 +45,8 @@ export { Config } from './config.ts'
 export function apply(ctx: Context, config: Config): void {
   const states = new RouterState()
   const breaker = new CircuitBreaker()
+  /** Live agents by session, so the session/event feed can reach their state. */
+  const agentsBySession = new WeakMap<Session, Agent>()
 
   // Structural validation at load: wrong in every environment, so it fails loud.
   assertStructural(readConfig(config))
@@ -82,17 +84,30 @@ export function apply(ctx: Context, config: Config): void {
   // This listener exists for the router's state alone — channel health is folded
   // by the `router/channel-health` projection, which the registry drives itself.
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
+    // read_image's image enters the conversation as a tool result, so the turn
+    // becomes image-bearing from the next step on — without this the walk would
+    // send the very next request (the one that actually contains the image) to
+    // a candidate the user gated on `images: false`.
+    if (event.type === 'tool/result') {
+      const agent = agentsBySession.get(session)
+      if (agent !== undefined) states.noteToolResult(agent, event.data.turn, toolResultHasImage(event.data))
+    }
     if (event.type !== 'assistant/attempt') return
     const failure = failureCodeOfStream(event.data.stream)
     if (failure !== undefined) states.noteFailure(session, event.data.turn, event.data.step, failure)
   })
 
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
+    // 工具结果里的图片经 session/event 进来，而该事件只有 session 没有 agent；
+    // 这张表把两者接上，条目随 agent 消亡。
+    agentsBySession.set(agent.session, agent)
     // Conditions are gathered once per step, before route selection: pre-step
     // sees the admitted user messages (the images gate) and the
     // context-pressure projection answers for the next request (the token
-    // gate). Neither re-runs on retries, so the conditions stay stable across
-    // a step's attempts. This listener only observes.
+    // gate). The image flag accumulates across the turn's steps and is
+    // extended by the sticky window, so it stays stable across a step's
+    // retries without pretending later steps claimed the same input. This
+    // listener only observes.
     agent.ctx.on('agent/pre-step', async (payload, next) => {
       const decision = await next()
       states.noteConditions(agent, payload.turn, payload.step, gatherConditions(ctx, agent.session, payload.messages))
@@ -116,6 +131,7 @@ export function apply(ctx: Context, config: Config): void {
             config.default.get() as DefaultProfile,
           )
           if (chain === undefined) return resolved
+          states.setStickyTurns(agent, chain.stickyTurns)
           // 策略只决定从哪条开始；起点之后的前进逻辑与策略无关。
           const start = resolveStartIndex(chain.candidates, chain.strategy, states.nextCursor(agent.session, chain.candidates.length))
           state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step), start)
@@ -127,9 +143,12 @@ export function apply(ctx: Context, config: Config): void {
 
         // Walk forward from the planned index, skipping candidates this exact
         // request cannot be served by: an unmet `needs` condition first, then a
-        // capability rejection. The user's own route is exempt from both —
-        // DSH validated the selection when it was made, and skipping it would
-        // be a silent reroute.
+        // capability rejection. Conditions apply to EVERY candidate — including
+        // the user's own route: an explicit `needs` is the user's stated intent,
+        // and skipping a primary that fails it honors the configuration instead
+        // of silently ignoring it. What the user's own route stays exempt from
+        // is the automatic machinery: breaker cooldowns and capability
+        // pre-validation, which DSH already settled when the selection was made.
         let index = plan.state.index
         const skipped: Candidate[] = []
         const conditionSkipped: { candidate: Candidate; reason: string }[] = []
@@ -139,21 +158,21 @@ export function apply(ctx: Context, config: Config): void {
         breaker.sweep(now)
         while (index < candidates.length) {
           const candidate = candidates[index]!
+          const unmet = unmetCondition(candidate, plan.state.conditions)
+          if (unmet !== undefined) {
+            conditionSkipped.push({ candidate, reason: unmet })
+            index += 1
+            continue
+          }
+          // 禁用的渠道直接跳过——但用户自己选的那一条永远不跳过：那是他明确
+          // 要用的，禁用名单不该能覆盖人的显式选择。
           if (candidate.provider === resolved.provider && candidate.model === resolved.model) {
             outgoing = candidateConfig(resolved, candidate)
             break
           }
-          // 禁用的渠道直接跳过——但用户自己选的那一条永远不跳过：那是他明确
-          // 要用的，禁用名单不该能覆盖人的显式选择。
           const until = breaker.blockedUntil(candidate.provider, candidate.model, now)
           if (until !== undefined) {
             blocked.push({ candidate, until })
-            index += 1
-            continue
-          }
-          const unmet = unmetCondition(candidate, plan.state.conditions)
-          if (unmet !== undefined) {
-            conditionSkipped.push({ candidate, reason: unmet })
             index += 1
             continue
           }
@@ -168,10 +187,30 @@ export function apply(ctx: Context, config: Config): void {
             index += 1
           }
         }
+        // 跳过通知在“落回用户原路由”之前发：那条路径上没有任何切换 Notice，
+        // 而“为什么链上没人能接这一击”恰恰是用户最需要看到的。条件跳过按
+        // (turn, 跳过组) 去重——工具循环轮次每步都重决一遍，同样的跳过发一次就够。
+        if (conditionSkipped.length > 0 && states.shouldNoteConditionSkip(agent, turn, conditionSkipKey(conditionSkipped))) {
+          for (const entry of conditionSkipped) {
+            agent.session.append('user/message', conditionSkipNotice(entry.candidate, entry.reason), { surfaceOp: 'append' })
+          }
+        }
+        for (const candidate of skipped) {
+          agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
+        }
+        for (const entry of blocked) {
+          agent.session.append('user/message', breakerNotice(entry.candidate, entry.until), { surfaceOp: 'append' })
+        }
         if (outgoing === undefined) {
           // Nothing in the chain can serve this request. Fall through to the
           // user's own route so the real failure surfaces there instead of a
-          // silent swap.
+          // silent swap. The chain is spent for this step: record it, or every
+          // retry re-walks the same dead chain, the recovery listener keeps
+          // answering "continue" (totalAttempts never moves), and the turn
+          // spins on the user's route until the boot is killed.
+          // Note: 这个 exhausted 修复的来龙去脉 —— 见
+          // .agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md
+          states.start(agent, { ...plan.state, exhausted: true })
           return resolved
         }
         states.start(agent, skipped.length === 0 && conditionSkipped.length === 0 && index === plan.state.index ? plan.state : skipTo(plan.state, index))
@@ -190,15 +229,6 @@ export function apply(ctx: Context, config: Config): void {
             ),
             { surfaceOp: 'append' },
           )
-        }
-        for (const entry of conditionSkipped) {
-          agent.session.append('user/message', conditionSkipNotice(entry.candidate, entry.reason), { surfaceOp: 'append' })
-        }
-        for (const candidate of skipped) {
-          agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
-        }
-        for (const entry of blocked) {
-          agent.session.append('user/message', breakerNotice(entry.candidate, entry.until), { surfaceOp: 'append' })
         }
         return outgoing
       },
@@ -234,6 +264,11 @@ function readConfig(config: Config): { profiles: readonly Profile[]; default: De
     default: config.default.get() as DefaultProfile,
     health: config.health?.get() as HealthConfig | undefined,
   }
+}
+
+/** Stable identity of one turn's condition-skip set, for the once-per-turn notice. */
+function conditionSkipKey(skipped: readonly { candidate: Candidate; reason: string }[]): string {
+  return skipped.map(entry => `${entry.candidate.provider}/${entry.candidate.model}:${entry.reason}`).join('|')
 }
 
 /**

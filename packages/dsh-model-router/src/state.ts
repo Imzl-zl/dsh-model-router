@@ -30,6 +30,8 @@ export interface StepChain {
   readonly order: readonly number[]
   readonly switchOn: SwitchOn
   readonly maxTotalAttempts: number
+  /** No-image turns the image condition holds for after an image turn. */
+  readonly stickyTurns: number
   readonly strategy: Strategy
 }
 
@@ -51,11 +53,18 @@ export interface StepState {
 }
 
 /**
- * The request-shape conditions a `needs` gate reads, gathered once per step:
- * `agent/pre-step` sees the step's admitted user messages, and the
- * context-pressure projection answers for the next request. Both run before
- * route selection and are not re-run on retries, so the conditions are stable
- * across a step's attempts — "what this step's request looks like" is fixed.
+ * The request-shape conditions a `needs` gate reads.
+ *
+ * `hasImages` is turn-scoped: `agent/pre-step` sees only the messages newly
+ * claimed for the step, and a tool-loop turn's later steps claim nothing — so
+ * the flag accumulates across a turn's steps (and picks up images that arrive
+ * mid-turn through a tool result). It then extends across turns by the matched
+ * chain's `stickyTurns`, which is how a follow-up about an image stays on the
+ * image route. `projectedTokens` stays step-scoped: it estimates the next
+ * request's size, which each step re-measures.
+ *
+ * Note: 为什么取数必须覆盖 tool/result 嵌套图片 —— 见
+ * .agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md
  */
 export interface StepConditions {
   /** An image block is present in the step's admitted user messages. */
@@ -74,6 +83,18 @@ export function emptyConditions(): StepConditions {
   return { hasImages: false, projectedTokens: undefined }
 }
 
+/** Per-turn condition state: the accumulated image flag plus this step's token estimate. */
+interface TurnNote {
+  turn: number
+  /** Last step whose pre-step was observed; only that step's estimate is fresh. */
+  step: number
+  /** Turn-accumulated (sticky-extended) image condition. */
+  hasImages: boolean
+  /** No-image turns the image condition still holds for. */
+  stickyRemaining: number
+  projectedTokens: number | undefined
+}
+
 /** The last failure code seen for one (session, turn, step), for the notice. */
 export interface FailureNote {
   turn: number
@@ -84,7 +105,11 @@ export interface FailureNote {
 export class RouterState {
   private readonly steps = new WeakMap<Agent, StepState>()
   private readonly failures = new WeakMap<Session, FailureNote>()
-  private readonly conditions = new WeakMap<Agent, StepConditions & { turn: number; step: number }>()
+  private readonly turns = new WeakMap<Agent, TurnNote>()
+  /** The matched chain's `stickyTurns`, recorded when a chain is resolved. */
+  private readonly sticky = new WeakMap<Agent, number>()
+  /** Condition-skip notices already emitted for one (agent, turn); the tool loop re-decides every step. */
+  private readonly conditionSkips = new WeakMap<Agent, { turn: number; key: string }>()
   /**
    * 轮询游标，按会话各自计数：同时开几个聊天窗口时互不干扰，也天然随会话结束重置。
    * 进程重启归零——轮询是分配手段，不是需要记住的状态。
@@ -114,16 +139,75 @@ export class RouterState {
     return note !== undefined && note.turn === turn && note.step === step ? note.code : undefined
   }
 
-  /** Record the request-shape conditions observed at `agent/pre-step`. */
+  /**
+   * Record the request-shape conditions observed at `agent/pre-step`.
+   *
+   * The image flag is turn-scoped: within a turn it only ever turns on (the
+   * step's claimed input or a tool result can add an image; nothing removes
+   * one mid-turn). A new turn re-evaluates from its own input, extended by the
+   * remaining sticky window of the previous one.
+   */
   noteConditions(agent: Agent, turn: number, step: number, conditions: StepConditions): void {
-    this.conditions.set(agent, { ...conditions, turn, step })
+    const previous = this.turns.get(agent)
+    if (previous !== undefined && previous.turn === turn) {
+      this.turns.set(agent, {
+        ...previous,
+        step,
+        projectedTokens: conditions.projectedTokens,
+        hasImages: previous.hasImages || conditions.hasImages,
+      })
+      return
+    }
+    const remaining = previous?.stickyRemaining ?? 0
+    const hasImages = conditions.hasImages || remaining > 0
+    this.turns.set(agent, {
+      turn,
+      step,
+      hasImages,
+      // 真有图的轮次把窗口补满；被粘滞延长的轮次消耗一格；没粘住的归零。
+      stickyRemaining: conditions.hasImages ? this.stickyTurnsOf(agent) : Math.max(0, remaining - 1),
+      projectedTokens: conditions.projectedTokens,
+    })
+  }
+
+  /**
+   * Record that one turn's tool result carried an image. The image enters the
+   * conversation there, so every later step of the turn — and the sticky
+   * window after it — must treat the turn as image-bearing.
+   */
+  noteToolResult(agent: Agent, turn: number, hasImage: boolean): void {
+    if (!hasImage) return
+    const note = this.turns.get(agent)
+    if (note === undefined || note.turn !== turn) return
+    this.turns.set(agent, { ...note, hasImages: true, stickyRemaining: this.stickyTurnsOf(agent) })
   }
 
   /** The conditions for this step, or the defaults when pre-step was not observed. */
   conditionsFor(agent: Agent, turn: number, step: number): StepConditions {
-    const note = this.conditions.get(agent)
-    if (note === undefined || note.turn !== turn || note.step !== step) return emptyConditions()
-    return { hasImages: note.hasImages, projectedTokens: note.projectedTokens }
+    const note = this.turns.get(agent)
+    if (note === undefined || note.turn !== turn) return emptyConditions()
+    return { hasImages: note.hasImages, projectedTokens: note.step === step ? note.projectedTokens : undefined }
+  }
+
+  /** Record the matched chain's `stickyTurns` for this agent. */
+  setStickyTurns(agent: Agent, turns: number): void {
+    this.sticky.set(agent, Math.max(0, turns))
+  }
+
+  private stickyTurnsOf(agent: Agent): number {
+    return this.sticky.get(agent) ?? 0
+  }
+
+  /**
+   * Whether the condition-skip notices for this (agent, turn, key) have not
+   * been emitted yet. A tool-loop turn re-decides every step and would repeat
+   * an identical skip row per step; the first one carries the information.
+   */
+  shouldNoteConditionSkip(agent: Agent, turn: number, key: string): boolean {
+    const note = this.conditionSkips.get(agent)
+    if (note !== undefined && note.turn === turn && note.key === key) return false
+    this.conditionSkips.set(agent, { turn, key })
+    return true
   }
 
   /**

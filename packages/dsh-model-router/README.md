@@ -44,11 +44,12 @@ profiles:                     # matched by exact provider/model
   - id: coding-main
     when: { provider: deepseek-official, model: deepseek-v4-flash }
     candidates:               # [0] is pinned to the when model
-      - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2 }
+      - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2, needs: { images: false } }
       - { provider: pi-ai-gpt, model: gpt-5, maxAttempts: 1, needs: { images: true } }
       - { provider: pi-ai-claude, model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
     switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
     maxTotalAttempts: 6
+    stickyTurns: 0            # no-image turns to keep the image route after an image turn
 default:                      # pure fallback pool for unconfigured models
   enabled: false
   candidates:
@@ -57,8 +58,11 @@ default:                      # pure fallback pool for unconfigured models
   maxTotalAttempts: 3
 ```
 
-- `candidates[0]` of a matched profile must be the `when` model — your own
-  selection always attempts first, so a switch never happens without a failure.
+- `candidates[0]` of a matched profile must be the `when` model — it cannot be
+  removed or reordered. Explicitly configured `needs` conditions apply to it
+  like any other candidate (skipping it is honoring your configuration, and it
+  is announced); it stays exempt only from the automatic gates (breaker
+  cooldowns, capability pre-validation).
 - The default pool is pure fallback: the model you picked is always the first
   hop, with one attempt.
 - Backoff is not configurable: it belongs to `llm-retry`. Each switch is
@@ -66,6 +70,33 @@ default:                      # pure fallback pool for unconfigured models
 - Unchecked `switchOn` codes never move the chain; DSH still retries the same
   route per its own default policy (up to 5 times for the default retryable
   codes) before the request terminates.
+
+### Routing images to a vision model
+
+DSH rejects an image prompt at **send admission** when the selected model does
+not declare the image modality (`MODEL_DOES_NOT_SUPPORT_IMAGES`,
+`api/session-controller/src/commands.ts:336-348`) — that check runs before any
+request exists, so no plugin can route around it. The supported shape uses the
+fact that the gate reads the *declaration*, not the real capability:
+
+1. In DSH's model settings, tick `input: [text, image]` for the text model.
+   Image prompts now always pass admission — whichever route answered last.
+2. Configure the profile with two mutually exclusive conditions: the primary
+   (`candidates[0]`, the text model itself) with `needs: { images: false }`,
+   the vision model with `needs: { images: true }`. The chain above is exactly
+   that shape.
+
+Image requests then route to the vision model, no-image turns route back to the
+text model on their own, and the API never receives an image the text model
+cannot process — no manual switching. If the router is off, misconfigured, or
+has no eligible vision candidate, the image reaches the text model and the API
+rejects it loudly (that failure is the point of the tick: it stays visible).
+`stickyTurns` keeps the vision model for a few no-image turns when you follow
+up about an image you just sent.
+
+The image condition is turn-scoped and covers images that arrive mid-turn
+through a tool result (`read_image`), not just the messages claimed for the
+step.
 
 ## Known Limitations and Deferred Work
 
@@ -94,12 +125,22 @@ default:                      # pure fallback pool for unconfigured models
   a global health subsystem.
 - **Agent main requests only.** Compaction and session-title calls keep their
   own DSH-provided model configuration and are not routed by this plugin.
-- **`needs` conditions are read once per step and the user's own route is
-  exempt.** `images` reads the step's admitted user messages
-  (`agent/pre-step`); `minContextTokens` reads the context-pressure
-  projection's estimate for the next request, which is present only after the
-  first usage sample — an unmeasured request counts as unmet, and the estimate
-  systematically under-counts CJK text.
+- **`needs` conditions are turn-scoped for images, step-scoped for tokens.**
+  `images` accumulates across a turn's steps (a tool-loop turn's later steps
+  claim no new input) and also counts images that arrive through a tool result
+  (`read_image`); `minContextTokens` reads the context-pressure projection's
+  estimate for the next request, which is present only after the first usage
+  sample — an unmeasured request counts as unmet, and the estimate
+  systematically under-counts CJK text. Explicit conditions apply to
+  `candidates[0]` too.
+- **Image routing cannot bypass DSH's send admission.** See "Routing images to
+  a vision model" above: the supported shape requires ticking `input: [text,
+  image]` for the text model in DSH's model settings. A known gap: a no-image
+  turn in a session whose history still carries retained image blocks routes
+  to the text model and the API rejects the image loudly — the router cannot
+  see the request history at routing time (`agent/request` carries no
+  messages). DSH's offload eventually turns old images into text references;
+  starting a new session for image topics avoids it.
 - **Conditional routing does not cover tool support.** DSH exposes no
   machine-readable tool capability, so a tools-incompatible candidate fails at
   runtime (`INVALID_REQUEST`/`PI_AI_ERROR`) and is handled by `switchOn`.

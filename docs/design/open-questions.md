@@ -2,7 +2,7 @@
 title: "DSH Model Router — 决策登记簿"
 status: "closed"
 kind: "decision-register"
-last_updated: "2026-10-12"
+last_updated: "2026-10-14"
 ---
 
 # DSH Model Router — 决策登记簿
@@ -33,7 +33,7 @@ last_updated: "2026-10-12"
 | 2 | reasoningEffort 必须插件预校验 | `UNSUPPORTED_REASONING_EFFORT` 是 preparation error，直接终止 step+turn、不进 recovery waterfall（有测试断言）。Router 在 `agent/request` 返回候选前先过 `ctx.llm.resolveCallConfig()`，不过即跳过该候选；UI 候选节点展示 catalog 档位徽标 | `.agents/notes/implemented/2026-10-12-router-prevalidates-reasoning-effort.md` |
 | 3 | 遥测抽屉 | 只保留“最近故障转移历史”：客户端 `ctx.remote.session.list()` 取会话（list 行自带 cached 投影提示）→ 对最近 N=20 个会话调 `projections({sessionId})` 取权威值。健康度/延迟/成功率/冷却倒计时**不做**（无数据来源，与全局熔断同批） | ui-design §2.3(5) |
 | 4 | canonical schema | `enabled` 总闸 + `profiles` 数组（`id`/`when`/`candidates`/`switchOn`/`maxTotalAttempts`）+ `default` 纯备用池（`enabled`/`candidates`/`switchOn`/`maxTotalAttempts`）。ui-design 控制器的 dict 形态作废 | product-plan §三 |
-| 5 | primary 钉死 | `candidates[0]` 必须等于 `when` 模型：不可删、不可换序、不适用 needs。跳过 primary = 无失败也静默改路 | ui-design §2.2(1) |
+| 5 | primary 钉死 | `candidates[0]` 必须等于 `when` 模型：不可删、不可换序、~~不适用 needs~~。**2026-10-14 修订**：显式配置的 `needs` 条件对 primary 同样生效（用户意图不是静默改路）；primary 只豁免自动机制（熔断冷却、能力预校验）。跳过留 notice。见第四节 | ui-design §2.2(1) |
 | 6 | 条件全部不满足 | 备用全被过滤且 primary 失败 → 终态报错 + 中文 notice“没有可用备用候选”；不忽略条件回退 primary | ui-design §2.3(3) |
 | 7 | 配置校验分级 | 结构错误（ID 重复、上限非法、候选为空）硬失败（zod schema + `validateConfig()`，`fiber.update()` 先校验再重启）；provider 未注册（环境漂移）降级为该 profile 停用 + warn + UI 徽章 | product-plan §九 |
 | 8 | 两个全局开关 | 总闸“启用渠道路由”（默认开，管插件整体）+ “接管未配置的模型”（默认关，管未配规则的模型）。命名与文案按此区分 | ui-design §四 |
@@ -46,3 +46,19 @@ last_updated: "2026-10-12"
 3. 投影 fork/resume 与 snapshot 重放一致性。
 4. 设置页读自有投影（`list` → `projections`）无同型先例；机制已核实（guard 放行 + 值含插件 key），组合测试覆盖。
 5. 插件热卸载：listeners、投影注册、UI slot 全部清除。
+
+## 四、识图路由裁定（2026-10-14，源码核查后）
+
+| # | 裁定 | 结论 | 理由落点 |
+|---|---|---|---|
+| 1 | 发送准入门边界 | **插件够不着发图前的拦截**：`session-controller/src/commands.ts:336-348` 在 prompt 准入时查"选中的模型"的 `inputModalities`，不含 image 拒收，消息从未生成。选择状态是 session-controller 私有字段（`ApiSessionAgentController` 直接 new 不进 ctx 服务），`installModelSelection` 只读内存 ref 不听耐久事件——两条偏门均实测死路 | `.agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md` |
+| 2 | 闭环形态 | 用户在 DSH 模型配置里给文本模型勾选 `input:[text,image]`（门禁只查声明），路由器用互斥条件保证 API 收不到图：primary `needs.images: false`、识图候选 `needs.images: true`。零点击；路由器没接管时撞 API 报错是响亮失败，已明确并接受 | 同上 |
+| 3 | `images` 三态 | `true`=仅带图轮 / `false`=仅无图轮 / 不填=不限；一对互斥条件即"一条链拆成识图/文本两条路" | product-plan §2.4 |
+| 4 | 条件作用于 primary | 修订二.5：显式条件是用户意图，跳过 primary 不留 silent reroute；自动机制仍豁免 | 本节一.5 |
+| 5 | `hasImages` 按 turn 累积 | 取数 = 本步 claimed 用户消息 ∪ 本轮 `tool/result` 嵌套图片块（`read_image` 的图下一步才进请求）；`projectedTokens` 仍按 step | product-plan §2.4 |
+| 6 | `stickyTurns` | profile/default 各一个数字，默认 0 = 无图轮立即切回；N>0 = 追问图片时识图模型多粘 N 轮。不做布尔、不做会话级常驻（会把用户锁在弱模型上） | product-plan §2.4 |
+| 7 | 专门识图候选列表 | **不做**：在"选中识图模型过门禁"形态下，链顺序+互斥条件已表达全部意图，独立列表是同一事实的第二个来源 | 同上 |
+| 8 | 自动 modality 门 | **不做**：用户给文本模型勾选识图后声明层面即"能识图"，自动门控永不触发；显式条件是唯一还能表达意图的机制 | 同上 |
+| 9 | 已知限制 | 历史残留 retained 图片的纯文本后续轮会撞 API 报错（路由器在路由时机看不到请求历史：`agent/request` payload 不带 messages、`pre-step` 只给 claimed 输入）；DSH offload 最终把老图转文本，报错暂时；聊图开新会话可规避。不藏，写进文档 | product-plan §2.4 |
+| 10 | 落回原路由的空转 bug | 修复：链上无可服务候选落回用户原路由时记 `exhausted`，否则 recovery 永远得到"继续"、turn 无限空转（实测 33716 次尝试） | 决策笔记 |
+| 11 | DSH 上游诉求（未提） | 准入门基于"选中模型"在路由插件时代过时；最合理诉求是"选择回退从 header 改成记住最后一次显式 pick"——该改动能让勾选识图也不再必要。等用户决定何时提，不作为实现前置 | — |

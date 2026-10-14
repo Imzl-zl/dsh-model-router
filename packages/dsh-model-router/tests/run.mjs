@@ -185,6 +185,55 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'primary-condition-skip',
+    note: '条件对 primary 同样生效：本步不满足其显式条件时跳过，链条继续且留痕',
+    router: { enabled: true, profiles: [profile([
+      // primary 自己配了条件——显式条件是用户意图，不是插件猜测，跳过它不等于静默改路。
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, needs: { minContextTokens: 999999 } },
+      C('stub-backup', 1),
+      C('stub-third', 1),
+    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    script: {
+      policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
+      'stub-primary': { outcomes: ['fail:TIMEOUT'] },
+      'stub-third': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-backup/stub-model'])
+      const texts = notices(events).map(n => n.text)
+      eq('notice count', texts.length, 1)
+      ok('condition skip names the primary with the threshold reason', texts.some(t => t.includes('stub-primary') && t.includes('使用条件不满足') && t.includes('999999')))
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
+    name: 'image-gate-skips-vision-on-text-turn',
+    note: '无图轮：主模型失败后，只配了「仅带图」的识图候选被条件跳过（留痕且只发一次），文本请求不会打给识图模型',
+    router: { enabled: true, profiles: [profile([
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, needs: { images: false } },
+      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, needs: { images: true } },
+    ], { stickyTurns: 2 })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 } },
+    script: {
+      policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
+      'stub-primary': { outcomes: ['fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      // 识图候选从头到尾没被调用过；链上无人可接时落回用户原路由，且推翻了
+      // 「落回原路径不推进状态 → recovery 永远得到继续 → 无限空转」的旧行为：
+      // 第二次触发时链已 exhausted，这一轮就终态，不再空转。
+      eq('every header is the primary', headers(events).every(h => h === 'stub-primary/stub-model'), true)
+      eq('attempt count bounded by the exhausted chain', failedAttempts(events).length, 2)
+      const texts = notices(events).map(n => n.text)
+      // 六次触发、同一组条件跳过，只发一次通知。
+      eq('condition skip notice fires once', texts.filter(t => t.includes('使用条件不满足')).length, 1)
+      ok('condition skip names the vision candidate and the images reason', texts.some(t => t.includes('stub-backup') && t.includes('需图片输入')))
+      eq('no failover notice: nothing was switched to', texts.filter(t => t.includes('已切换至')).length, 0)
+      eq('turn end', turnEnd(events), 'error')
+    },
+  },
+  {
     name: 'master-off',
     note: '总闸关闭：配了规则也不接管',
     router: { enabled: false, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
@@ -238,6 +287,7 @@ function candidateYaml(c, indent) {
   const needs = c.needs ?? {}
   const parts = []
   if (needs.images === true) parts.push('images: true')
+  if (needs.images === false) parts.push('images: false')
   if (needs.minContextTokens !== undefined && needs.minContextTokens > 0) parts.push(`minContextTokens: ${needs.minContextTokens}`)
   const extra = parts.length > 0 ? `, needs: { ${parts.join(', ')} }` : ''
   return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxAttempts: ${c.maxAttempts}${extra} }`
@@ -273,7 +323,8 @@ ${router.profiles.map(p => `          - id: ${p.id}
             candidates:
 ${p.candidates.map(c => candidateYaml(c, '              ')).join('\n')}
             switchOn: { rateLimit: ${p.switchOn.rateLimit}, server: ${p.switchOn.server}, timeout: ${p.switchOn.timeout}, transport: ${p.switchOn.transport}, emptyResponse: ${p.switchOn.emptyResponse}, invalidRequest: ${p.switchOn.invalidRequest} }
-            maxTotalAttempts: ${p.maxTotalAttempts}`).join('\n')}
+            maxTotalAttempts: ${p.maxTotalAttempts}${p.stickyTurns === undefined ? '' : `
+            stickyTurns: ${p.stickyTurns}`}`).join('\n')}
         default:
           enabled: ${router.default.enabled}
           candidates:

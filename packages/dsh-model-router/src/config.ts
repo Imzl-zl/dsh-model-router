@@ -19,13 +19,18 @@ import z from '@deepseek-ai/schemastery'
 /**
  * One physical candidate. Credentials stay owned by the provider adapter.
  *
- * `needs` gates the candidate on the shape of THIS request: `images` requires
- * an image block in the step's admitted user messages, `minContextTokens`
- * requires the context-pressure projection's estimate for the next request.
- * Both are read once per step (agent/pre-step and the projection), so they are
- * stable across the step's retries. The user's own route (a matched profile's
- * pinned candidates[0], or the default pool's implicit first hop) is exempt:
- * skipping it would be a silent reroute.
+ * `needs` gates the candidate on the shape of THIS request: `images` is
+ * tri-state (`true` = only when the step's admitted user messages carry an
+ * image, `false` = only when they do not, absent = unconstrained),
+ * `minContextTokens` requires the context-pressure projection's estimate for
+ * the next request. Both are read once per step (agent/pre-step and the
+ * projection), so they are stable across the step's retries — with `images`
+ * accumulating across a turn's steps, because a tool-loop turn's later steps
+ * claim no new input. The gates apply to every candidate including a matched
+ * profile's pinned `candidates[0]`: an explicit condition is the user's stated
+ * intent, and honoring it is configuration, not a silent reroute. What stays
+ * exempt is the automatic machinery (breaker cooldowns, capability
+ * pre-validation) — DSH validated the selection when it was made.
  */
 /**
  * 选路策略：只决定"从哪条渠道开始"。
@@ -50,9 +55,9 @@ export const candidateSchema = z.object({
   weight: z.number().step(1).min(0).max(100).default(0)
     .description('权重；只有「按权重」策略会读它，其他策略下写多少都不影响'),
   needs: z.object({
-    images: z.boolean().description('仅当本次请求包含图片时使用此候选'),
+    images: z.boolean().description('图片条件：true = 仅当本次请求包含图片时使用此候选；false = 仅当本次请求不含图片时使用；不填 = 不限。对第一个候选（你选中的模型）同样生效'),
     minContextTokens: z.number().step(1).min(0).description('仅当预估上下文达到该 token 数时使用此候选；0 表示不限制'),
-  }).description('高级路由条件：不满足时跳过此候选'),
+  }).description('高级路由条件：不满足时跳过此候选（含第一个候选）'),
 })
 
 /** Which failures move to the next candidate. Fixed set, Chinese labels. */
@@ -77,6 +82,8 @@ export const profileSchema = z.object({
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
   maxTotalAttempts: z.number().step(1).min(1).default(6)
     .description('这个请求最多真实调用多少次（硬上限，含同渠道重试与跨渠道降级）'),
+  stickyTurns: z.number().step(1).min(0).max(99).default(0)
+    .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）。追问刚发过的图片时设 2~3，识图模型多粘几轮'),
   strategy: strategySchema,
 })
 
@@ -88,6 +95,8 @@ export const defaultSchema = z.object({
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
   maxTotalAttempts: z.number().step(1).min(1).default(3)
     .description('接管时单请求最多真实调用多少次（硬上限）'),
+  stickyTurns: z.number().step(1).min(0).max(99).default(0)
+    .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）'),
   strategy: strategySchema,
 })
 
@@ -209,6 +218,7 @@ export interface Profile {
   candidates: Candidate[]
   switchOn: SwitchOn
   maxTotalAttempts: number
+  stickyTurns: number
   strategy: Strategy
 }
 
@@ -218,6 +228,7 @@ export interface DefaultProfile {
   candidates: Candidate[]
   switchOn: SwitchOn
   maxTotalAttempts: number
+  stickyTurns: number
   strategy: Strategy
 }
 
@@ -328,9 +339,15 @@ export function assertStructural(config: {
     if (profile.maxTotalAttempts < 1) {
       throw new Error(`model-router: profile "${profile.id}" maxTotalAttempts must be >= 1`)
     }
+    if (profile.stickyTurns < 0) {
+      throw new Error(`model-router: profile "${profile.id}" stickyTurns must be >= 0`)
+    }
   }
   if (config.default.maxTotalAttempts < 1) {
     throw new Error('model-router: default.maxTotalAttempts must be >= 1')
+  }
+  if (config.default.stickyTurns < 0) {
+    throw new Error('model-router: default.stickyTurns must be >= 0')
   }
   // A weight strategy with no positive weight has nothing to draw from, and the
   // failure would surface as every request silently starting at candidate 0.

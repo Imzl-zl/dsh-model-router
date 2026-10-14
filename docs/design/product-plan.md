@@ -60,20 +60,30 @@ last_updated: "2026-10-12"
 - `maxTotalAttempts` 是**硬上限**。DSH 的 Agent step 循环本身没有任何 attempt 上限，所以这个必须由插件兜住，否则一个坏请求能跑很久。
 - 退避**不可配置、UI 只读**：同渠道重试的退避归 `llm-retry`（500ms 起步、10s 封顶、0.1 jitter），插件不另设一套；跨候选切换前会先经历一次这样的退避等待，UI hint 必须披露。
 
-### 2.4 条件路由（两个用户条件 + 一个自动维度）
+### 2.4 条件路由（images 三态 + 上下文门槛 + 推理档位自动维度）
 
-候选可以带条件，只有条件满足才轮到它：
+候选可以带条件，只有条件满足才轮到它。`images` 是**三态**：`true` = 仅带图轮，`false` = 仅无图轮，不填 = 不限——一对互斥条件就是把一条链拆成「识图路 / 文本路」的表达方式：
 
 ```yaml
-    - { provider: pi-ai-gpt, model: gpt-5, maxAttempts: 1, needs: { images: true } }
-    - { provider: pi-ai-claude, model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
+    - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2, needs: { images: false } }
+    - { provider: pi-ai-gpt,        model: gpt-5,           maxAttempts: 1, needs: { images: true } }
+    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
 ```
 
 | 维度 | 判断依据 | 精确度 |
 |---|---|---|
-| `images: true` | 本步 admitted 用户消息里的 `ImageBlock` | **精确**（附件引用在不在内容块里） |
+| `images: true` | 本**轮** admitted 用户消息里的 `ImageBlock`，按 turn 累积（见下） | **精确**（附件引用在不在内容块里） |
+| `images: false` | 同上取数的否定 | **精确** |
 | `minContextTokens` | `tokenMeter` 的 `contextPressure` 投影，`projectedTokens` 即"下一个请求会花多少" | **估算**，token-meter 自述系统性低估 CJK，不能当精确阈值 |
 | 推理档位（自动，不占条件位） | 请求 config 的 `reasoningEffort` 对比候选 `resolveModel()` 的 `reasoning.efforts` | **精确**；不支持时 Router 经 `resolveCallConfig` 预校验自动跳过该候选 |
+
+**条件对 primary 同样生效**（含 `candidates[0]` 与兜底池的隐式第一跳）：显式条件是用户意图，跳过它才是无视配置；跳过留 notice，不静默。primary 仍然豁免的只有自动机制——熔断冷却与能力预校验，那些 DSH 在选择时已校验过。此裁定修订了[未决事项](open-questions.md)二.5。
+
+**`hasImages` 按 turn 累积，取数 = 本步 claimed 用户消息 ∪ 本轮 `tool/result` 事件里嵌套的图片块**。两个来源都不可省：`agent/pre-step` 的 messages 只是本步新 claimed 的输入，工具循环的第二步之后基本为空（不带累积，带图 turn 的第二步会滑回文本模型，而图片还在请求历史里）；`read_image` 的图从工具结果进来，下一步的请求才含它。`projectedTokens` 仍按 step。
+
+**`stickyTurns`（profile/default 各有，默认 0）**：带图轮之后继续按「有图」路由的无图轮数。追问刚发过的图片（不带新图）时设 2~3，识图模型多粘几轮；0 = 无图轮立即切回。真带图的轮次补满窗口，被粘滞的轮次消耗一格。
+
+**识图路由的完整形态依赖 DSH 侧一次配置**：给文本模型在模型设置里勾选 `input:[text,image]`。发送准入门只查这份声明、不查真实能力（`api/session-controller/src/commands.ts:336-348`），勾选后带图消息永远过门禁；路由器用上面的互斥条件保证 API 永远收不到它处理不了的图。路由器没接管时（关闭/配错/候选全挂）撞 API 报错是响亮的失败。完整理由与代价见[决策笔记](../../.agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md)。
 
 **工具能力不做前置条件**：DSH 没有任何机器可读的"模型支持 function calling"元数据（`LlmModelInfo` 唯一能力字段是 `inputModalities`）。工具不兼容在运行时由 provider 拒绝、规范化为 `INVALID_REQUEST`（deepseek）或 `PI_AI_ERROR`（pi-ai），进入 `agent/request-error` 由 Router 按 `switchOn` 承接；`INVALID_REQUEST` 是 switchOn 可选项（默认不勾）。理由见[决策笔记](../../.agents/notes/implemented/2026-10-12-drop-tools-eligibility-condition.md)；推理档位自动跳过的理由见[决策笔记](../../.agents/notes/implemented/2026-10-12-router-prevalidates-reasoning-effort.md)。
 
@@ -98,12 +108,13 @@ enabled: true                 # 总闸：关掉后所有模型绕过插件（默
 profiles:                     # 数组；按 when 精确匹配
   - id: coding-main
     when: { provider: deepseek-official, model: deepseek-v4-flash }
-    candidates:               # [0] 钉死为 when 模型：不可删、不可换序、无 needs
-      - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2 }
+    candidates:               # [0] 钉死为 when 模型：不可删、不可换序；显式 needs 条件对它同样生效
+      - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2, needs: { images: false } }
       - { provider: pi-ai-gpt,        model: gpt-5,           maxAttempts: 1, needs: { images: true } }
       - { provider: pi-ai-claude,     model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
     switchOn: [RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, EMPTY_RESPONSE]
     maxTotalAttempts: 6
+    stickyTurns: 0            # 带图轮之后粘几个无图轮；0 = 无图轮立即切回
 
   - id: gpt-main
     when: { provider: pi-ai-gpt, model: gpt-5 }

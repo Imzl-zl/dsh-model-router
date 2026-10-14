@@ -76,15 +76,24 @@ window.__ModuleLoader__.load({
       singleAttemptLimit: '单渠道尝试',
       attemptLimitHint: '切换前会先等待一次退避（约 0.5~10 秒）',
       timesUnit: '次',
+      turnsUnit: '轮',
       moveUp: '上移',
       moveDown: '下移',
       removeNode: '从链路中移除',
       primaryPinnedHint: '首选节点钉死为用户所选模型，不可删除或换序',
       toggleNeedsBtn: '⚙️ 高级路由条件',
       needImagesTitle: '图像/多模态输入',
-      needImagesHint: '仅当会话包含图片时允许匹配',
+      needImagesHint: '按本次请求有没有图片决定此候选能不能上场；对第一个候选（你选中的模型）同样生效',
+      needImagesAnyLabel: '不限',
+      needImagesRequireLabel: '仅带图请求',
+      needImagesForbidLabel: '仅无图请求',
       needContextTitle: '最小上下文门槛 (Tokens)',
       needContextHint: '按预估值判断（估算值，可能低估中文）；0 表示不限制',
+      stickyTurns: '识图粘滞（无图轮）',
+      stickyTurnsHint: '带图轮之后继续按「有图」路由的无图轮数；0 = 无图轮立即切回。追问刚发过的图片时设 2~3，识图模型多粘几轮',
+      visionWorkflowTitle: '让不能识图的模型接住图片（零点击）：',
+      visionWorkflowText: '在 DSH 模型设置里给该模型勾选 input:[text,image]——发送门禁只查这份声明，不查真实能力。然后把本规则配成：第一个候选（它自己）选「仅无图请求」，识图模型选「仅带图请求」。之后带图的请求自动走识图模型，API 永远收不到它处理不了的图；无图轮自动切回它，下一次发图照样过门禁，不用手动切模型。',
+      problemBadSticky: 'Profile {id} 的识图粘滞轮数不能为负',
       reasoningBadge: '推理档位',
       failoverNotice: '若主渠道遭遇限流或超时，自动切换至备用：',
       failoverTag: 'Failover',
@@ -169,6 +178,7 @@ window.__ModuleLoader__.load({
       problemEmptyRoute: '规则 {id} 的第 {index} 个候选缺少 provider 或模型 ID',
       problemBadTotal: '规则 {id} 的总尝试上限必须 ≥ 1',
       problemBadDefaultTotal: '全局兜底的总尝试上限必须 ≥ 1',
+      problemBadDefaultSticky: '全局兜底的识图粘滞轮数不能为负',
       problemWeightNoPositive: '选路策略是「按权重」，但没有任何候选的权重大于 0——这样永远从第一条开始，等于没配',
       problemBreakerEmptyRule: '自动禁用里有一条规则既没填错误码也没填错误信息，它永远命中不了任何东西',
       formUnavailable: '配置当前不可用',
@@ -266,15 +276,24 @@ window.__ModuleLoader__.load({
       singleAttemptLimit: 'Attempts per candidate',
       attemptLimitHint: 'One backoff wait (about 0.5-10s) precedes each switch',
       timesUnit: 'times',
+      turnsUnit: 'turns',
       moveUp: 'Move Up',
       moveDown: 'Move Down',
       removeNode: 'Remove from chain',
       primaryPinnedHint: 'The primary node is pinned to the selected model and cannot be removed or reordered',
       toggleNeedsBtn: '⚙️ Advanced Conditions',
       needImagesTitle: 'Vision / Image Input',
-      needImagesHint: 'Only matched when the conversation includes images',
+      needImagesHint: 'Gates this candidate on whether the request carries an image; applies to the first candidate (your selected model) too',
+      needImagesAnyLabel: 'Any',
+      needImagesRequireLabel: 'Image requests',
+      needImagesForbidLabel: 'Text-only requests',
       needContextTitle: 'Min Context Floor (Tokens)',
       needContextHint: 'Estimated projection (may under-count CJK); 0 disables the gate',
+      stickyTurns: 'Vision stickiness (no-image turns)',
+      stickyTurnsHint: 'No-image turns that keep routing as if the request had an image; 0 = revert immediately. Set 2~3 to keep the vision model for follow-ups about a just-sent image',
+      visionWorkflowTitle: 'Let a text-only model handle images (zero clicks):',
+      visionWorkflowText: 'Tick input:[text,image] for that model in DSH model settings — the send gate reads the declaration, not the real capability. Then set this rule up as: the first candidate (the model itself) to "Text-only requests", the vision model to "Image requests". Image requests then route to the vision model automatically, the API never receives an image it cannot process, no-image turns revert on their own, and the next image still passes the gate — no manual switching.',
+      problemBadSticky: 'Profile {id} sticky turns must not be negative',
       reasoningBadge: 'Reasoning',
       failoverNotice: 'Switches automatically on eligible failure to fallback #',
       failoverTag: 'Failover',
@@ -359,6 +378,7 @@ window.__ModuleLoader__.load({
       problemEmptyRoute: 'Profile {id} candidate {index} is missing provider or model id',
       problemBadTotal: 'Profile {id} maxTotalAttempts must be >= 1',
       problemBadDefaultTotal: 'The default pool maxTotalAttempts must be >= 1',
+      problemBadDefaultSticky: 'The default pool sticky turns must be >= 0',
       problemWeightNoPositive: 'The start strategy is "by weight" but no candidate has a positive weight — every request would start at the first entry, which is the same as not configuring it.',
       problemBreakerEmptyRule: 'One auto-disable rule has neither a code nor a message, so it can never match anything.',
       formUnavailable: 'Configuration is currently unavailable',
@@ -461,7 +481,19 @@ window.__ModuleLoader__.load({
       return { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
     }
     function defaultProfileValue() {
-      return { enabled: false, candidates: [], switchOn: defaultSwitchOn(), maxTotalAttempts: 3 }
+      return { enabled: false, candidates: [], switchOn: defaultSwitchOn(), maxTotalAttempts: 3, stickyTurns: 0 }
+    }
+    /** A config saved before `stickyTurns` existed reads undefined here; the host default is 0. */
+    function normalizeProfiles(value) {
+      return clone(value ?? []).map(function (profile) {
+        if (typeof profile.stickyTurns !== 'number' || profile.stickyTurns < 0) profile.stickyTurns = 0
+        return profile
+      })
+    }
+    function normalizeDefault(value) {
+      var pool = clone(value ?? defaultProfileValue())
+      if (typeof pool.stickyTurns !== 'number' || pool.stickyTurns < 0) pool.stickyTurns = 0
+      return pool
     }
 
     // ---------- global styles injection (DSH sidebar & modal adaptations) ----------
@@ -1107,8 +1139,10 @@ window.__ModuleLoader__.load({
           if (!(candidate.maxAttempts >= 1 && candidate.maxAttempts <= 5)) problems.push({ key: 'problemBadMaxAttempts', vars: { id: profile.id, index: index + 1 } })
         })
         if (!(profile.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: { id: profile.id } })
+        if (!(profile.stickyTurns >= 0)) problems.push({ key: 'problemBadSticky', vars: { id: profile.id } })
       })
       if (!(draft.default.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadDefaultTotal', vars: {} })
+      if (!(draft.default.stickyTurns >= 0)) problems.push({ key: 'problemBadDefaultSticky', vars: {} })
       // 与 host 的 assertStructural 保持同步：这里漏一条，用户就会存一个被 Host
       // 拒绝、且看不到原因的配置。
       if (draft.default.strategy === 'weight' && draft.default.candidates.every(function (c) { return !(c.weight > 0) })) {
@@ -1183,8 +1217,8 @@ window.__ModuleLoader__.load({
         var value = scope.getSnapshot().value ?? {}
         return {
           enabled: value.enabled ?? true,
-          profiles: clone(value.profiles ?? []),
-          default: clone(value.default ?? defaultProfileValue()),
+          profiles: normalizeProfiles(value.profiles),
+          default: normalizeDefault(value.default),
           // A config saved by an older build carries the flat health shape; the
           // three tiers are re-derived here so one old row cannot leave the UI
           // reading `undefined` for a tier that has a perfectly good default.
@@ -1461,6 +1495,7 @@ window.__ModuleLoader__.load({
             candidates: candidates,
             switchOn: defaultSwitchOn(),
             maxTotalAttempts: 6,
+            stickyTurns: 0,
           })
           ui.activeId = id
           ui.modal = null
@@ -1509,8 +1544,10 @@ window.__ModuleLoader__.load({
           var list = isDefault ? draft.default.candidates : draft.profiles.find(function (p) { return p.id === profileId }).candidates
           var candidate = list[index]
           var next = Object.assign({}, candidate.needs ?? {})
-          if (patch.images !== undefined) {
-            if (patch.images) next.images = true
+          // images 三态：require/forbid 各设一极，any 删掉这个字段。
+          if (patch.imagesMode !== undefined) {
+            if (patch.imagesMode === 'require') next.images = true
+            else if (patch.imagesMode === 'forbid') next.images = false
             else delete next.images
           }
           if (patch.minContextTokens !== undefined) {
@@ -1518,6 +1555,13 @@ window.__ModuleLoader__.load({
             else delete next.minContextTokens
           }
           candidate.needs = Object.keys(next).length > 0 ? next : undefined
+          publish()
+        },
+        setStickyTurns: function (profileId, value, isDefault) {
+          var parsed = Number(value)
+          var clamped = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
+          if (isDefault) draft.default.stickyTurns = clamped
+          else draft.profiles.find(function (p) { return p.id === profileId }).stickyTurns = clamped
           publish()
         },
         setMaxTotalAttempts: function (profileId, value, isDefault) {
@@ -1842,7 +1886,9 @@ window.__ModuleLoader__.load({
       var expanded = expandedState[0]
       var setExpanded = expandedState[1]
       var needs = candidate.needs ?? {}
-      var hasActiveNeeds = (needs.images === true) || (needs.minContextTokens > 0)
+      // images 是三态：undefined = 不限，true/false 各限一极，都算“配了条件”。
+      var hasActiveNeeds = (needs.images !== undefined) || (needs.minContextTokens > 0)
+      var imagesMode = needs.images === true ? 'require' : needs.images === false ? 'forbid' : 'any'
       var reasoning = reasoningLabelOf(props.catalog, candidate.provider, candidate.model)
       return h('div', { style: S.node },
         h('div', { style: Object.assign({}, S.nodeCard, isPrimary ? S.nodeCardPrimary : null) },
@@ -1864,7 +1910,7 @@ window.__ModuleLoader__.load({
                     showDiscover: props.showDiscover,
                   }),
                   reasoning === undefined ? null : h('span', { style: S.reasoningBadge }, t('reasoningBadge') + ': ' + reasoning),
-                  isPrimary ? null : h('button', {
+                  h('button', {
                     type: 'button',
                     style: Object.assign({}, S.needsBtn, hasActiveNeeds ? { borderColor: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)' } : null),
                     'aria-expanded': expanded,
@@ -1941,16 +1987,19 @@ window.__ModuleLoader__.load({
                 onClick: function () { props.onRemove(index) },
               }, h(Icon, { d: ICON_CLOSE })))),
           h(ChannelMetricsDashboard, { t: t, record: props.passive ? props.passive[routeOf(candidate)] : null }),
-          !isPrimary && expanded ? h('div', { style: S.needsPanel },
+          expanded ? h('div', { style: S.needsPanel },
             h('div', { style: S.needsGrid },
               h('div', { style: S.needCard },
                 h('div', { style: S.needHeader },
                   h('span', null, t('needImagesTitle')),
-                  h(Switch, {
-                    checked: needs.images === true,
-                    label: t('needImagesTitle'),
-                    disabled: props.disabled,
-                    onChange: function (next) { props.onNeeds(index, { images: next }) },
+                  h(SegmentedTabs, {
+                    items: [
+                      { value: 'any', label: t('needImagesAnyLabel'), id: 'images-any-' + index, panelId: 'images-any-panel-' + index },
+                      { value: 'require', label: t('needImagesRequireLabel'), id: 'images-require-' + index, panelId: 'images-require-panel-' + index },
+                      { value: 'forbid', label: t('needImagesForbidLabel'), id: 'images-forbid-' + index, panelId: 'images-forbid-panel-' + index },
+                    ],
+                    value: imagesMode,
+                    onChange: function (value) { props.onNeeds(index, { imagesMode: value }) },
                   })),
                 h('span', { style: S.needHint }, t('needImagesHint'))),
               h('div', { style: S.needCard },
@@ -2102,7 +2151,7 @@ window.__ModuleLoader__.load({
             ' ' + t('safetyNoticeText'))))
     }
 
-    /** The budget row: editable total cap, read-only backoff badge. */
+    /** The budget row: editable total cap, editable sticky turns, read-only backoff badge. */
     function BudgetRow(props) {
       var t = props.t
       return h('div', { style: S.budgetGrid },
@@ -2122,6 +2171,22 @@ window.__ModuleLoader__.load({
               onChange: function (event) { props.onMaxTotal(event.target.value) },
             }),
             h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('timesUnit')))),
+        props.stickyTurns === undefined ? null : h('div', { style: S.budgetItem },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+            h('span', { style: S.budgetTitle }, t('stickyTurns')),
+            h('span', { style: S.budgetHint }, t('stickyTurnsHint'))),
+          h('div', { style: S.budgetInput },
+            h('input', {
+              style: S.budgetInputField,
+              type: 'text',
+              inputMode: 'numeric',
+              maxLength: 2,
+              'aria-label': t('stickyTurns'),
+              value: String(props.stickyTurns),
+              disabled: props.disabled,
+              onChange: function (event) { props.onStickyTurns(event.target.value) },
+            }),
+            h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('turnsUnit')))),
         h('div', { style: S.budgetItem },
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
             h('span', { style: S.budgetTitle }, t('backoffTitle')),
@@ -2162,6 +2227,11 @@ window.__ModuleLoader__.load({
             onNeeds: function (index, patch) { props.onNeeds(profile.id, index, patch, false) },
             onWeight: function (index, value) { props.onWeight(index, value, false) },
           }),
+          h('div', { style: S.safetyBox },
+            h(Icon, { d: ICON_WARN, size: 16 }),
+            h('div', null,
+              h('strong', null, t('visionWorkflowTitle')),
+              ' ' + t('visionWorkflowText'))),
           h('div', { style: S.addBar },
             h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, t('addFromCatalog')),
             h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(profile.id, false) } }, t('addManual')))),
@@ -2184,8 +2254,10 @@ window.__ModuleLoader__.load({
           h(BudgetRow, {
             t: t,
             maxTotalAttempts: profile.maxTotalAttempts,
+            stickyTurns: profile.stickyTurns,
             disabled: props.disabled,
             onMaxTotal: function (value) { props.onMaxTotal(profile.id, value, false) },
+            onStickyTurns: function (value) { props.onStickyTurns(profile.id, value, false) },
           })))
     }
 
@@ -2255,8 +2327,10 @@ window.__ModuleLoader__.load({
           h(BudgetRow, {
             t: t,
             maxTotalAttempts: pool.maxTotalAttempts,
+            stickyTurns: pool.stickyTurns,
             disabled: props.disabled,
             onMaxTotal: function (value) { props.onMaxTotal(null, value, true) },
+            onStickyTurns: function (value) { props.onStickyTurns(null, value, true) },
           })))
     }
 
@@ -3103,6 +3177,7 @@ window.__ModuleLoader__.load({
         onMove: function (profileId, index, direction, isDefault) { controller.moveCandidate(profileId, index, direction, isDefault) },
         onRemove: function (profileId, index, isDefault) { controller.removeCandidate(profileId, index, isDefault) },
         onMaxTotal: function (profileId, value, isDefault) { controller.setMaxTotalAttempts(profileId, value, isDefault) },
+        onStickyTurns: function (profileId, value, isDefault) { controller.setStickyTurns(profileId, value, isDefault) },
         onToggleSwitchOn: function (profileId, key, isDefault) { controller.toggleSwitchOn(profileId, key, isDefault) },
         onStrategy: function (value) { controller.setStrategy(value) },
         onWeight: function (index, value, isDefault) { controller.setWeight(index, value, isDefault) },

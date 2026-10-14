@@ -74,6 +74,7 @@ export function resolveChain(
         order: profile.candidates.map((_, index) => index),
         switchOn: profile.switchOn,
         maxTotalAttempts: profile.maxTotalAttempts,
+        stickyTurns: profile.stickyTurns,
         strategy: profile.strategy,
       }
     }
@@ -85,6 +86,7 @@ export function resolveChain(
     order: [0, ...fallback.candidates.map((_, index) => index + 1)],
     switchOn: fallback.switchOn,
     maxTotalAttempts: fallback.maxTotalAttempts,
+    stickyTurns: fallback.stickyTurns,
     strategy: fallback.strategy,
   }
 }
@@ -178,6 +180,24 @@ export function hasImageContent(messages: readonly { content: readonly { type: s
 }
 
 /**
+ * Whether one durable `tool/result` event carries an image into the
+ * conversation. `read_image`'s outcome arrives as an image block nested inside
+ * a tool-result block, not at the message's top level — the request that
+ * follows the tool call is the first one an image gate can see it in.
+ */
+export function toolResultHasImage(data: unknown): boolean {
+  const message = (data as { message?: { content?: unknown } } | undefined)?.message
+  const blocks = message?.content
+  if (!Array.isArray(blocks)) return false
+  return blocks.some(block => {
+    const typed = block as { type?: unknown; content?: unknown }
+    if (typed.type === 'image') return true
+    if (!Array.isArray(typed.content)) return false
+    return typed.content.some(inner => (inner as { type?: unknown }).type === 'image')
+  })
+}
+
+/**
  * Whether a candidate is eligible for this request's shape: the negation of
  * {@link unmetCondition}.
  */
@@ -189,9 +209,20 @@ export function conditionsMet(candidate: Candidate, conditions: StepConditions):
  * The unmet `needs` condition of one candidate, or undefined when it is
  * eligible for this request. An unmeasured projection is not a measured-large
  * one, so a `minContextTokens` gate treats absence as unmet.
+ *
+ * `images` is tri-state: `true` requires an image in the request, `false`
+ * requires its absence — the pair that splits one chain into an image route
+ * and a text route — and an absent value constrains nothing. Both directions
+ * apply to every candidate including a matched profile's pinned `candidates[0]`:
+ * an explicit condition is the user's stated intent, and skipping a primary
+ * that fails it is honoring the configuration, not a silent reroute.
+ *
+ * Note: 为什么文本模型能在 DSH 里勾识图、靠路由兜底 —— 见
+ * .agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md
  */
 export function unmetCondition(candidate: Candidate, conditions: StepConditions): string | undefined {
   if (candidate.needs?.images === true && !conditions.hasImages) return '需图片输入'
+  if (candidate.needs?.images === false && conditions.hasImages) return '本请求包含图片'
   const min = candidate.needs?.minContextTokens
   if (min !== undefined && min > 0) {
     const projected = conditions.projectedTokens

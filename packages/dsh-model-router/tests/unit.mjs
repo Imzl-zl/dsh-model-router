@@ -20,12 +20,13 @@ import {
   resolveStartIndex,
   rotate,
   startStep,
+  toolResultHasImage,
   unmetCondition,
 } from '../src/router.ts'
 import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, MAX_ENTRIES } from '../src/lineage.ts'
 import { breakerNotice } from '../src/notice.ts'
 import { assertStructural } from '../src/config.ts'
-import { emptyConditions } from '../src/state.ts'
+import { emptyConditions, RouterState } from '../src/state.ts'
 
 let passed = 0
 function test(name, body) {
@@ -64,10 +65,11 @@ test('no needs means always eligible', () => {
   assert.equal(unmetCondition(candidate({}), conditions(false, undefined)), undefined)
 })
 
-test('images gate requires an image block', () => {
+test('images gate requires an image block; false requires its absence', () => {
   assert.equal(unmetCondition(candidate({ images: true }), conditions(false, 5000)), '需图片输入')
   assert.equal(unmetCondition(candidate({ images: true }), conditions(true, 5000)), undefined)
   assert.equal(unmetCondition(candidate({ images: false }), conditions(false, 0)), undefined)
+  assert.equal(unmetCondition(candidate({ images: false }), conditions(true, 0)), '本请求包含图片')
 })
 
 test('context gate: 0 disables, unmeasured is unmet, boundary is inclusive', () => {
@@ -679,5 +681,142 @@ test('channelHealthProjection tolerates a header that names no route', () => {
     data: { reason: 'initial', header: { config: { provider: '', model: '' } } },
   })
   assert.equal(next, state)
+})
+
+// ---- turn-accumulated image conditions (RouterState) ----
+// 图片条件按 turn 累积：pre-step 的 messages 只是本步新 claimed 的输入，一个
+// 带图 turn 的第二步之后通常是空的——按 step 判会让工具循环的第二步滑回文本
+// 模型，而图片还在请求历史里（read_image 也会再次撞门禁）。
+
+const turnConditions = (hasImages, projectedTokens) => ({ hasImages, projectedTokens })
+// RouterState 只按身份键控，任何对象都能当 Agent 用。
+const agentKey = () => ({ id: {} })
+
+test('image conditions accumulate across the steps of one turn', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.noteConditions(agent, 1, 1, turnConditions(true, 100))
+  // 第二步没有新的 claimed 输入，但这一轮已经有图。
+  assert.equal(states.conditionsFor(agent, 1, 2).hasImages, true)
+  // 新轮次重新评估，不继承上一轮。
+  assert.equal(states.conditionsFor(agent, 2, 1).hasImages, false)
+})
+
+test('projectedTokens stays step-scoped while hasImages is turn-scoped', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.noteConditions(agent, 1, 1, turnConditions(false, 500))
+  assert.equal(states.conditionsFor(agent, 1, 1).projectedTokens, 500)
+  // 第二步带来图片：整轮按有图算，token 估算换成本步新鲜的数值。
+  states.noteConditions(agent, 1, 2, turnConditions(true, 900))
+  assert.equal(states.conditionsFor(agent, 1, 2).hasImages, true)
+  assert.equal(states.conditionsFor(agent, 1, 2).projectedTokens, 900)
+})
+
+test('a no-image turn clears the accumulated image condition', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.noteConditions(agent, 1, 1, turnConditions(true, undefined))
+  states.noteConditions(agent, 2, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 2, 1).hasImages, false)
+})
+
+test('stickyTurns 0 reverts on the very next no-image turn', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.setStickyTurns(agent, 0)
+  states.noteConditions(agent, 1, 1, turnConditions(true, undefined))
+  states.noteConditions(agent, 2, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 2, 1).hasImages, false)
+})
+
+test('stickyTurns holds the image condition for N no-image turns, then reverts', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.setStickyTurns(agent, 2)
+  states.noteConditions(agent, 1, 1, turnConditions(true, undefined))
+  states.noteConditions(agent, 2, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 2, 1).hasImages, true)
+  states.noteConditions(agent, 3, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 3, 1).hasImages, true)
+  states.noteConditions(agent, 4, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 4, 1).hasImages, false)
+})
+
+test('an image turn refreshes the sticky window', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.setStickyTurns(agent, 1)
+  states.noteConditions(agent, 1, 1, turnConditions(true, undefined))
+  states.noteConditions(agent, 2, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 2, 1).hasImages, true)
+  // 第 2 轮又带来图片：窗口重新计，后面还能再粘一轮。
+  states.noteConditions(agent, 3, 1, turnConditions(true, undefined))
+  states.noteConditions(agent, 4, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 4, 1).hasImages, true)
+  states.noteConditions(agent, 5, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 5, 1).hasImages, false)
+})
+
+test('an image tool result marks the turn image-bearing for later steps', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.noteConditions(agent, 1, 1, turnConditions(false, undefined))
+  // read_image 的图经工具结果进来：本步请求里还没有它，下一步才有。
+  states.noteToolResult(agent, 1, true)
+  assert.equal(states.conditionsFor(agent, 1, 2).hasImages, true)
+})
+
+test('a text-only tool result leaves the turn condition alone', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.noteConditions(agent, 1, 1, turnConditions(false, undefined))
+  states.noteToolResult(agent, 1, false)
+  assert.equal(states.conditionsFor(agent, 1, 2).hasImages, false)
+})
+
+test('toolResultHasImage reads the nested tool-result content', () => {
+  assert.equal(
+    toolResultHasImage({ message: { content: [{ type: 'tool-result', toolCallId: 'c', content: [{ type: 'text', text: 'x' }] }] } }),
+    false,
+  )
+  assert.equal(
+    toolResultHasImage({ message: { content: [{ type: 'tool-result', toolCallId: 'c', content: [{ type: 'image', attachment: {} }] }] } }),
+    true,
+  )
+  // 顶层直接是图片块（非工具结果路径）也算。
+  assert.equal(toolResultHasImage({ message: { content: [{ type: 'image', attachment: {} }] } }), true)
+  assert.equal(toolResultHasImage({ message: { content: [] } }), false)
+  assert.equal(toolResultHasImage({}), false)
+  assert.equal(toolResultHasImage(undefined), false)
+})
+
+// ---- stickyTurns structural validation ----
+
+test('assertStructural rejects a negative stickyTurns', () => {
+  assert.throws(() => assertStructural({
+    profiles: [{
+      id: 'p1',
+      when: { provider: 'p', model: 'm' },
+      candidates: [{ provider: 'p', model: 'm', maxAttempts: 1, weight: 0 }],
+      switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
+      maxTotalAttempts: 6,
+      stickyTurns: -1,
+    }],
+    default: { enabled: false, candidates: [], switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }, maxTotalAttempts: 3, stickyTurns: 0 },
+  }), /stickyTurns/)
+})
+
+test('assertStructural accepts stickyTurns 0 and a positive value', () => {
+  const base = {
+    id: 'p1',
+    when: { provider: 'p', model: 'm' },
+    candidates: [{ provider: 'p', model: 'm', maxAttempts: 1, weight: 0 }],
+    switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
+    maxTotalAttempts: 6,
+  }
+  const fallback = { enabled: false, candidates: [], switchOn: base.switchOn, maxTotalAttempts: 3, stickyTurns: 0 }
+  assertStructural({ profiles: [{ ...base, stickyTurns: 0 }], default: fallback })
+  assertStructural({ profiles: [{ ...base, stickyTurns: 3 }], default: fallback })
 })
 
