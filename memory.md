@@ -6,15 +6,19 @@
 
 - 完整插件项目（`packages/dsh-model-router/`：宿主 + UI 半包 + 条件路由 + lineage 投影 + 遥测抽屉 + 双引擎渠道健康监控 + 识图路由），GitHub 仓库 `Imzl-zl/dsh-model-router`（公开）。
 - DSH 参考 checkout：`D:\sudy\github\deepseek-harness`（严格只读）；项目根：`D:\sudy\myproject\dsh-model-router`。
-- 最后更新：2026-10-14（识图路由闭环：images 三态条件 + turn 累积 + stickyTurns + 准入护栏边界裁定）。
-- 验证状态：单测 66/66（node strip-types 直导 .ts，含三态条件/turn 累积/tool-result 取数/sticky 窗口）+ 组合测试 12/12（真实 headless Loader + stub）+ 真实 provider 1/1（活网关真 500 跨 key 切换）+ 浏览器全链路；`tsc --noEmit` 0 错误；DSH checkout `status --porcelain` 0 行。
+- 最后更新：2026-10-15（UI 布局与信息架构重构：分段式控制台 Segmented Console + 候选卡片健康胶囊 CompactHealthBadge + 顶栏 headerTools 收拢）。
+- 验证状态：单测 66/66 + 组合测试 12/12（真实 headless Loader + stub）+ 真实 provider 1/1 + 浏览器全链路；`tsc --noEmit` 0 错误；DSH checkout `status --porcelain` 0 行。
 
 ## 已完成能力
 
 - 建立路由架构提案、源码地图、未决问题、实施阶段和官方先例对照，确认 Agent 主请求 `agent/request` prepend 最外层，`agent/request-error` 置于 `llm-retry` 内层。
 - 确定两层 attempt 边界与条件路由（图片 pre-step 精确检测、上下文 tokenMeter contextPressure 投影估算；用户路由豁免）。
 - **Phase 1~2 宿主与 UI 闭环**：有序备份链 + switchOn 策略 + 单渠道次数与硬总上限 + 中文 notice + 预校验跳过 + default 纯备用池 + 加载时结构校验 + failover 历史抽屉。
-- **UI 与入口重构实测落地**：`sidebar.footer.action` 侧栏自适应入口（CSS 弹性纵向列排布，与 `dsh-toolbox-ui` 完美自适应堆叠并存，绝不抢位挤占）；吸顶 Header 与 Modal Top Bar 为唯一主保存入口，去除冗余悬浮条与重复底栏按钮，支持 `Ctrl+S` 与防换行状态反馈；CandidateNode 引入 Stepper 步进器与科技感流向视觉。
+- **UI 布局重构与分段式控制台（Segmented Console，2026-10-15）**：
+  1. *分段导航架构*：在 Profile 与 Default Pool 顶层引入 `SegmentedTabs`，将臃肿的 3000px 长单页解构为「`🔄 降级流水线`」、「`⚡ 异常策略与预算`」、「`📊 渠道遥测与监控`」三大清晰专注视窗；
+  2. *候选卡片视觉瘦身*：候选节点中的 24 柱 Sparkline 提炼为紧凑的现代科技感药丸徽标（`CompactHealthBadge`，如 `[🟢 正常 · 140ms · 161.1t/s]`），卡片高度从 >200px 直降至 ~64px，支持一键点击直达遥测面板；
+  3. *顶栏工具组收拢*：吸顶顶栏与弹窗顶栏内的次要诊断动作（`checkAll`、`healthModal`、`drawer`）收拢为统一的幽灵态轻量工具组（`.dsh-router-tool-btn`），彻底消除窄屏下的水平折行与拥挤；
+  4. *折叠式识图指南*：将 100 余字的零点击识图路由指南设计为优雅的折叠说明卡片（`💡 零点击识图路由指南`），消除链路与添加按钮间的阻断。
 - **双引擎渠道健康监控（Health Monitoring）与时间轴仪表盘闭环**：
   1. *架构决策*：坚守 Profile -> 候选链单一入口，不分拆新页面，符合 LiteLLM/Portkey 行业标准；
   2. *被动零成本观测*：`session/event` 自动采集成功请求端到端延迟标记 `healthy` 🟢，`agent/request-error` 拦截 429/500/TIMEOUT/TRANSPORT 分类标记 `degraded` 🟡 / `unhealthy` 🔴，经 `channelHealthProjection` 折叠持久化至 Session 投影，0 额外 Token 消耗；
@@ -23,7 +27,7 @@
   5. *主动极速探测*：支持自定义探测内容（避开渠道违禁词）、探测超时（默认 8s）与自动轮询周期（默认 0 关闭防偷跑资费）；
   6. *控制中心与远程接入*：吸顶顶栏与弹窗顶栏配备「⚡ 探测全部渠道」与「⚙️ 健康设置」弹窗；实现 `RouterHealthService` 继承 `TypertRemoteService`（namespace: `'routerHealth'`），安全兼容 Node 24 原型描述符与 client 侧 `$mount` fail-open 保护。
 - **识图路由闭环（2026-10-14）**：`needs.images` 三态（true=仅带图轮 / false=仅无图轮 / 不填=不限）+ 显式条件可作用于 primary（修订 open-questions 二.5）+ `hasImages` 按 turn 累积（取数 = 本步 claimed 用户消息 ∪ 本轮 tool/result 嵌套图片块）+ `stickyTurns` 粘滞窗口（默认 0）+ 条件跳过 notice 按 (turn, 跳过组) 去重 + 修掉落回原路由路径不推进状态导致的无限空转 bug。边界裁定：DSH 发送准入门（`session-controller/src/commands.ts:336-348`）在路由之前且查"选中的模型"，插件够不着；闭环形态 = 用户在 DSH 模型配置里给文本模型勾 `input:[text,image]`（门禁只查声明）+ 互斥条件保证 API 收不到图。
-- 决策笔记状态：`implemented/` 9 篇（含本次 `2026-10-14-image-route-conditions-and-admission-gate-boundary.md`）。
+- 决策笔记状态：`implemented/` 10 篇（含本次 `2026-10-15-ui-layout-and-ia-redesign.md`）。
 
 ## 仍需注意的坑点
 

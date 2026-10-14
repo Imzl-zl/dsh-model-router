@@ -249,6 +249,28 @@ window.__ModuleLoader__.load({
       connectivityNotConfigurable: '连通性检查：这个渠道不是可配置 provider，问不出端点',
       connectivityUnavailable: '连通性检查：DSH 的发现接口当前不可用',
       connectivityUnreachable: '连通性检查：端点没应答',
+      subTabPipeline: '降级流水线',
+      subTabPolicies: '异常策略与预算',
+      subTabTelemetry: '渠道遥测与监控',
+      subTabPipelineDesc: '配置首选与有序备选链路、尝试上限及条件准入',
+      subTabPoliciesDesc: '定义触发切换的错误码矩阵与 Agent 轮次预算上限',
+      subTabTelemetryDesc: '查看各渠道最近 24 次调用波动、首字延迟与真实吞吐',
+      telemetryTitle: '全链路渠道遥测监控',
+      telemetrySubtitle: '展示当前链路各候选渠道的时间轴波动、首字延迟 (TTFT) 及原生会话吞吐 (tok/s)。',
+      telemetryCheckBtn: '探测本链所有渠道',
+      telemetryBreakerBtn: '健康与熔断配置',
+      telemetryAvailability: '历史可用率',
+      telemetryObservationMode: '观测源',
+      telemetryPassiveMode: '会话原生折叠',
+      telemetryActiveMode: '极速探针探测',
+      visionGuideTitle: '零点击识图路由配置要领',
+      visionGuideExpand: '展开说明',
+      visionGuideCollapse: '收起说明',
+      compactHealthTooltip: '点击切换至渠道遥测图谱',
+      compactHealthIdle: '未调用',
+      compactHealthHealthy: '健康',
+      compactHealthDegraded: '降级',
+      compactHealthUnhealthy: '异常',
     }
     var en = {
       pluginTitle: 'Model Router',
@@ -449,6 +471,28 @@ window.__ModuleLoader__.load({
       connectivityNotConfigurable: 'Connectivity check: this route is not a configurable provider, so it has no endpoint to ask',
       connectivityUnavailable: 'Connectivity check: DSH\'s discovery interface is unavailable',
       connectivityUnreachable: 'Connectivity check: endpoint did not answer',
+      subTabPipeline: 'Fallback Chain',
+      subTabPolicies: 'Policies & Budget',
+      subTabTelemetry: 'Health & Telemetry',
+      subTabPipelineDesc: 'Configure ordered fallback candidates, attempt limits, and condition gates',
+      subTabPoliciesDesc: 'Define failover trigger codes and execution attempt budgets',
+      subTabTelemetryDesc: 'Inspect 24-point timeline sparklines, TTFT latency, and real throughput',
+      telemetryTitle: 'Channel Telemetry & Health',
+      telemetrySubtitle: 'Live timeline sparkline, TTFT latency, and native token throughput for all candidates in this chain.',
+      telemetryCheckBtn: 'Probe Chain Now',
+      telemetryBreakerBtn: 'Health & Breaker Settings',
+      telemetryAvailability: 'Availability',
+      telemetryObservationMode: 'Source',
+      telemetryPassiveMode: 'Passive Session Fold',
+      telemetryActiveMode: 'Active TTFT Probe',
+      visionGuideTitle: 'Zero-Click Vision Routing Guide',
+      visionGuideExpand: 'Expand Guide',
+      visionGuideCollapse: 'Collapse',
+      compactHealthTooltip: 'Click to view full telemetry sparklines',
+      compactHealthIdle: 'Idle',
+      compactHealthHealthy: 'Healthy',
+      compactHealthDegraded: 'Degraded',
+      compactHealthUnhealthy: 'Unhealthy',
     }
 
     /** The three start strategies, in the order the selector shows them. */
@@ -591,6 +635,96 @@ window.__ModuleLoader__.load({
       '.dsh-timeline-pill:hover {',
       '  transform: scaleY(1.3) scaleX(1.1) !important;',
       '  filter: brightness(1.3) !important;',
+      '}',
+      '/* Sub-navigation bar */',
+      '.dsh-router-subnav-bar {',
+      '  display: flex !important;',
+      '  align-items: center !important;',
+      '  justify-content: space-between !important;',
+      '  gap: 12px !important;',
+      '  margin-bottom: 16px !important;',
+      '  flex-wrap: wrap !important;',
+      '}',
+      '/* Tool buttons in header and telemetry */',
+      '.dsh-router-tool-btn {',
+      '  box-sizing: border-box !important;',
+      '  background: var(--dsw-alias-bg-layer-2) !important;',
+      '  border: 0.5px solid var(--dsw-alias-border-l3) !important;',
+      '  color: var(--dsw-alias-label-secondary) !important;',
+      '  padding: 0 10px !important;',
+      '  height: 32px !important;',
+      '  border-radius: var(--dsw-radius-md, 8px) !important;',
+      '  font-size: 12.5px !important;',
+      '  font-weight: 500 !important;',
+      '  cursor: pointer !important;',
+      '  display: inline-flex !important;',
+      '  align-items: center !important;',
+      '  justify-content: center !important;',
+      '  gap: 6px !important;',
+      '  white-space: nowrap !important;',
+      '  flex-shrink: 0 !important;',
+      '  transition: all 0.15s ease !important;',
+      '}',
+      '.dsh-router-tool-btn:hover:not(:disabled) {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
+      '  color: var(--dsw-alias-label-primary) !important;',
+      '  border-color: var(--dsw-alias-border-l4) !important;',
+      '}',
+      '.dsh-router-tool-btn:active:not(:disabled) {',
+      '  background: var(--dsw-alias-interactive-bg-active, rgba(255, 255, 255, 0.12)) !important;',
+      '}',
+      '.dsh-router-tool-btn:disabled {',
+      '  opacity: 0.45 !important;',
+      '  cursor: not-allowed !important;',
+      '}',
+      '/* Compact health pill on candidate node */',
+      '.dsh-router-compact-health {',
+      '  display: inline-flex !important;',
+      '  align-items: center !important;',
+      '  gap: 6px !important;',
+      '  padding: 2px 8px !important;',
+      '  border-radius: 12px !important;',
+      '  background: var(--dsw-alias-bg-layer-3) !important;',
+      '  border: 0.5px solid var(--dsw-alias-border-l2) !important;',
+      '  font-size: 11.5px !important;',
+      '  font-family: var(--ds-font-family-code, monospace) !important;',
+      '  color: var(--dsw-alias-label-secondary) !important;',
+      '  cursor: pointer !important;',
+      '  transition: all 0.15s ease !important;',
+      '  white-space: nowrap !important;',
+      '  user-select: none !important;',
+      '}',
+      '.dsh-router-compact-health:hover {',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
+      '  color: var(--dsw-alias-label-primary) !important;',
+      '  border-color: var(--dsw-alias-brand-primary, #4A65E8) !important;',
+      '  transform: translateY(-0.5px) !important;',
+      '}',
+      '/* Needs toggle button */',
+      '.dsh-router-needs-btn {',
+      '  box-sizing: border-box !important;',
+      '  background: transparent !important;',
+      '  border: 0.5px solid var(--dsw-alias-border-l2) !important;',
+      '  color: var(--dsw-alias-label-secondary) !important;',
+      '  padding: 3px 10px !important;',
+      '  border-radius: var(--dsw-radius-xs, 6px) !important;',
+      '  font-size: 11.5px !important;',
+      '  cursor: pointer !important;',
+      '  display: inline-flex !important;',
+      '  align-items: center !important;',
+      '  gap: 4px !important;',
+      '  white-space: nowrap !important;',
+      '  flex-shrink: 0 !important;',
+      '  transition: all 0.15s ease !important;',
+      '}',
+      '.dsh-router-needs-btn:hover {',
+      '  border-color: var(--dsw-alias-border-l4) !important;',
+      '  color: var(--dsw-alias-label-primary) !important;',
+      '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.05)) !important;',
+      '}',
+      '/* Guide header interactive */',
+      '.dsh-router-guide-header:hover {',
+      '  background: rgba(74, 101, 232, 0.08) !important;',
       '}',
       '/* Keyframes & transitions */',
       '@keyframes dsh-spin {',
@@ -1084,6 +1218,93 @@ window.__ModuleLoader__.load({
         fontWeight: 700,
         fontFamily: 'var(--ds-font-family-code, monospace)',
         color: 'var(--dsw-alias-label-primary)',
+      },
+      headerTools: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 },
+      toolBtn: {
+        boxSizing: 'border-box',
+        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        color: 'var(--dsw-alias-label-secondary)',
+        padding: '0 10px',
+        height: 32,
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        fontSize: 12,
+        fontWeight: 500,
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        transition: 'all 0.15s ease',
+        whiteSpace: 'nowrap',
+      },
+      subNavBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' },
+      subTabLabel: { fontSize: 13, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 6 },
+      compactHealthPill: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '2px 8px',
+        borderRadius: 12,
+        background: 'var(--dsw-alias-bg-layer-3)',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        fontSize: 11.5,
+        fontFamily: 'var(--ds-font-family-code, monospace)',
+        color: 'var(--dsw-alias-label-secondary)',
+        cursor: 'pointer',
+        transition: 'all 0.15s ease',
+        whiteSpace: 'nowrap',
+      },
+      compactHealthDot: { width: 7, height: 7, borderRadius: '50%', flexShrink: 0 },
+      compactHealthText: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' },
+      needsBtnActive: { borderColor: 'var(--dsw-alias-brand-primary, #4A65E8)', color: 'var(--dsw-alias-brand-primary, #4A65E8)', background: 'rgba(74,101,232,0.08)' },
+      strategyHintTag: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginLeft: 8, lineHeight: 1.4 },
+      guideBox: {
+        marginTop: 16,
+        borderRadius: 'var(--dsw-radius-md, 10px)',
+        background: 'rgba(74,101,232,0.05)',
+        border: '0.5px solid rgba(74,101,232,0.2)',
+        overflow: 'hidden',
+      },
+      guideHeader: {
+        padding: '10px 14px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        cursor: 'pointer',
+        userSelect: 'none',
+        transition: 'background 0.15s ease',
+        color: 'var(--dsw-alias-label-primary)',
+        fontSize: 12.5,
+      },
+      guideToggleBtn: { background: 'transparent', border: 'none', color: 'var(--dsw-alias-brand-primary, #4A65E8)', fontSize: 11.5, cursor: 'pointer', fontWeight: 500, padding: 0 },
+      guideContent: {
+        padding: '10px 14px 12px',
+        margin: 0,
+        fontSize: 12,
+        color: 'var(--dsw-alias-label-secondary)',
+        lineHeight: 1.55,
+        borderTop: '0.5px solid rgba(74,101,232,0.12)',
+      },
+      telemetryHeaderCard: {
+        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        borderRadius: 'var(--dsw-radius-lg, 12px)',
+        padding: '16px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 16,
+        flexWrap: 'wrap',
+      },
+      telemetryCard: {
+        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        borderRadius: 'var(--dsw-radius-lg, 12px)',
+        padding: '16px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
       },
     }
 
@@ -1876,7 +2097,41 @@ window.__ModuleLoader__.load({
           h('span', { style: S.metricsValNumber }, formatThroughput(throughputTps))))
     }
 
-    /** One candidate node in the pipeline. */
+    /** Compact interactive health pill on the candidate node's main row. */
+    function CompactHealthBadge(props) {
+      var t = props.t
+      var record = props.record
+      var status = record ? record.status : 'unknown'
+      var dotColor = 'var(--dsw-alias-bg-layer-4)'
+      var statusText = t('compactHealthIdle')
+      if (status === 'healthy') {
+        dotColor = 'var(--dsw-alias-state-success-primary, #22c55e)'
+        statusText = t('compactHealthHealthy')
+      } else if (status === 'degraded') {
+        dotColor = 'var(--dsw-alias-state-warn-primary, #f59e0b)'
+        statusText = t('compactHealthDegraded')
+      } else if (status === 'unhealthy') {
+        dotColor = 'var(--dsw-alias-state-error-primary, #ef4444)'
+        statusText = t('compactHealthUnhealthy')
+      }
+      var latency = record && typeof record.latencyMs === 'number' ? formatLatency(record.latencyMs) : null
+      var throughput = record && typeof record.throughputTps === 'number' && record.throughputTps > 0 ? formatThroughput(record.throughputTps) : null
+
+      var label = statusText
+      if (latency) label += ' · ' + latency
+      if (throughput) label += ' · ' + throughput
+
+      return h('div', {
+        className: 'dsh-router-compact-health',
+        style: S.compactHealthPill,
+        title: t('compactHealthTooltip') + ': ' + label,
+        onClick: props.onClick,
+      },
+        h('span', { style: Object.assign({}, S.compactHealthDot, { background: dotColor }) }),
+        h('span', { style: S.compactHealthText }, label))
+    }
+
+    /** One candidate node in the pipeline: sleek, compact, high visual flow. */
     function CandidateNode(props) {
       var t = props.t
       var candidate = props.candidate
@@ -1886,10 +2141,10 @@ window.__ModuleLoader__.load({
       var expanded = expandedState[0]
       var setExpanded = expandedState[1]
       var needs = candidate.needs ?? {}
-      // images 是三态：undefined = 不限，true/false 各限一极，都算“配了条件”。
       var hasActiveNeeds = (needs.images !== undefined) || (needs.minContextTokens > 0)
       var imagesMode = needs.images === true ? 'require' : needs.images === false ? 'forbid' : 'any'
       var reasoning = reasoningLabelOf(props.catalog, candidate.provider, candidate.model)
+
       return h('div', { style: S.node },
         h('div', { style: Object.assign({}, S.nodeCard, isPrimary ? S.nodeCardPrimary : null) },
           h('div', { style: S.nodeMainRow },
@@ -1901,18 +2156,16 @@ window.__ModuleLoader__.load({
                   h('span', { style: S.modelName, title: candidate.model }, candidate.model || '—'),
                   h('span', { style: S.providerBadge }, candidate.provider),
                   isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null,
-                  h(HealthDots, {
+                  h(CompactHealthBadge, {
                     t: t,
-                    route: routeOf(candidate),
-                    passive: props.passive,
-                    discover: props.discover,
-                    showPassive: props.showPassive,
-                    showDiscover: props.showDiscover,
+                    record: props.passive ? props.passive[routeOf(candidate)] : null,
+                    onClick: props.onGoTelemetry,
                   }),
                   reasoning === undefined ? null : h('span', { style: S.reasoningBadge }, t('reasoningBadge') + ': ' + reasoning),
                   h('button', {
                     type: 'button',
-                    style: Object.assign({}, S.needsBtn, hasActiveNeeds ? { borderColor: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)' } : null),
+                    className: 'dsh-router-needs-btn',
+                    style: Object.assign({}, S.needsBtn, hasActiveNeeds ? S.needsBtnActive : null),
                     'aria-expanded': expanded,
                     onClick: function () { setExpanded(!expanded) },
                   }, hasActiveNeeds ? '⚙️ ● ' + t('toggleNeedsBtn') : '⚙️ ' + t('toggleNeedsBtn'))),
@@ -1947,7 +2200,6 @@ window.__ModuleLoader__.load({
                     onClick: function () { props.onMaxAttempts(index, Math.min(5, candidate.maxAttempts + 1)) },
                   }, h(Icon, { d: ICON_PLUS, size: 10 })),
                   h('span', { style: { whiteSpace: 'nowrap' } }, t('timesUnit'))))),
-            // 权重只在「按权重」策略下出现；其他策略下它不被读，摆着只会让人以为有用。
             props.showWeight ? h('div', { style: S.attemptPicker, title: t('weightHint') },
               h('span', { style: { whiteSpace: 'nowrap' } }, t('weightLabel')),
               h('input', {
@@ -1986,7 +2238,6 @@ window.__ModuleLoader__.load({
                 title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
                 onClick: function () { props.onRemove(index) },
               }, h(Icon, { d: ICON_CLOSE })))),
-          h(ChannelMetricsDashboard, { t: t, record: props.passive ? props.passive[routeOf(candidate)] : null }),
           expanded ? h('div', { style: S.needsPanel },
             h('div', { style: S.needsGrid },
               h('div', { style: S.needCard },
@@ -2094,7 +2345,7 @@ window.__ModuleLoader__.load({
           discover: props.discover,
           showPassive: props.showPassive,
           showDiscover: props.showDiscover,
-          // 权重只在「按权重」策略下出现——其他策略下它不被读，摆着只会让人以为有用。
+          onGoTelemetry: props.onGoTelemetry,
           showWeight: strategy === 'weight',
           weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
           onMaxAttempts: props.onMaxAttempts,
@@ -2113,9 +2364,8 @@ window.__ModuleLoader__.load({
             }),
             value: strategy,
             onChange: function (value) { if (props.onStrategy) props.onStrategy(value) },
-          })),
-        h('p', { style: S.formHint }, t('strategySharedHint')),
-        h('p', { style: S.formHint }, t('strategyHint' + strategy)),
+          }),
+          h('span', { style: S.strategyHintTag }, t('strategyHint' + strategy))),
         nodes)
     }
 
@@ -2194,22 +2444,90 @@ window.__ModuleLoader__.load({
           h(Tag, { tone: 'neutral' }, t('backoffBadge'))))
     }
 
-    /** One profile's view: pipeline, switchOn, budget. */
+    /** The telemetry and health monitoring dashboard for candidates in a chain. */
+    function TelemetryView(props) {
+      var t = props.t
+      var candidates = props.candidates
+      var passive = props.passive || {}
+      var isDefault = props.isDefault
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+        h('div', { style: S.telemetryHeaderCard },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+            h('h3', { style: S.sectionTitle }, t('telemetryTitle')),
+            h('p', { style: S.sectionSubtitle }, t('telemetrySubtitle'))),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-tool-btn',
+              style: S.toolBtn,
+              disabled: props.disabled,
+              onClick: props.onCheckAll,
+            }, h(Icon, { d: ICON_BOLT, size: 14 }), t('telemetryCheckBtn')),
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-tool-btn',
+              style: S.toolBtn,
+              disabled: props.disabled,
+              onClick: props.onOpenHealthModal,
+            }, h(Icon, { d: ICON_GEAR, size: 14 }), t('telemetryBreakerBtn')))),
+
+        candidates.map(function (candidate, index) {
+          var route = routeOf(candidate)
+          var record = passive[route] || null
+          var isPrimary = index === 0 && !isDefault
+          return h('div', { key: route + index, style: S.telemetryCard },
+            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                h('span', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null, { width: 28, height: 28, fontSize: 12 }) }, isPrimary ? '★' : String(index + 1).padStart(2, '0')),
+                h('span', { style: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, candidate.model || '—'),
+                h('span', { style: S.providerBadge }, candidate.provider),
+                isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null),
+              h(HealthDots, { t: t, route: route, passive: props.passive, discover: props.discover, showPassive: props.showPassive, showDiscover: props.showDiscover })),
+            h(ChannelMetricsDashboard, { t: t, record: record }))
+        }))
+    }
+
+    /**
+     * One profile's view: 3 sub-tabs (pipeline, policies, telemetry).
+     * Decision note: .agents/notes/implemented/2026-10-15-ui-layout-and-ia-redesign.md
+     */
     function ProfileView(props) {
       var t = props.t
       var profile = props.profile
+      var subTabState = React.useState('pipeline')
+      var subTab = subTabState[0]
+      var setSubTab = subTabState[1]
+
+      var guideOpenState = React.useState(false)
+      var guideOpen = guideOpenState[0]
+      var setGuideOpen = guideOpenState[1]
+
       return h('div', null,
-        h('section', { style: S.card },
+        // Sub-Navigation Tabs Bar
+        h('div', { className: 'dsh-router-subnav-bar', style: S.subNavBar },
+          h(SegmentedTabs, {
+            items: [
+              { value: 'pipeline', label: h('span', { style: S.subTabLabel }, '🔄 ' + t('subTabPipeline')), id: 'subtab-pipeline-' + profile.id, panelId: 'subpanel-pipeline-' + profile.id },
+              { value: 'policies', label: h('span', { style: S.subTabLabel }, '⚡ ' + t('subTabPolicies')), id: 'subtab-policies-' + profile.id, panelId: 'subpanel-policies-' + profile.id },
+              { value: 'telemetry', label: h('span', { style: S.subTabLabel }, '📊 ' + t('subTabTelemetry')), id: 'subtab-telemetry-' + profile.id, panelId: 'subpanel-telemetry-' + profile.id },
+            ],
+            value: subTab,
+            onChange: function (val) { setSubTab(val) },
+            label: t('profilesTitle'),
+          }),
+          h('button', {
+            type: 'button',
+            className: 'dsh-router-danger-btn',
+            style: S.dangerBtn,
+            onClick: function () { props.onDeleteProfile(profile.id) },
+          }, h(Icon, { d: ICON_CLOSE, size: 12 }), t('deleteProfileBtn'))),
+
+        subTab === 'pipeline' ? h('section', { style: S.card },
           h('div', { style: S.sectionHeader },
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
               h('h2', { style: S.sectionTitle }, t('pipelineTitle')),
-              h('p', { style: S.sectionSubtitle }, t('pipelineSubtitle'))),
-            h('button', {
-              type: 'button',
-              className: 'dsh-router-danger-btn',
-              style: S.dangerBtn,
-              onClick: function () { props.onDeleteProfile(profile.id) },
-            }, t('deleteProfileBtn'))),
+              h('p', { style: S.sectionSubtitle }, t('pipelineSubtitle')))),
           h(PipelineEditor, {
             t: t,
             candidates: profile.candidates,
@@ -2221,50 +2539,76 @@ window.__ModuleLoader__.load({
             discover: props.discover,
             showPassive: props.showPassive,
             showDiscover: props.showDiscover,
+            onGoTelemetry: function () { setSubTab('telemetry') },
             onMaxAttempts: function (index, value) { props.onMaxAttempts(profile.id, index, value, false) },
             onMove: function (index, direction) { props.onMove(profile.id, index, direction, false) },
             onRemove: function (index) { props.onRemove(profile.id, index, false) },
             onNeeds: function (index, patch) { props.onNeeds(profile.id, index, patch, false) },
             onWeight: function (index, value) { props.onWeight(index, value, false) },
           }),
-          h('div', { style: S.safetyBox },
-            h(Icon, { d: ICON_WARN, size: 16 }),
-            h('div', null,
-              h('strong', null, t('visionWorkflowTitle')),
-              ' ' + t('visionWorkflowText'))),
+          h('div', { style: S.guideBox },
+            h('div', {
+              className: 'dsh-router-guide-header',
+              style: S.guideHeader,
+              onClick: function () { setGuideOpen(!guideOpen) },
+            },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                h(Icon, { d: ICON_WARN, size: 16 }),
+                h('strong', null, t('visionWorkflowTitle'))),
+              h('button', { type: 'button', style: S.guideToggleBtn }, guideOpen ? t('visionGuideCollapse') : t('visionGuideExpand'))),
+            guideOpen ? h('p', { style: S.guideContent }, t('visionWorkflowText')) : null),
           h('div', { style: S.addBar },
-            h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, t('addFromCatalog')),
-            h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(profile.id, false) } }, t('addManual')))),
-        h('section', { style: S.card },
-          h('div', { style: S.sectionHeader },
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-              h('h2', { style: S.sectionTitle }, t('switchOnTitle')),
-              h('p', { style: S.sectionSubtitle }, t('switchOnSubtitle')))),
-          h(SwitchOnGrid, {
+            h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addFromCatalog')),
+            h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(profile.id, false) } }, t('addManual')))) : null,
+
+        subTab === 'policies' ? h('div', null,
+          h('section', { style: S.card },
+            h('div', { style: S.sectionHeader },
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                h('h2', { style: S.sectionTitle }, t('switchOnTitle')),
+                h('p', { style: S.sectionSubtitle }, t('switchOnSubtitle')))),
+            h(SwitchOnGrid, {
+              t: t,
+              value: profile.switchOn,
+              disabled: props.disabled,
+              onToggle: function (key) { props.onToggleSwitchOn(profile.id, key, false) },
+            })),
+          h('section', { style: S.card },
+            h('div', { style: S.sectionHeader },
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                h('h2', { style: S.sectionTitle }, t('budgetTitle')),
+                h('p', { style: S.sectionSubtitle }, t('budgetSubtitle')))),
+            h(BudgetRow, {
+              t: t,
+              maxTotalAttempts: profile.maxTotalAttempts,
+              stickyTurns: profile.stickyTurns,
+              disabled: props.disabled,
+              onMaxTotal: function (value) { props.onMaxTotal(profile.id, value, false) },
+              onStickyTurns: function (value) { props.onStickyTurns(profile.id, value, false) },
+            }))) : null,
+
+        subTab === 'telemetry' ? h('section', { style: S.card },
+          h(TelemetryView, {
             t: t,
-            value: profile.switchOn,
+            candidates: profile.candidates,
+            passive: props.passive,
+            discover: props.discover,
+            showPassive: props.showPassive,
+            showDiscover: props.showDiscover,
             disabled: props.disabled,
-            onToggle: function (key) { props.onToggleSwitchOn(profile.id, key, false) },
-          })),
-        h('section', { style: S.card },
-          h('div', { style: S.sectionHeader },
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-              h('h2', { style: S.sectionTitle }, t('budgetTitle')),
-              h('p', { style: S.sectionSubtitle }, t('budgetSubtitle')))),
-          h(BudgetRow, {
-            t: t,
-            maxTotalAttempts: profile.maxTotalAttempts,
-            stickyTurns: profile.stickyTurns,
-            disabled: props.disabled,
-            onMaxTotal: function (value) { props.onMaxTotal(profile.id, value, false) },
-            onStickyTurns: function (value) { props.onStickyTurns(profile.id, value, false) },
-          })))
+            onCheckAll: props.onCheckAll,
+            onOpenHealthModal: props.onOpenHealthModal,
+          })) : null)
     }
 
-    /** The default fallback pool's view. */
+    /** The default fallback pool's view with 3 sub-tabs. */
     function DefaultView(props) {
       var t = props.t
       var pool = props.pool
+      var subTabState = React.useState('pipeline')
+      var subTab = subTabState[0]
+      var setSubTab = subTabState[1]
+
       return h('div', null,
         h('div', { style: S.introBox },
           h(Icon, { d: ICON_WARN, size: 20 }),
@@ -2282,56 +2626,87 @@ window.__ModuleLoader__.load({
             disabled: props.disabled,
             onChange: function (next) { props.onDefaultEnabled(next) },
           })),
-        h('section', { style: S.card },
-          h('div', { style: S.sectionHeader },
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-              h('h3', { style: Object.assign({}, S.sectionTitle, { fontSize: 13.5 }) }, t('defaultPoolTitle')),
-              h('p', { style: S.sectionSubtitle }, t('defaultPoolSubtitle')))),
-          h(PipelineEditor, {
-            t: t,
-            candidates: pool.candidates,
-            strategy: pool.strategy,
-            isDefault: true,
-            disabled: props.disabled,
-            catalog: props.catalog,
-            passive: props.passive,
-            discover: props.discover,
-            showPassive: props.showPassive,
-            showDiscover: props.showDiscover,
-            onStrategy: props.onStrategy,
-            onMaxAttempts: function (index, value) { props.onMaxAttempts(null, index, value, true) },
-            onMove: function (index, direction) { props.onMove(null, index, direction, true) },
-            onRemove: function (index) { props.onRemove(null, index, true) },
-            onNeeds: function (index, patch) { props.onNeeds(null, index, patch, true) },
-            onWeight: function (index, value) { props.onWeight(index, value, true) },
-          }),
-          h('div', { style: S.addBar },
-            h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(null, true) } }, t('addFromCatalog')),
-            h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(null, true) } }, t('addManual')))),
-        h('section', { style: S.card },
-          h('div', { style: S.sectionHeader },
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-              h('h2', { style: S.sectionTitle }, t('switchOnTitle')),
-              h('p', { style: S.sectionSubtitle }, t('switchOnSubtitle')))),
-          h(SwitchOnGrid, {
-            t: t,
-            value: pool.switchOn,
-            disabled: props.disabled,
-            onToggle: function (key) { props.onToggleSwitchOn(null, key, true) },
-          })),
-        h('section', { style: S.card },
-          h('div', { style: S.sectionHeader },
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-              h('h2', { style: S.sectionTitle }, t('budgetTitle')),
-              h('p', { style: S.sectionSubtitle }, t('budgetSubtitle')))),
-          h(BudgetRow, {
-            t: t,
-            maxTotalAttempts: pool.maxTotalAttempts,
-            stickyTurns: pool.stickyTurns,
-            disabled: props.disabled,
-            onMaxTotal: function (value) { props.onMaxTotal(null, value, true) },
-            onStickyTurns: function (value) { props.onStickyTurns(null, value, true) },
-          })))
+
+        pool.enabled ? h('div', null,
+          h('div', { className: 'dsh-router-subnav-bar', style: S.subNavBar },
+            h(SegmentedTabs, {
+              items: [
+                { value: 'pipeline', label: h('span', { style: S.subTabLabel }, '🔄 ' + t('subTabPipeline')), id: 'default-subtab-pipeline', panelId: 'default-subpanel-pipeline' },
+                { value: 'policies', label: h('span', { style: S.subTabLabel }, '⚡ ' + t('subTabPolicies')), id: 'default-subtab-policies', panelId: 'default-subpanel-policies' },
+                { value: 'telemetry', label: h('span', { style: S.subTabLabel }, '📊 ' + t('subTabTelemetry')), id: 'default-subtab-telemetry', panelId: 'default-subpanel-telemetry' },
+              ],
+              value: subTab,
+              onChange: function (val) { setSubTab(val) },
+              label: t('defaultPoolTitle'),
+            })),
+
+          subTab === 'pipeline' ? h('section', { style: S.card },
+            h('div', { style: S.sectionHeader },
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                h('h3', { style: Object.assign({}, S.sectionTitle, { fontSize: 13.5 }) }, t('defaultPoolTitle')),
+                h('p', { style: S.sectionSubtitle }, t('defaultPoolSubtitle')))),
+            h(PipelineEditor, {
+              t: t,
+              candidates: pool.candidates,
+              strategy: pool.strategy,
+              isDefault: true,
+              disabled: props.disabled,
+              catalog: props.catalog,
+              passive: props.passive,
+              discover: props.discover,
+              showPassive: props.showPassive,
+              showDiscover: props.showDiscover,
+              onStrategy: props.onStrategy,
+              onGoTelemetry: function () { setSubTab('telemetry') },
+              onMaxAttempts: function (index, value) { props.onMaxAttempts(null, index, value, true) },
+              onMove: function (index, direction) { props.onMove(null, index, direction, true) },
+              onRemove: function (index) { props.onRemove(null, index, true) },
+              onNeeds: function (index, patch) { props.onNeeds(null, index, patch, true) },
+              onWeight: function (index, value) { props.onWeight(index, value, true) },
+            }),
+            h('div', { style: S.addBar },
+              h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(null, true) } }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addFromCatalog')),
+              h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(null, true) } }, t('addManual')))) : null,
+
+          subTab === 'policies' ? h('div', null,
+            h('section', { style: S.card },
+              h('div', { style: S.sectionHeader },
+                h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                  h('h2', { style: S.sectionTitle }, t('switchOnTitle')),
+                  h('p', { style: S.sectionSubtitle }, t('switchOnSubtitle')))),
+              h(SwitchOnGrid, {
+                t: t,
+                value: pool.switchOn,
+                disabled: props.disabled,
+                onToggle: function (key) { props.onToggleSwitchOn(null, key, true) },
+              })),
+            h('section', { style: S.card },
+              h('div', { style: S.sectionHeader },
+                h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                  h('h2', { style: S.sectionTitle }, t('budgetTitle')),
+                  h('p', { style: S.sectionSubtitle }, t('budgetSubtitle')))),
+              h(BudgetRow, {
+                t: t,
+                maxTotalAttempts: pool.maxTotalAttempts,
+                stickyTurns: pool.stickyTurns,
+                disabled: props.disabled,
+                onMaxTotal: function (value) { props.onMaxTotal(null, value, true) },
+                onStickyTurns: function (value) { props.onStickyTurns(null, value, true) },
+              }))) : null,
+
+          subTab === 'telemetry' ? h('section', { style: S.card },
+            h(TelemetryView, {
+              t: t,
+              candidates: pool.candidates,
+              isDefault: true,
+              passive: props.passive,
+              discover: props.discover,
+              showPassive: props.showPassive,
+              showDiscover: props.showDiscover,
+              disabled: props.disabled,
+              onCheckAll: props.onCheckAll,
+              onOpenHealthModal: props.onOpenHealthModal,
+            })) : null) : null)
     }
 
     /** Health Settings Modal dialog. */
@@ -2806,28 +3181,31 @@ window.__ModuleLoader__.load({
                 state.dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null),
               h('p', { style: S.desc }, t('pluginDesc')))),
           h('div', { style: S.headerActions },
-            h('button', {
-              type: 'button',
-              className: 'dsh-router-catalog-btn',
-              style: Object.assign({}, S.catalogBtn, state.ui.checking ? { opacity: 0.6, cursor: 'wait' } : null),
-              disabled: disabled || state.ui.checking,
-              title: t('checkAllBtn'),
-              onClick: props.onCheckAll,
-            }, h(Icon, { d: state.ui.checking ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state.ui.checking }), state.ui.checking ? t('checkingText') : t('checkAllBtn')),
-            h('button', {
-              type: 'button',
-              className: 'dsh-router-catalog-btn',
-              style: S.catalogBtn,
-              disabled: disabled,
-              title: t('healthConfigBtn'),
-              onClick: props.onOpenHealthModal,
-            }, h(Icon, { d: ICON_GEAR, size: 14 }), t('healthConfigBtn')),
-            h('button', {
-              type: 'button',
-              className: 'dsh-router-catalog-btn',
-              style: S.catalogBtn,
-              onClick: props.onOpenDrawer,
-            }, h(Icon, { d: ICON_CLOCK, size: 14 }), t('failoverHistoryButton')),
+            h('div', { style: S.headerTools },
+              h('button', {
+                type: 'button',
+                className: 'dsh-router-tool-btn',
+                style: Object.assign({}, S.toolBtn, state.ui.checking ? { opacity: 0.6, cursor: 'wait' } : null),
+                disabled: disabled || state.ui.checking,
+                title: t('checkAllBtn'),
+                onClick: props.onCheckAll,
+              }, h(Icon, { d: state.ui.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state.ui.checking }), state.ui.checking ? t('checkingText') : t('checkAllBtn')),
+              h('button', {
+                type: 'button',
+                className: 'dsh-router-tool-btn',
+                style: S.toolBtn,
+                disabled: disabled,
+                title: t('healthConfigBtn'),
+                onClick: props.onOpenHealthModal,
+              }, h(Icon, { d: ICON_GEAR, size: 13 }), t('healthConfigBtn')),
+              h('button', {
+                type: 'button',
+                className: 'dsh-router-tool-btn',
+                style: S.toolBtn,
+                title: t('failoverHistoryButton'),
+                onClick: props.onOpenDrawer,
+              }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('failoverHistoryButton'))),
+            h('div', { style: S.headerDivider }),
             h('div', { style: S.switchWrap },
               h('span', { style: S.switchLabel }, t('globalSwitchLabel')),
               h(Switch, {
@@ -2943,6 +3321,8 @@ window.__ModuleLoader__.load({
               onNeeds: props.onNeeds,
               onOpenCatalog: props.onOpenCatalog,
               onOpenManual: props.onOpenManual,
+              onCheckAll: props.onCheckAll,
+              onOpenHealthModal: props.onOpenHealthModal,
             })
             : h(ProfileView, {
               t: t,
@@ -2964,6 +3344,8 @@ window.__ModuleLoader__.load({
               onNeeds: props.onNeeds,
               onOpenCatalog: props.onOpenCatalog,
               onOpenManual: props.onOpenManual,
+              onCheckAll: props.onCheckAll,
+              onOpenHealthModal: props.onOpenHealthModal,
             })),
 
 
@@ -3069,28 +3451,31 @@ window.__ModuleLoader__.load({
                     state.failed ? h('span', { style: S.saveFailedBadge }, t('formSaveFailed')) : null),
                   h('span', { style: S.modalTopSubtitle }, t('pluginDesc')))),
               h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 } },
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-catalog-btn',
-                  style: Object.assign({}, S.catalogBtn, state?.ui?.checking ? { opacity: 0.6, cursor: 'wait' } : null),
-                  disabled: !state?.writable || state?.saving || state?.ui?.checking,
-                  title: t('checkAllBtn'),
-                  onClick: props.onCheckAll,
-                }, h(Icon, { d: state?.ui?.checking ? ICON_SPINNER : ICON_BOLT, size: 14, spin: state?.ui?.checking }), state?.ui?.checking ? t('checkingText') : t('checkAllBtn')),
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-catalog-btn',
-                  style: S.catalogBtn,
-                  disabled: !state?.writable || state?.saving,
-                  title: t('healthConfigBtn'),
-                  onClick: props.onOpenHealthModal,
-                }, h(Icon, { d: ICON_GEAR, size: 14 }), t('healthConfigBtn')),
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-catalog-btn',
-                  style: S.catalogBtn,
-                  onClick: props.onOpenDrawer,
-                }, h(Icon, { d: ICON_CLOCK, size: 14 }), t('failoverHistoryButton')),
+                h('div', { style: S.headerTools },
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-router-tool-btn',
+                    style: Object.assign({}, S.toolBtn, state?.ui?.checking ? { opacity: 0.6, cursor: 'wait' } : null),
+                    disabled: !state?.writable || state?.saving || state?.ui?.checking,
+                    title: t('checkAllBtn'),
+                    onClick: props.onCheckAll,
+                  }, h(Icon, { d: state?.ui?.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state?.ui?.checking }), state?.ui?.checking ? t('checkingText') : t('checkAllBtn')),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-router-tool-btn',
+                    style: S.toolBtn,
+                    disabled: !state?.writable || state?.saving,
+                    title: t('healthConfigBtn'),
+                    onClick: props.onOpenHealthModal,
+                  }, h(Icon, { d: ICON_GEAR, size: 13 }), t('healthConfigBtn')),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-router-tool-btn',
+                    style: S.toolBtn,
+                    title: t('failoverHistoryButton'),
+                    onClick: props.onOpenDrawer,
+                  }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('failoverHistoryButton'))),
+                h('div', { style: S.headerDivider }),
                 dirty ? h('button', {
                   type: 'button',
                   className: 'dsh-router-discard-btn',
