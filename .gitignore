@@ -39,9 +39,7 @@ packages/dsh-model-router/tests/.dshhome-delivery/
 packages/dsh-model-router/tests/.dshhome-real/
 packages/dsh-model-router/tests/.dshhome-real-web/
 packages/dsh-model-router/tests/.dshhome-view/
-packages/dsh-model-router/tests/.dshhome-view-boot.log
-packages/dsh-model-router/tests/.dshhome-web-boot.log
-packages/dsh-model-router/tests/.dshhome-real-web-boot.log
+packages/dsh-model-router/tests/*.log
 packages/dsh-model-router/tests/.sessions/
 packages/dsh-model-router/tests/overlay.yml
 packages/dsh-model-router/tests/overlay-real.yml

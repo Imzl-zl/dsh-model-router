@@ -35,7 +35,7 @@ DSH 侧规范入口：[根 `AGENTS.md`](file:///D:/sudy/github/deepseek-harness/
 ## Pitfalls
 
 - **llm-retry 自己重试常见失败码，从不委派**（2026-10-15 实测）：normal 策略对 RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE 自己重试到 maxRetries 才 `next()`；插件的 `agent/request-error` listener（熔断 note、恢复决策都在里面）只有那时才跑得到。要测熔断/恢复，stub 策略必须显式 `policy: { maxRetries: 0 }`（`tests/run.mjs` 的 `breaker-channel-scope-skips-sibling-models` 就这么干）。另一个后果：熔断 block 从「记录成功之后」的请求起才省 attempt，首次请求仍可能把同渠道打一次。
-- **DSH 模型菜单按模型 id 去重**（2026-10-15 实测）：多个 provider 声明同名模型时菜单只列一个条目，选中哪个 provider 由 last-used/默认决定——要在 UI 上稳定选中某个渠道的模型，给该渠道的模型用独占 id（真网关 overlay 里 real-dead 用 dead-kimi/dead-sense）。
+- **DSH 模型菜单按 provider 分组、组内逐模型一行，同名多渠道是多行**（2026-10-15 源码 + 实测核对）：`ModelSelect.tsx:561-587` 每个 provider 组渲染 `role="menuitemradio"` 行，`choose({provider, model})` 选的是完整路由；实测三个渠道声明同名 `kimi-k3` 就是三行。查菜单行要用 `[role=menuitemradio]`（不是 `menuitem`，后者匹配不到模型行）。**目录加载失败的 provider 组渲染的是警告行而不是模型行**（`warning.groupLoad`，`ModelSelect.tsx:547-552`）——死端点渠道的模型在菜单里列不出来，但 overlay 的 `agent-default-model` 仍能选中它，插件的 modelCatalog 也照常列。
 - **`--patch` 是 launcher 旗标，必须放在第一个 app 旗标之前**：`dsh --profile web --patch <file> --no-open --port <p>`；放在 `--no-open` 之后会被 web app 的解析器当成未知选项拒绝。
 - **rolldown 会重印 AST，bundle 不是源码的逐字节副本**（2026-10-15 实测）：单引号字符串变双引号、`function (current)` 丢空格、三元条件行被合并进一行。任何"读产物文本"的回归测试都会因定位串失配而假红——结构/文本守卫要读源码模块，行为断言才读 bundle。
 - Agent `prepareCall()` 固定 adapter registration；Agent route 不能靠后续 `llm/stream` 改 provider。
