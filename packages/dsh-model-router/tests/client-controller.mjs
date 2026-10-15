@@ -282,6 +282,11 @@ test('strategy edits address both named profile and default pool', () => {
   assert.equal(h.state().draft.default.strategy, 'weight')
 })
 
+test('a strategy edit on an unknown profile id fails loudly', () => {
+  const h = mount({ value: config() })
+  assert.throws(() => h.actions.onStrategy('nope', 'weight', false), /no profile "nope"/)
+})
+
 test('an unknown profile id fails loudly instead of editing a phantom list', () => {
   const h = mount({ value: config() })
   assert.throws(() => h.actions.onMaxAttempts('nope', 0, '2', false), /no profile "nope"/)

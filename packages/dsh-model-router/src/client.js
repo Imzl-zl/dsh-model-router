@@ -81,7 +81,7 @@ window.__ModuleLoader__.load({
       moveDown: '下移',
       removeNode: '从链路中移除',
       primaryPinnedHint: '首选节点钉死为用户所选模型，不可删除或换序',
-      toggleNeedsBtn: '⚙️ 高级路由条件',
+      toggleNeedsBtn: '高级路由条件',
       needImagesTitle: '图像/多模态输入',
       needImagesHint: '按本次请求有没有图片决定此候选能不能上场；对第一个候选（你选中的模型）同样生效',
       needImagesAnyLabel: '不限',
@@ -298,7 +298,7 @@ window.__ModuleLoader__.load({
       moveDown: 'Move Down',
       removeNode: 'Remove from chain',
       primaryPinnedHint: 'The primary node is pinned to the selected model and cannot be removed or reordered',
-      toggleNeedsBtn: '⚙️ Advanced Conditions',
+      toggleNeedsBtn: 'Advanced Conditions',
       needImagesTitle: 'Vision / Image Input',
       needImagesHint: 'Gates this candidate on whether the request carries an image; applies to the first candidate (your selected model) too',
       needImagesAnyLabel: 'Any',
@@ -1196,7 +1196,7 @@ window.__ModuleLoader__.load({
       },
       compactHealthDot: { width: 7, height: 7, borderRadius: '50%', flexShrink: 0 },
       compactHealthText: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' },
-      needsBtnActive: { borderColor: 'var(--dsw-alias-brand-primary, #4A65E8)', color: 'var(--dsw-alias-brand-primary, #4A65E8)', background: 'rgba(74,101,232,0.08)' },
+      needsBtnActive: { borderColor: 'var(--dsh-router-accent, #4A65E8)', color: 'var(--dsh-router-accent, #4A65E8)', background: 'rgba(74,101,232,0.08)' },
       strategyHintTag: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginLeft: 8, lineHeight: 1.4 },
       guideBox: {
         marginTop: 16,
@@ -1627,6 +1627,16 @@ window.__ModuleLoader__.load({
         return draft.profiles.find(function (profile) { return profile.id === ui.activeId }) ?? draft.profiles[0] ?? null
       }
       /**
+       * The profile an edit addresses. An id that matches nothing throws rather
+       * than silently editing a phantom chain — every caller passes an id the
+       * UI has just rendered.
+       */
+      function profileOf(profileId) {
+        var profile = draft.profiles.find(function (p) { return p.id === profileId })
+        if (profile === undefined) throw new Error('model-router: no profile "' + profileId + '" in the draft')
+        return profile
+      }
+      /**
        * The candidate list an edit addresses: the default pool, or one
        * profile's chain. An id that matches nothing throws rather than
        * silently editing a phantom list — every caller passes an id the UI
@@ -1634,9 +1644,7 @@ window.__ModuleLoader__.load({
        */
       function listOf(profileId, isDefault) {
         if (isDefault) return draft.default.candidates
-        var profile = draft.profiles.find(function (p) { return p.id === profileId })
-        if (profile === undefined) throw new Error('model-router: no profile "' + profileId + '" in the draft')
-        return profile.candidates
+        return profileOf(profileId).candidates
       }
       /**
        * Re-establish the active tab while it is still auto-managed: the first
@@ -1778,17 +1786,10 @@ window.__ModuleLoader__.load({
           publish()
         },
         setStrategy: function (profileId, value, isDefault) {
-          if (arguments.length === 1) {
-            var profile = activeProfile()
-            if (profile === null) draft.default.strategy = profileId
-            else profile.strategy = profileId
-          } else {
-            if (isDefault) draft.default.strategy = value
-            else {
-              var target = draft.profiles.find(function (p) { return p.id === profileId })
-              if (target !== undefined) target.strategy = value
-            }
-          }
+          // 策略只管起点，所以名单本身不动——只改"从哪条开始"。目标链由调用方
+          // 点名（与其余 setter 一致），不靠"当前停在哪个 tab"推断。
+          if (isDefault) draft.default.strategy = value
+          else profileOf(profileId).strategy = value
           publish()
         },
         setWeight: function (profileId, index, value, isDefault) {
@@ -2445,21 +2446,21 @@ window.__ModuleLoader__.load({
      * The diagnostic tool buttons, shared by the page header, the quick modal's
      * top bar and the telemetry card. Each surface names the actions in its own
      * words, so the labels are props; the wiring and the busy state are not.
-     * Omit `onOpenDrawer` for surfaces without the history drawer.
+     * Omit `onOpenDrawer` for surfaces without the history drawer; pass
+     * `checkTitle`/`healthTitle`/`historyTitle` to override a tooltip — a
+     * tooltip that repeats the visible label says nothing, so the defaults are
+     * the fuller phrasing.
      */
     function HeaderTools(props) {
       var t = props.t
       var busy = props.busy === true
-      var checkTitle = props.checkTitle ? t(props.checkTitle) : (props.checkLabel === 'telemetryCheckBtn' ? t('telemetryCheckBtn') : t('checkAllBtn'))
-      var healthTitle = props.healthTitle ? t(props.healthTitle) : (props.healthLabel === 'telemetryBreakerBtn' ? t('telemetryBreakerBtn') : t('healthConfigBtn'))
-      var historyTitle = props.historyTitle ? t(props.historyTitle) : t('failoverHistoryButton')
       return h('div', { style: S.headerTools },
         h('button', {
           type: 'button',
           className: 'dsh-router-tool-btn',
           style: Object.assign({}, S.toolBtn, busy ? { opacity: 0.6, cursor: 'wait' } : null),
           disabled: props.disabled || busy,
-          title: checkTitle,
+          title: t(props.checkTitle ?? 'checkAllBtn'),
           onClick: props.onCheckAll,
         }, h(Icon, { d: busy ? ICON_SPINNER : ICON_BOLT, size: 13, spin: busy }), busy ? t('checkingText') : t(props.checkLabel)),
         h('button', {
@@ -2467,14 +2468,14 @@ window.__ModuleLoader__.load({
           className: 'dsh-router-tool-btn',
           style: S.toolBtn,
           disabled: props.disabled,
-          title: healthTitle,
+          title: t(props.healthTitle ?? 'healthConfigBtn'),
           onClick: props.onOpenHealthModal,
         }, h(Icon, { d: ICON_GEAR, size: 13 }), t(props.healthLabel)),
         props.onOpenDrawer === undefined ? null : h('button', {
           type: 'button',
           className: 'dsh-router-tool-btn',
           style: S.toolBtn,
-          title: historyTitle,
+          title: t(props.historyTitle ?? 'failoverHistoryButton'),
           onClick: props.onOpenDrawer,
         }, h(Icon, { d: ICON_CLOCK, size: 13 }), t(props.historyLabel)))
     }
