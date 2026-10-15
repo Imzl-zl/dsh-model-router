@@ -2,7 +2,7 @@
 title: "DSH Model Router — 架构"
 status: "proposal"
 kind: "architecture-overview"
-last_updated: "2026-10-12"
+last_updated: "2026-10-15"
 ---
 
 # DSH Model Router — 架构
@@ -18,6 +18,7 @@ last_updated: "2026-10-12"
 - [DSH 能力边界](design/dsh-capability-boundary.md)：DSH 原生支持什么、不支持什么、每个缺口的最优雅补法、外置插件须遵守的社区规范。
 - [DSH 源码地图](design/source-map.md)：已核实的扩展点与消费者。
 - [未决问题](design/open-questions.md)：仍需产品 owner 决定或技术 spike 验证的事项。
+- [构建管线与插件自有 Remote](design/build-pipeline-and-plugin-remote.md)：让插件拥有自己的 Remote 服务（主动探测档位的前提）所需的构建改动；提案待确认。
 - [建议实施阶段](design/implementation-plan.md)：从技术验证到可选核心扩展的次序。
 - [主流产品先例](references/prior-art.md)：LiteLLM、Portkey 和 OpenRouter 官方文档对照。
 
