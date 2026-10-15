@@ -238,23 +238,23 @@ test('startStep at the head leaves the chain untouched', () => {
 import { CircuitBreaker, matchBreakRule } from '../src/breaker.ts'
 
 const RULES = [
-  { code: 'AUTH', message: '', cooldownSeconds: 3600 },
-  { code: 'RATE_LIMIT', message: '', cooldownSeconds: 60 },
-  { code: '', message: 'quota', cooldownSeconds: 7200 },
+  { code: 'AUTH', message: '', cooldownSeconds: 3600, scope: 'route' },
+  { code: 'RATE_LIMIT', message: '', cooldownSeconds: 60, scope: 'route' },
+  { code: '', message: 'quota', cooldownSeconds: 7200, scope: 'channel' },
 ]
 
 test('matchBreakRule matches on code alone', () => {
-  assert.equal(matchBreakRule('RATE_LIMIT', 'too many requests', RULES), 60)
-  assert.equal(matchBreakRule('AUTH', 'bad key', RULES), 3600)
+  assert.equal(matchBreakRule('RATE_LIMIT', 'too many requests', RULES).seconds, 60)
+  assert.equal(matchBreakRule('AUTH', 'bad key', RULES).seconds, 3600)
 })
 
 test('matchBreakRule matches on message when the code says nothing', () => {
-  assert.equal(matchBreakRule('PROVIDER_SPECIFIC', 'monthly quota exceeded', RULES), 7200)
+  assert.equal(matchBreakRule('PROVIDER_SPECIFIC', 'monthly quota exceeded', RULES).seconds, 7200)
 })
 
 test('matchBreakRule requires every filled field to match', () => {
-  const both = [{ code: 'SERVER', message: 'overloaded', cooldownSeconds: 30 }]
-  assert.equal(matchBreakRule('SERVER', 'upstream overloaded', both), 30)
+  const both = [{ code: 'SERVER', message: 'overloaded', cooldownSeconds: 30, scope: 'route' }]
+  assert.equal(matchBreakRule('SERVER', 'upstream overloaded', both).seconds, 30)
   assert.equal(matchBreakRule('SERVER', 'connection reset', both), undefined)
   assert.equal(matchBreakRule('TIMEOUT', 'upstream overloaded', both), undefined)
 })
@@ -266,17 +266,22 @@ test('matchBreakRule returns undefined for a failure no rule names', () => {
 
 test('matchBreakRule takes the first matching rule', () => {
   const ordered = [
-    { code: '', message: 'e', cooldownSeconds: 10 },
-    { code: 'SERVER', message: '', cooldownSeconds: 20 },
+    { code: '', message: 'e', cooldownSeconds: 10, scope: 'route' },
+    { code: 'SERVER', message: '', cooldownSeconds: 20, scope: 'channel' },
   ]
-  assert.equal(matchBreakRule('SERVER', 'internal error', ordered), 10)
+  assert.equal(matchBreakRule('SERVER', 'internal error', ordered).seconds, 10)
+})
+
+test('matchBreakRule carries the rule scope through', () => {
+  assert.equal(matchBreakRule('AUTH', 'bad key', RULES).scope, 'route')
+  assert.equal(matchBreakRule('PROVIDER_SPECIFIC', 'quota gone', RULES).scope, 'channel')
 })
 
 test('CircuitBreaker blocks a matched route and lifts it when the cooldown ends', () => {
   const breaker = new CircuitBreaker()
   const t0 = 1_000_000
   assert.equal(breaker.note('real-a', 'm1', 'AUTH', 'bad key', RULES, t0)?.until, t0 + 3_600_000)
-  assert.equal(breaker.blockedUntil('real-a', 'm1', t0 + 1_000), t0 + 3_600_000)
+  assert.equal(breaker.blockedUntil('real-a', 'm1', t0 + 1_000).until, t0 + 3_600_000)
   // 冷却到了就自动放行——不是永久拉黑。
   assert.equal(breaker.blockedUntil('real-a', 'm1', t0 + 3_600_001), undefined)
 })
@@ -294,20 +299,62 @@ test('CircuitBreaker blocks per route, not per provider', () => {
   assert.equal(breaker.blockedUntil('real-b', 'm1', 2000), undefined)
 })
 
+test('a channel-scope rule blocks every model under the provider', () => {
+  // 实测依据：一个网关渠道里密钥失效，链上每条模型都会吐同样的错。按路由禁，
+  // 链上会把同渠道其余模型各真打一次才跨渠道——那正是用户配的 attempt 预算。
+  const breaker = new CircuitBreaker()
+  breaker.note('real-a', 'm1', 'QUOTA_EXCEEDED', 'quota gone', RULES, 1000)
+  assert.equal(breaker.blockedUntil('real-a', 'm1', 2000).scope, 'channel')
+  assert.equal(breaker.blockedUntil('real-a', 'm2', 2000)?.until, 1000 + 7_200_000)
+  assert.equal(breaker.blockedUntil('real-a', 'm3', 2000)?.scope, 'channel')
+  // 别的渠道不受影响。
+  assert.equal(breaker.blockedUntil('real-b', 'm1', 2000), undefined)
+})
+
+test('a route sits out until both its own block and its channel block lift', () => {
+  const breaker = new CircuitBreaker()
+  const t0 = 1_000_000
+  breaker.note('real-a', 'm1', 'RATE_LIMIT', 'slow down', RULES, t0)          // route, 60s
+  breaker.note('real-a', 'm2', 'QUOTA_EXCEEDED', 'quota gone', RULES, t0)     // channel, 7200s
+  // m1 自己的 60s 先到，但渠道的 7200s 还没到——它仍然不可用，且绑定的是渠道。
+  assert.equal(breaker.blockedUntil('real-a', 'm1', t0 + 61_000)?.until, t0 + 7_200_000)
+  assert.equal(breaker.blockedUntil('real-a', 'm1', t0 + 61_000)?.scope, 'channel')
+
+  // 反过来：渠道 block 短、路由 block 长时，绑定的回归路由，且渠道的到期会放行
+  // 只有渠道 block 的兄弟路由。
+  const shortChannel = [{ code: 'QUOTA', message: '', cooldownSeconds: 60, scope: 'channel' }]
+  const longRoute = [{ code: 'AUTH', message: '', cooldownSeconds: 3600, scope: 'route' }]
+  const other = new CircuitBreaker()
+  other.note('real-a', 'm2', 'QUOTA', 'q', shortChannel, t0)                  // channel, 60s
+  other.note('real-a', 'm1', 'AUTH', 'k', longRoute, t0)                      // route, 3600s
+  assert.equal(other.blockedUntil('real-a', 'm1', t0 + 61_000)?.until, t0 + 3_600_000)
+  assert.equal(other.blockedUntil('real-a', 'm1', t0 + 61_000)?.scope, 'route')
+  assert.equal(other.blockedUntil('real-a', 'm2', t0 + 61_000), undefined)
+})
+
 test('CircuitBreaker.sweep drops expired blocks only', () => {
   const breaker = new CircuitBreaker()
   breaker.note('p', 'short', 'RATE_LIMIT', 'x', RULES, 0)      //  lifts at 60s
   breaker.note('p', 'long', 'AUTH', 'x', RULES, 0)      //  lifts at 3600s
   breaker.sweep(61_000)
   assert.equal(breaker.blockedUntil('p', 'short', 62_000), undefined)
-  assert.equal(breaker.blockedUntil('p', 'long', 62_000), 3_600_000)
+  assert.equal(breaker.blockedUntil('p', 'long', 62_000).until, 3_600_000)
 })
 
 test('breakerNotice states the remaining cooldown', () => {
-  const text = breakerNotice({ provider: 'real-a', model: 'm1' }, 10_500, 10_000)
+  const text = breakerNotice({ provider: 'real-a', model: 'm1' }, { until: 10_500, scope: 'route' }, 10_000)
   const rendered = text.content.find(block => block.type === 'text').text
   assert.ok(rendered.includes('已被自动禁用'))
   assert.ok(rendered.includes('1 秒后自动重试'))
+})
+
+test('breakerNotice names the whole channel for a channel-scope block', () => {
+  const text = breakerNotice({ provider: 'real-a', model: 'm1' }, { until: 10_500, scope: 'channel' }, 10_000)
+  const rendered = text.content.find(block => block.type === 'text').text
+  assert.ok(rendered.includes('渠道 real-a 已整体自动禁用'), rendered)
+  assert.ok(rendered.includes('该渠道下所有模型'), rendered)
+  // 路由自己的名字不该出现——用户会以为只凉了这一个。
+  assert.ok(!rendered.includes('m1'), rendered)
 })
 
 // ---- config round-trip: the shape the client saves must land where the host reads ----

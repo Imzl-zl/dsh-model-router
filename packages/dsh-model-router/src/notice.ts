@@ -15,6 +15,7 @@
 
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
+import type { BreakerScope } from './config.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -89,15 +90,18 @@ export function conditionSkipNotice(
 /**
  * A candidate is sitting out a cooldown. The remaining time is stated because
  * "skipped" alone reads like the channel is broken, and the whole point of a
- * cooldown is that it comes back on its own.
+ * cooldown is that it comes back on its own. A channel-scope block says so,
+ * because the user configured it to take the whole provider out and would
+ * otherwise wonder why the sibling models vanished too.
  */
 export function breakerNotice(
   candidate: { provider: string; model: string },
-  until: number,
+  block: { until: number; scope: BreakerScope },
   now: number = Date.now(),
 ): UserMessage {
-  const seconds = Math.max(1, Math.ceil((until - now) / 1000))
-  return notice(
-    `[路由切换] 候选 ${candidate.provider}/${candidate.model} 已被自动禁用，约 ${seconds} 秒后自动重试，本次跳过`,
-  )
+  const seconds = Math.max(1, Math.ceil((block.until - now) / 1000))
+  const subject = block.scope === 'channel'
+    ? `渠道 ${candidate.provider} 已整体自动禁用（该渠道下所有模型）`
+    : `候选 ${candidate.provider}/${candidate.model} 已被自动禁用`
+  return notice(`${subject}，约 ${seconds} 秒后自动重试，本次跳过`)
 }

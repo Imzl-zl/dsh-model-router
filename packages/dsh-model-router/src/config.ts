@@ -152,6 +152,8 @@ export const breakRuleSchema = z.object({
   message: z.string().default('').description('错误信息包含这个字符串就命中；留空表示不按信息匹配'),
   cooldownSeconds: z.number().step(1).min(1).max(86400).default(300)
     .description('命中后禁用多少秒；冷却到了自动放行重试，不是永久拉黑'),
+  scope: z.union(['route', 'channel']).default('route')
+    .description('禁用范围：仅此模型 = 只禁这条 provider/model；整条渠道 = 该 provider 下所有模型一起禁（密钥失效、网关整体故障时用）'),
 })
 
 /**
@@ -221,7 +223,7 @@ export interface SwitchOn {
 // (packages/typert/generator/src/analyzer.ts:2775-2808), and `Profile` is the
 // plugin's central business type. Why this type, and which alternatives were
 // rejected, are recorded in
-// .agents/notes/implemented/2026-10-16-out-of-tree-build-pipeline.md
+// .agents/notes/implemented/2026-10-15-out-of-tree-build-pipeline.md
 /** One backup chain for the exact provider/model the user picks.
  *
  * @typert
@@ -274,7 +276,18 @@ export interface BreakRule {
   code: string
   message: string
   cooldownSeconds: number
+  /**
+   * `route`（默认）只禁这一条 provider/model；`channel` 把该 provider 下所有模型
+   * 一起禁。区分来自实测：同一个网关渠道里模型各坏各的（按路由禁才不会埋掉好
+   * 模型），而密钥失效、网关整体故障是按渠道坏的（只禁一个模型，链上会把同渠道
+   * 其余模型各真打一次才跨渠道，白白吃掉 attempt 预算）。哪种码属于哪种，provider
+   * 之间没有共识，所以由用户在规则上显式声明，不猜。
+   */
+  scope: BreakerScope
 }
+
+/** 熔断作用域：禁一条路由，还是禁整条 provider 渠道。 */
+export type BreakerScope = 'route' | 'channel'
 
 /** 自动禁用配置。 */
 export interface BreakerConfig {

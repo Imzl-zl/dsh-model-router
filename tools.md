@@ -34,7 +34,10 @@ DSH 侧规范入口：[根 `AGENTS.md`](file:///D:/sudy/github/deepseek-harness/
 
 ## Pitfalls
 
-- **rolldown 会重印 AST，bundle 不是源码的逐字节副本**（2026-10-16 实测）：单引号字符串变双引号、`function (current)` 丢空格、三元条件行被合并进一行。任何"读产物文本"的回归测试都会因定位串失配而假红——结构/文本守卫要读源码模块，行为断言才读 bundle。
+- **llm-retry 自己重试常见失败码，从不委派**（2026-10-15 实测）：normal 策略对 RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE 自己重试到 maxRetries 才 `next()`；插件的 `agent/request-error` listener（熔断 note、恢复决策都在里面）只有那时才跑得到。要测熔断/恢复，stub 策略必须显式 `policy: { maxRetries: 0 }`（`tests/run.mjs` 的 `breaker-channel-scope-skips-sibling-models` 就这么干）。另一个后果：熔断 block 从「记录成功之后」的请求起才省 attempt，首次请求仍可能把同渠道打一次。
+- **DSH 模型菜单按模型 id 去重**（2026-10-15 实测）：多个 provider 声明同名模型时菜单只列一个条目，选中哪个 provider 由 last-used/默认决定——要在 UI 上稳定选中某个渠道的模型，给该渠道的模型用独占 id（真网关 overlay 里 real-dead 用 dead-kimi/dead-sense）。
+- **`--patch` 是 launcher 旗标，必须放在第一个 app 旗标之前**：`dsh --profile web --patch <file> --no-open --port <p>`；放在 `--no-open` 之后会被 web app 的解析器当成未知选项拒绝。
+- **rolldown 会重印 AST，bundle 不是源码的逐字节副本**（2026-10-15 实测）：单引号字符串变双引号、`function (current)` 丢空格、三元条件行被合并进一行。任何"读产物文本"的回归测试都会因定位串失配而假红——结构/文本守卫要读源码模块，行为断言才读 bundle。
 - Agent `prepareCall()` 固定 adapter registration；Agent route 不能靠后续 `llm/stream` 改 provider。
 - waterfall 数组首个 listener 是最外层、其返回值即最终值；`await next()` 之后改写会覆盖内层。Router 必须 `prepend: true` 才能位于 `installModelSelection` 与三个 `agent/request-error` 消费者（`llm-retry`、`compaction-image-offload`、`compaction-basic`）之外层。cordis.yml 书写顺序不决定 listener 次序。
 - Agent step 循环 `while (true)` 没有 attempt 上限；总上限只能由 Router 拥有，且必须计入 `llm-retry` 代跑的重试。

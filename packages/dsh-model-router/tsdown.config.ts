@@ -33,9 +33,9 @@
  *
  * Note: 构建取舍（单段式、自复刻 clientBundle、package 模式 typert、根
  * tsconfig.host.json 作 workspace 标记、@typert 表面取舍）—— 见
- * .agents/notes/implemented/2026-10-16-out-of-tree-build-pipeline.md
+ * .agents/notes/implemented/2026-10-15-out-of-tree-build-pipeline.md
  * Note: 客户端半包拆模块与客户端构建复刻 —— 见
- * .agents/notes/implemented/2026-10-16-client-half-module-split.md
+ * .agents/notes/implemented/2026-10-15-client-half-module-split.md
  */
 
 import { readFileSync } from 'node:fs'

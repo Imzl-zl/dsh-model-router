@@ -17,7 +17,12 @@ export function HealthSettingsModal(props) {
   var breaker = health.breaker || {}
   var [breakerOn, setBreakerOn] = useState(breaker.enabled === true)
   var [rules, setRules] = useState((breaker.rules || []).map(function (rule) {
-    return { code: rule.code || '', message: rule.message || '', cooldownSeconds: rule.cooldownSeconds ?? 300 }
+    return {
+      code: rule.code || '',
+      message: rule.message || '',
+      cooldownSeconds: rule.cooldownSeconds ?? 300,
+      scope: rule.scope === 'channel' ? 'channel' : 'route',
+    }
   }))
   // 一条两个字段都空白的规则永远命中不了任何东西。这里不静默过滤——弹窗
   // 替用户删掉规则，就会和页面级 validate() 对同一份数据说出两种结论；
@@ -146,7 +151,7 @@ export function HealthSettingsModal(props) {
                 disabled: exists,
                 title: exists ? t('breakerAlreadyAdded') : preset.desc,
                 onClick: function () {
-                  setRules(function (current) { return current.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds }]) })
+                  setRules(function (current) { return current.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds, scope: 'route' }]) })
                 },
               }, preset.code)
             })),
@@ -178,6 +183,15 @@ export function HealthSettingsModal(props) {
                 onChange: function (event) { patchRule(index, { cooldownSeconds: event.target.value }) },
               }),
               h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('breakerSecondsUnit')),
+              h('select', {
+                style: Object.assign({}, S.formInput, { width: 96, flex: 'none' }),
+                'aria-label': t('breakerScopeLabel'),
+                title: t('breakerScopeHint'),
+                value: rule.scope,
+                onChange: function (event) { patchRule(index, { scope: event.target.value }) },
+              },
+                h('option', { value: 'route' }, t('breakerScopeRoute')),
+                h('option', { value: 'channel' }, t('breakerScopeChannel'))),
               h('button', {
                 type: 'button',
                 className: 'dsh-router-action-btn dsh-router-action-btn-danger',
@@ -196,7 +210,7 @@ export function HealthSettingsModal(props) {
           h('button', {
             type: 'button',
             style: Object.assign({}, S.manualBtn, { marginTop: 8 }),
-            onClick: function () { setRules(function (current) { return current.concat([{ code: '', message: '', cooldownSeconds: 300 }]) }) },
+            onClick: function () { setRules(function (current) { return current.concat([{ code: '', message: '', cooldownSeconds: 300, scope: 'route' }]) }) },
           }, t('breakerAddRule')),
           hasEmptyRule ? h('span', { style: S.formHint, role: 'alert' }, t('problemBreakerEmptyRule')) : null) : null))
   )

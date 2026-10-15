@@ -126,6 +126,9 @@ export function normalizeHealth(value) {
           code: typeof rule.code === 'string' ? rule.code : '',
           message: typeof rule.message === 'string' ? rule.message : '',
           cooldownSeconds: typeof rule.cooldownSeconds === 'number' ? rule.cooldownSeconds : 300,
+          // 旧配置没有这一字段；host schema 的默认值是 route，这里必须填成同一个，
+          // 否则 UI 显示与 host 执行会是两个意思。
+          scope: rule.scope === 'channel' ? 'channel' : 'route',
         }
       }) : [],
     },

@@ -67,7 +67,7 @@ Phase 1 实跑后定案的取舍：
 - **workspace 根标记**：生成器的 package 模式从包 outDir 向上找 `tsconfig.host.json` 定 workspace 根（[`tsdown-plugin.ts:154-161`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/tsdown-plugin.ts#L154)），且要求被引包位于 `<root>/packages` 下（[`analyzer.ts:488`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/analyzer.ts#L488)）。项目根因此持有一份只做 registration 聚合的 `tsconfig.host.json`，引用 `packages/dsh-model-router/tsconfig.json`。
 - **surface**：生成器只为带标记声明的包产出（[`analyzer.ts:2775-2808`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/analyzer.ts#L2775)）。`Profile` 接口带 `@typert` 标签并经 `src/index.ts` 再导出，成为 host face 的唯一 surface；`Strategy` 因此改为显式联合（Zod 发射器不支持 indexed-access，见[`emitter.ts:777-788`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/emitter.ts#L777)）。
 
-取舍理由与被否方案见 `.agents/notes/implemented/2026-10-16-out-of-tree-build-pipeline.md`。
+取舍理由与被否方案见 `.agents/notes/implemented/2026-10-15-out-of-tree-build-pipeline.md`。
 
 ### 2. 包结构
 

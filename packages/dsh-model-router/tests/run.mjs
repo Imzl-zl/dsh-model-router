@@ -41,7 +41,7 @@ function profile(candidates, overrides = {}) {
   }
 }
 
-const C = (provider, maxAttempts = 1) => ({ provider, model: 'stub-model', maxAttempts })
+const C = (provider, maxAttempts = 1, over = {}) => ({ provider, model: 'stub-model', maxAttempts, ...over })
 
 // The health projection folds the real durable log, so the fold is asserted
 // against events a real boot produced rather than a hand-made fixture. This is
@@ -272,6 +272,36 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'breaker-channel-scope-skips-sibling-models',
+    note: '渠道级规则命中后，同渠道其余模型在链上直接被跳过（单 step 内可观测）',
+    // 实测依据：一个网关渠道密钥失效，渠道下每条模型都吐同样的错。按路由禁会让
+    // 链上把同渠道其余模型各真打一次才跨渠道，白吃 attempt 预算；渠道级禁把整个
+    // provider 凉住，链直接跳到下一条渠道。
+    router: {
+      enabled: true,
+      profiles: [profile([C('stub-primary', 1), C('stub-primary', 1, { model: 'stub-model-2' }), C('stub-backup', 1)])],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      breaker: { enabled: true, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 3600, scope: 'channel' }] },
+    },
+    script: {
+      // llm-retry 的 normal 策略自己重试 RATE_LIMIT，从不委派——熔断的 note() 在
+      // 我们的 recovery listener 里，只有 llm-retry 让位才跑得到。maxRetries: 0
+      // 强制让位，让这条场景真正走到熔断记录那一步。
+      policy: { maxRetries: 0 },
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      // 同渠道的第二个模型一次都没真打：headers 里没有它，失败尝试也只有第一条。
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('failed attempt count', failedAttempts(events).length, 1)
+      const texts = notices(events).map(n => n.text)
+      ok('channel block names the whole provider', texts.some(t => t.includes('渠道 stub-primary 已整体自动禁用') && t.includes('该渠道下所有模型')))
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'invalid-config-rejected',
     note: '结构错误（重复 ID）在加载时响亮失败，不静默跳过',
     router: { enabled: true, profiles: [profile([C('stub-primary', 1)], { id: 'dup' }), profile([C('stub-backup', 1)], { id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
@@ -335,7 +365,7 @@ ${router.breaker === undefined ? '' : `        health:
           breaker:
             enabled: ${router.breaker.enabled}
             rules:
-${router.breaker.rules.map(r => `              - { code: '${r.code}', message: '${r.message}', cooldownSeconds: ${r.cooldownSeconds} }`).join('\n')}`}
+${router.breaker.rules.map(r => `              - { code: '${r.code}', message: '${r.message}', cooldownSeconds: ${r.cooldownSeconds}, scope: '${r.scope ?? 'route'}' }`).join('\n')}`}
 `
 }
 

@@ -35,7 +35,7 @@ import { RouterState, candidateConfig, emptyConditions, type StepChain, type Ste
 import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice } from './notice.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
 import { channelHealthProjection } from './health.ts'
-import { CircuitBreaker } from './breaker.ts'
+import { CircuitBreaker, type RouteBlock } from './breaker.ts'
 
 export const name = 'model-router'
 export const inject = ['llm']
@@ -157,7 +157,7 @@ export function apply(ctx: Context, config: Config): void {
         let index = plan.state.index
         const skipped: Candidate[] = []
         const conditionSkipped: { candidate: Candidate; reason: string }[] = []
-        const blocked: { candidate: Candidate; until: number }[] = []
+        const blocked: { candidate: Candidate; block: RouteBlock }[] = []
         let outgoing: LlmCallConfig | undefined
         const now = Date.now()
         breaker.sweep(now)
@@ -175,9 +175,9 @@ export function apply(ctx: Context, config: Config): void {
             outgoing = candidateConfig(resolved, candidate)
             break
           }
-          const until = breaker.blockedUntil(candidate.provider, candidate.model, now)
-          if (until !== undefined) {
-            blocked.push({ candidate, until })
+          const block = breaker.blockedUntil(candidate.provider, candidate.model, now)
+          if (block !== undefined) {
+            blocked.push({ candidate, block })
             index += 1
             continue
           }
@@ -204,7 +204,7 @@ export function apply(ctx: Context, config: Config): void {
           agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
         }
         for (const entry of blocked) {
-          agent.session.append('user/message', breakerNotice(entry.candidate, entry.until), { surfaceOp: 'append' })
+          agent.session.append('user/message', breakerNotice(entry.candidate, entry.block), { surfaceOp: 'append' })
         }
         if (outgoing === undefined) {
           // Nothing in the chain can serve this request. Fall through to the
