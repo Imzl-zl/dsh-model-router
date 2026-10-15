@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
     var SegmentedTabs = prim.SegmentedTabs
     var Modal = prim.Modal
     var RiskConfirmation = prim.RiskConfirmation
+    var useModalLayer = prim.useModalLayer
     var createSnapshotStore = clientStore.createSnapshotStore
 
     /** Cordis plugin name. */
@@ -62,7 +63,6 @@ window.__ModuleLoader__.load({
       deleteProfileBtn: '删除此规则',
       pipelineTitle: '降级链路 (Fallback Chain)',
       strategyLabel: '选路策略',
-      strategySharedHint: '三种策略只决定「从哪条渠道开始」；任一渠道失败，都会继续尝试链上其余渠道，直到成功或用尽预算。',
       strategyorder: '按顺序',
       strategyweight: '按权重',
       'strategyround-robin': '轮询',
@@ -163,6 +163,7 @@ window.__ModuleLoader__.load({
       failoverHistoryHint: '仅显示最近 20 个会话的记录',
       failoverEntrySettled: '已成功',
       failoverEntryUnsettled: '未完成',
+      failoverEntryLine: '主模型 {from} 失败（{code}），切换至 {to}',
       failoverSessionLabel: '会话',
       codeRATE_LIMIT: '限流',
       codeSERVER: '服务端错误',
@@ -179,6 +180,7 @@ window.__ModuleLoader__.load({
       problemBadTotal: '规则 {id} 的总尝试上限必须 ≥ 1',
       problemBadDefaultTotal: '全局兜底的总尝试上限必须 ≥ 1',
       problemBadDefaultSticky: '全局兜底的识图粘滞轮数不能为负',
+      problemProfileWeightNoPositive: '规则 {id} 的选路策略是「按权重」，但没有任何候选的权重大于 0——这样永远从第一条开始，等于没配',
       problemWeightNoPositive: '选路策略是「按权重」，但没有任何候选的权重大于 0——这样永远从第一条开始，等于没配',
       problemBreakerEmptyRule: '自动禁用里有一条规则既没填错误码也没填错误信息，它永远命中不了任何东西',
       formUnavailable: '配置当前不可用',
@@ -192,11 +194,9 @@ window.__ModuleLoader__.load({
       attemptRangeHint: '1~5',
       sidebarActionLabel: '模型路由',
       sidebarActionTooltip: '模型路由与故障转移控制中心',
-      saveSuccess: '配置已成功保存',
       unsavedChangesBadge: '未保存修改',
-      unsavedChangesBarText: '发现尚未保存的路由配置变更',
       saveShortcutHint: '保存配置 (Ctrl+S)',
-      discardShortcutHint: '放弃更改',
+      saveShortcutKey: 'Ctrl+S',
       quickModalTitle: '模型路由控制中心',
       statusRunningBadge: '路由生效中',
       statusDisabledBadge: '已暂停',
@@ -233,7 +233,6 @@ window.__ModuleLoader__.load({
       healthStatusHealthy: '正常',
       healthStatusDegraded: '降级',
       healthStatusUnhealthy: '异常',
-      healthStatusUnknown: '未探测',
       healthConfigBtn: '健康监控设置',
       healthModalTitle: '渠道健康监控',
       healthMetricHistory: '近期记录',
@@ -250,20 +249,13 @@ window.__ModuleLoader__.load({
       connectivityUnavailable: '连通性检查：DSH 的发现接口当前不可用',
       connectivityUnreachable: '连通性检查：端点没应答',
       subTabPipeline: '降级流水线',
+      subTabsLabel: '规则视图',
       subTabPolicies: '异常策略与预算',
       subTabTelemetry: '渠道遥测与监控',
-      subTabPipelineDesc: '配置首选与有序备选链路、尝试上限及条件准入',
-      subTabPoliciesDesc: '定义触发切换的错误码矩阵与 Agent 轮次预算上限',
-      subTabTelemetryDesc: '查看各渠道最近 24 次调用波动、首字延迟与真实吞吐',
       telemetryTitle: '全链路渠道遥测监控',
       telemetrySubtitle: '展示当前链路各候选渠道的时间轴波动、首字延迟 (TTFT) 及原生会话吞吐 (tok/s)。',
       telemetryCheckBtn: '探测本链所有渠道',
       telemetryBreakerBtn: '健康与熔断配置',
-      telemetryAvailability: '历史可用率',
-      telemetryObservationMode: '观测源',
-      telemetryPassiveMode: '会话原生折叠',
-      telemetryActiveMode: '极速探针探测',
-      visionGuideTitle: '零点击识图路由配置要领',
       visionGuideExpand: '展开说明',
       visionGuideCollapse: '收起说明',
       compactHealthTooltip: '点击切换至渠道遥测图谱',
@@ -288,7 +280,6 @@ window.__ModuleLoader__.load({
       deleteProfileBtn: 'Delete this profile',
       pipelineTitle: 'Fallback Chain Pipeline',
       strategyLabel: 'Start strategy',
-      strategySharedHint: 'The three strategies decide one thing only: where the chain starts. Any channel that fails still hands off to the rest of the chain, until one answers or the budget runs out.',
       strategyorder: 'In order',
       strategyweight: 'By weight',
       'strategyround-robin': 'Round-robin',
@@ -389,6 +380,7 @@ window.__ModuleLoader__.load({
       failoverHistoryHint: 'Showing the 20 most recent sessions',
       failoverEntrySettled: 'completed',
       failoverEntryUnsettled: 'unfinished',
+      failoverEntryLine: 'Primary {from} failed ({code}); switched to {to}',
       failoverSessionLabel: 'Session',
       codeRATE_LIMIT: 'rate limit',
       codeSERVER: 'server error',
@@ -405,6 +397,7 @@ window.__ModuleLoader__.load({
       problemBadTotal: 'Profile {id} maxTotalAttempts must be >= 1',
       problemBadDefaultTotal: 'The default pool maxTotalAttempts must be >= 1',
       problemBadDefaultSticky: 'The default pool sticky turns must be >= 0',
+      problemProfileWeightNoPositive: 'Profile {id} uses the "by weight" start strategy but no candidate has a positive weight — every request would start at the first entry, which is the same as not configuring it.',
       problemWeightNoPositive: 'The start strategy is "by weight" but no candidate has a positive weight — every request would start at the first entry, which is the same as not configuring it.',
       problemBreakerEmptyRule: 'One auto-disable rule has neither a code nor a message, so it can never match anything.',
       formUnavailable: 'Configuration is currently unavailable',
@@ -418,11 +411,9 @@ window.__ModuleLoader__.load({
       attemptRangeHint: '1~5',
       sidebarActionLabel: 'Model Router',
       sidebarActionTooltip: 'Model Router & Failover Control Center',
-      saveSuccess: 'Configuration saved',
       unsavedChangesBadge: 'Unsaved',
-      unsavedChangesBarText: 'Unsaved routing configuration changes detected',
       saveShortcutHint: 'Save (Ctrl+S)',
-      discardShortcutHint: 'Discard',
+      saveShortcutKey: 'Ctrl+S',
       quickModalTitle: 'Model Router Control Center',
       statusRunningBadge: 'Active',
       statusDisabledBadge: 'Paused',
@@ -459,7 +450,6 @@ window.__ModuleLoader__.load({
       healthStatusHealthy: 'Healthy',
       healthStatusDegraded: 'Degraded',
       healthStatusUnhealthy: 'Unhealthy',
-      healthStatusUnknown: 'Untested',
       healthConfigBtn: 'Health Settings',
       healthModalTitle: 'Channel Health Monitor',
       healthMetricHistory: 'Recent',
@@ -476,20 +466,13 @@ window.__ModuleLoader__.load({
       connectivityUnavailable: 'Connectivity check: DSH\'s discovery interface is unavailable',
       connectivityUnreachable: 'Connectivity check: endpoint did not answer',
       subTabPipeline: 'Fallback Chain',
+      subTabsLabel: 'Configuration views',
       subTabPolicies: 'Policies & Budget',
       subTabTelemetry: 'Health & Telemetry',
-      subTabPipelineDesc: 'Configure ordered fallback candidates, attempt limits, and condition gates',
-      subTabPoliciesDesc: 'Define failover trigger codes and execution attempt budgets',
-      subTabTelemetryDesc: 'Inspect 24-point timeline sparklines, TTFT latency, and real throughput',
       telemetryTitle: 'Channel Telemetry & Health',
       telemetrySubtitle: 'Live timeline sparkline, TTFT latency, and native token throughput for all candidates in this chain.',
       telemetryCheckBtn: 'Probe Chain Now',
       telemetryBreakerBtn: 'Health & Breaker Settings',
-      telemetryAvailability: 'Availability',
-      telemetryObservationMode: 'Source',
-      telemetryPassiveMode: 'Passive Session Fold',
-      telemetryActiveMode: 'Active TTFT Probe',
-      visionGuideTitle: 'Zero-Click Vision Routing Guide',
       visionGuideExpand: 'Expand Guide',
       visionGuideCollapse: 'Collapse',
       compactHealthTooltip: 'Click to view full telemetry sparklines',
@@ -538,12 +521,14 @@ window.__ModuleLoader__.load({
     /** A config saved before `stickyTurns` existed reads undefined here; the host default is 0. */
     function normalizeProfiles(value) {
       return clone(value ?? []).map(function (profile) {
+        if (!Array.isArray(profile.candidates)) profile.candidates = []
         if (typeof profile.stickyTurns !== 'number' || profile.stickyTurns < 0) profile.stickyTurns = 0
         return profile
       })
     }
     function normalizeDefault(value) {
       var pool = clone(value ?? defaultProfileValue())
+      if (!Array.isArray(pool.candidates)) pool.candidates = []
       if (typeof pool.stickyTurns !== 'number' || pool.stickyTurns < 0) pool.stickyTurns = 0
       return pool
     }
@@ -551,7 +536,18 @@ window.__ModuleLoader__.load({
     // ---------- global styles injection (DSH sidebar & modal adaptations) ----------
 
     var ROUTER_CSS = [
-      '/* dsh-model-router: sidebar footer actions adaptive column layout */',
+      '/* The plugin accent. DSH ships no plugin-accent token, so the blue lives',
+      '   here once and every pill, badge and gradient reads it. */',
+      ':root {',
+      '  --dsh-router-accent: #4A65E8;',
+      '}',
+      '/* dsh-model-router: sidebar footer actions adaptive column layout.',
+      '   NOTE(host-CSS coupling): this restyles DSH\'s own sidebar container, not just',
+      '   this plugin\'s cell — the slot contract offers no per-entry layout control',
+      '   (ownerProps is only `wide`). Anchors: ui-sidebar SidebarRoot.tsx:306 renders',
+      '   css.footerActions, SidebarRoot.module.css:587-589 is its row layout and',
+      '   :595-600 the collapsed variant. A rename on the DSH side silently no-ops;',
+      '   the supported alternative is upstream (per-entry layout in the slot). */',
       'div[class*="footerActions"] {',
       '  display: flex !important;',
       '  flex-direction: column !important;',
@@ -591,11 +587,12 @@ window.__ModuleLoader__.load({
       '  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary));',
       '  outline-offset: -1px;',
       '}',
-      '/* Suppress duplicate SettingsForm footer inside router views (save action is prominently anchored to sticky header / modal top bar) */',
-      '.dsh-router-page div[class*="footer"]:has(button),',
-      '.dsh-router-modal-dialog div[class*="footer"]:has(button),',
-      '.dsh-router-page div[class*="_footer"],',
-      '.dsh-router-modal-dialog div[class*="_footer"] {',
+      '/* Suppress the SettingsForm footer: this page anchors save/discard in its own',
+      '   sticky header and modal top bar, so the frame\'s second save is noise.',
+      '   Selected by structure — the footer is whatever DSH renders right after',
+      '   this plugin\'s own children wrapper — not by a DSH class name, so an',
+      '   upstream rename fails loudly (two saves visible) instead of silently. */',
+      '.dsh-router-page .dsh-router-form-body + div:has(button) {',
       '  display: none !important;',
       '}',
       '/* Interactive micro-interactions */',
@@ -618,7 +615,7 @@ window.__ModuleLoader__.load({
       '}',
       '.dsh-router-danger-btn:hover {',
       '  background: rgba(239, 68, 68, 0.1) !important;',
-      '  border-color: var(--dsw-alias-state-error, #ef4444) !important;',
+      '  border-color: var(--dsw-alias-state-error-primary) !important;',
       '}',
       '.dsh-router-add-profile-btn:hover {',
       '  border-color: var(--dsw-alias-brand-primary, #4A65E8) !important;',
@@ -644,35 +641,8 @@ window.__ModuleLoader__.load({
       '  transform: scaleY(1.3) scaleX(1.1) !important;',
       '  filter: brightness(1.3) !important;',
       '}',
-      '/* Sub-navigation bar */',
-      '.dsh-router-subnav-bar {',
-      '  display: flex !important;',
-      '  align-items: center !important;',
-      '  justify-content: space-between !important;',
-      '  gap: 12px !important;',
-      '  margin-bottom: 16px !important;',
-      '  flex-wrap: wrap !important;',
-      '}',
-      '/* Tool buttons in header and telemetry */',
-      '.dsh-router-tool-btn {',
-      '  box-sizing: border-box !important;',
-      '  background: var(--dsw-alias-bg-layer-2) !important;',
-      '  border: 0.5px solid var(--dsw-alias-border-l3) !important;',
-      '  color: var(--dsw-alias-label-secondary) !important;',
-      '  padding: 0 10px !important;',
-      '  height: 32px !important;',
-      '  border-radius: var(--dsw-radius-md, 8px) !important;',
-      '  font-size: 12.5px !important;',
-      '  font-weight: 500 !important;',
-      '  cursor: pointer !important;',
-      '  display: inline-flex !important;',
-      '  align-items: center !important;',
-      '  justify-content: center !important;',
-      '  gap: 6px !important;',
-      '  white-space: nowrap !important;',
-      '  flex-shrink: 0 !important;',
-      '  transition: all 0.15s ease !important;',
-      '}',
+      '/* Sub-navigation bar: base look lives in S.subNavBar; hover/active states here. */',
+      '/* Tool buttons in header and telemetry: base look in S.toolBtn. */',
       '.dsh-router-tool-btn:hover:not(:disabled) {',
       '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
       '  color: var(--dsw-alias-label-primary) !important;',
@@ -685,54 +655,42 @@ window.__ModuleLoader__.load({
       '  opacity: 0.45 !important;',
       '  cursor: not-allowed !important;',
       '}',
-      '/* Compact health pill on candidate node */',
-      '.dsh-router-compact-health {',
-      '  display: inline-flex !important;',
-      '  align-items: center !important;',
-      '  gap: 6px !important;',
-      '  padding: 2px 8px !important;',
-      '  border-radius: 12px !important;',
-      '  background: var(--dsw-alias-bg-layer-3) !important;',
-      '  border: 0.5px solid var(--dsw-alias-border-l2) !important;',
-      '  font-size: 11.5px !important;',
-      '  font-family: var(--ds-font-family-code, monospace) !important;',
-      '  color: var(--dsw-alias-label-secondary) !important;',
-      '  cursor: pointer !important;',
-      '  transition: all 0.15s ease !important;',
-      '  white-space: nowrap !important;',
-      '  user-select: none !important;',
-      '}',
+      '/* Compact health pill on candidate node: base look in S.compactHealthPill. */',
       '.dsh-router-compact-health:hover {',
       '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
       '  color: var(--dsw-alias-label-primary) !important;',
       '  border-color: var(--dsw-alias-brand-primary, #4A65E8) !important;',
       '  transform: translateY(-0.5px) !important;',
       '}',
-      '/* Needs toggle button */',
-      '.dsh-router-needs-btn {',
-      '  box-sizing: border-box !important;',
-      '  background: transparent !important;',
-      '  border: 0.5px solid var(--dsw-alias-border-l2) !important;',
-      '  color: var(--dsw-alias-label-secondary) !important;',
-      '  padding: 3px 10px !important;',
-      '  border-radius: var(--dsw-radius-xs, 6px) !important;',
-      '  font-size: 11.5px !important;',
-      '  cursor: pointer !important;',
-      '  display: inline-flex !important;',
-      '  align-items: center !important;',
-      '  gap: 4px !important;',
-      '  white-space: nowrap !important;',
-      '  flex-shrink: 0 !important;',
-      '  transition: all 0.15s ease !important;',
-      '}',
+      '/* Needs toggle button: base look in S.needsBtn (active variant S.needsBtnActive). */',
       '.dsh-router-needs-btn:hover {',
       '  border-color: var(--dsw-alias-border-l4) !important;',
       '  color: var(--dsw-alias-label-primary) !important;',
       '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.05)) !important;',
       '}',
       '/* Guide header interactive */',
-      '.dsh-router-guide-header:hover {',
+      '.dsh-router-guide-toggle:hover {',
       '  background: rgba(74, 101, 232, 0.08) !important;',
+      '}',
+      '.dsh-router-guide-toggle:focus-visible {',
+      '  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary));',
+      '  outline-offset: 2px;',
+      '}',
+      '/* Quick-modal card: the plugin control center inside the official Modal. */',
+      '.dsh-router-modal-dialog {',
+      '  width: 1000px !important;',
+      '  max-width: 96vw !important;',
+      '  height: 88vh !important;',
+      '  max-height: 960px !important;',
+      '  padding: 0 !important;',
+      '  gap: 0 !important;',
+      '  display: flex !important;',
+      '  flex-direction: column !important;',
+      '  overflow: hidden !important;',
+      '  border: 0.5px solid var(--dsw-alias-border-l3) !important;',
+      '  border-radius: var(--dsw-radius-lg, 16px) !important;',
+      '  background: var(--dsw-alias-bg-layer-1) !important;',
+      '  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55) !important;',
       '}',
       '/* Keyframes & transitions */',
       '@keyframes dsh-spin {',
@@ -767,7 +725,7 @@ window.__ModuleLoader__.load({
         position: 'sticky',
         top: 0,
         zIndex: 40,
-        background: 'var(--dsw-alias-bg-layer-0, rgba(20,20,24,0.85))',
+        background: 'var(--dsw-alias-bg-layer-2)',
         backdropFilter: 'blur(16px)',
         WebkitBackdropFilter: 'blur(16px)',
         borderBottom: '0.5px solid var(--dsw-alias-border-l3)',
@@ -790,7 +748,7 @@ window.__ModuleLoader__.load({
       headerDivider: { width: 1, height: 20, background: 'var(--dsw-alias-border-l3)', margin: '0 4px', flexShrink: 0 },
       saveBtn: {
         boxSizing: 'border-box',
-        background: 'var(--dsw-alias-brand-primary, #4A65E8)',
+        background: 'var(--dsh-router-accent, #4A65E8)',
         color: '#ffffff',
         border: 'none',
         borderRadius: 'var(--dsw-radius-md, 8px)',
@@ -809,7 +767,7 @@ window.__ModuleLoader__.load({
         transition: 'all 0.15s ease',
       },
       saveBtnHighlight: {
-        background: 'linear-gradient(135deg, #4A65E8 0%, #3551db 100%)',
+        background: 'linear-gradient(135deg, var(--dsh-router-accent, #4A65E8) 0%, #3551db 100%)',
         boxShadow: '0 0 10px rgba(74,101,232,0.5)',
       },
       saveBtnDisabled: {
@@ -821,7 +779,7 @@ window.__ModuleLoader__.load({
         opacity: 0.6,
       },
       saveBtnSuccess: {
-        background: 'var(--dsw-alias-state-success, #10b981)',
+        background: 'var(--dsw-alias-state-success-primary)',
         color: '#ffffff',
         boxShadow: '0 2px 10px rgba(16,185,129,0.4)',
       },
@@ -865,7 +823,7 @@ window.__ModuleLoader__.load({
         padding: '2px 8px',
         borderRadius: 20,
         background: 'rgba(16,185,129,0.12)',
-        color: 'var(--dsw-alias-state-success, #10b981)',
+        color: 'var(--dsw-alias-state-success-primary)',
         border: '0.5px solid rgba(16,185,129,0.3)',
         display: 'inline-flex',
         alignItems: 'center',
@@ -892,7 +850,7 @@ window.__ModuleLoader__.load({
         padding: '2px 8px',
         borderRadius: 20,
         background: 'rgba(245,158,11,0.15)',
-        color: '#f59e0b',
+        color: 'var(--dsw-alias-state-warn-primary)',
         border: '0.5px solid rgba(245,158,11,0.4)',
         display: 'inline-flex',
         alignItems: 'center',
@@ -906,7 +864,7 @@ window.__ModuleLoader__.load({
         padding: '2px 8px',
         borderRadius: 20,
         background: 'rgba(239,68,68,0.15)',
-        color: 'var(--dsw-alias-state-error, #ef4444)',
+        color: 'var(--dsw-alias-state-error-primary)',
         border: '0.5px solid rgba(239,68,68,0.4)',
         display: 'inline-flex',
         alignItems: 'center',
@@ -920,7 +878,6 @@ window.__ModuleLoader__.load({
         borderRadius: 'var(--dsw-radius-xl, 16px)',
         padding: '22px 24px',
         marginBottom: 20,
-        boxShadow: 'var(--dsw-card-shadow, 0 1px 3px rgba(0,0,0,0.1))',
         boxSizing: 'border-box',
       },
       sectionHeader: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 12 },
@@ -930,7 +887,7 @@ window.__ModuleLoader__.load({
         boxSizing: 'border-box',
         background: 'transparent',
         border: '0.5px solid var(--dsw-alias-border-l3)',
-        color: 'var(--dsw-alias-state-error)',
+        color: 'var(--dsw-alias-state-error-primary)',
         borderRadius: 'var(--dsw-radius-md, 8px)',
         padding: '0 12px',
         height: 28,
@@ -976,7 +933,7 @@ window.__ModuleLoader__.load({
         border: '0.5px solid var(--dsw-alias-border-l4)',
       },
       rankBadgePrimary: {
-        background: 'linear-gradient(135deg, #4A65E8 0%, #324ecc 100%)',
+        background: 'linear-gradient(135deg, var(--dsh-router-accent, #4A65E8) 0%, #324ecc 100%)',
         color: '#ffffff',
         borderColor: 'transparent',
         boxShadow: '0 2px 6px rgba(74,101,232,0.4)',
@@ -985,14 +942,14 @@ window.__ModuleLoader__.load({
       modelInfo: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 },
       modelNameRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
       modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'min(260px, 36vw)' },
-      providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
-      primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(16,185,129,0.12)', color: 'var(--dsw-alias-state-success, #10b981)', border: '0.5px solid rgba(16,185,129,0.3)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
+      providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
+      primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(16,185,129,0.12)', color: 'var(--dsw-alias-state-success-primary)', border: '0.5px solid rgba(16,185,129,0.3)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
       healthDots: { display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 },
       healthDot: { width: 7, height: 7, borderRadius: '50%', display: 'inline-block', flexShrink: 0, cursor: 'help' },
-      dotHealthy: { background: 'var(--dsw-alias-state-success-primary, #22c55e)' },
-      dotDegraded: { background: 'var(--dsw-alias-state-warn-primary, #f59e0b)' },
-      dotUnhealthy: { background: 'var(--dsw-alias-state-error-primary, #ef4444)' },
-      dotUnknown: { background: 'var(--dsw-alias-bg-layer-4)', border: '0.5px solid var(--dsw-alias-border-l3)' },
+      dotHealthy: { background: 'var(--dsw-alias-state-success-primary)' },
+      dotDegraded: { background: 'var(--dsw-alias-state-warn-primary)' },
+      dotUnhealthy: { background: 'var(--dsw-alias-state-error-primary)' },
+      dotUnknown: { background: 'var(--dsw-alias-bg-layer-3)', border: '0.5px solid var(--dsw-alias-border-l3)' },
       modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--ds-font-family-code, monospace)' },
       nodeControls: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' },
       nodeTuning: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
@@ -1015,7 +972,7 @@ window.__ModuleLoader__.load({
       triggerCardChecked: { borderColor: 'var(--dsw-alias-brand-primary)', background: 'rgba(74,101,232,0.06)' },
       triggerChk: { width: 17, height: 17, accentColor: 'var(--dsw-alias-brand-primary)', marginTop: 2, cursor: 'pointer', flexShrink: 0 },
       triggerName: { fontSize: 13.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      triggerCode: { fontSize: 11, fontFamily: 'var(--ds-font-family-code, monospace)', color: 'var(--dsw-alias-label-tertiary)', background: 'var(--dsw-alias-bg-layer-4)', padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' },
+      triggerCode: { fontSize: 11, fontFamily: 'var(--ds-font-family-code, monospace)', color: 'var(--dsw-alias-label-tertiary)', background: 'var(--dsw-alias-bg-layer-3)', padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' },
       triggerDesc: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginTop: 4, lineHeight: 1.45 },
       safetyBox: { marginTop: 16, padding: '14px 18px', borderRadius: 'var(--dsw-radius-md, 10px)', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.5 },
       budgetGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 },
@@ -1027,7 +984,7 @@ window.__ModuleLoader__.load({
       introBox: { background: 'rgba(74,101,232,0.08)', border: '0.5px solid rgba(74,101,232,0.25)', borderRadius: 'var(--dsw-radius-lg, 16px)', padding: '16px 20px', marginBottom: 20, display: 'flex', alignItems: 'flex-start', gap: 14 },
       introTitle: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', margin: '0 0 4px' },
       introDesc: { fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', margin: 0, lineHeight: 1.5 },
-      problemsBox: { background: 'var(--dsw-alias-state-error-bg)', border: '0.5px solid var(--dsw-alias-state-error)', borderRadius: 'var(--dsw-radius-md, 12px)', padding: '10px 14px', marginBottom: 16, fontSize: 12.5, color: 'var(--dsw-alias-label-primary)', lineHeight: 1.6 },
+      problemsBox: { background: 'rgba(239, 68, 68, 0.12)', border: '0.5px solid var(--dsw-alias-state-error-primary)', borderRadius: 'var(--dsw-radius-md, 12px)', padding: '10px 14px', marginBottom: 16, fontSize: 12.5, color: 'var(--dsw-alias-label-primary)', lineHeight: 1.6 },
       discardBtn: { background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-secondary)', padding: '6px 14px', borderRadius: 'var(--dsw-radius-md, 12px)', fontSize: 13, cursor: 'pointer', marginBottom: 16 },
       formGroup: { display: 'flex', flexDirection: 'column', gap: 8 },
       formLabel: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
@@ -1035,7 +992,7 @@ window.__ModuleLoader__.load({
       formInput: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-sm, 8px)', color: 'var(--dsw-alias-label-primary)', padding: '8px 12px', fontSize: 13, height: 36, outline: 'none', fontFamily: 'inherit' },
       catalogGroupTitle: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-tertiary)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '14px 0 6px' },
       catalogRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px', borderRadius: 'var(--dsw-radius-sm, 6px)', cursor: 'pointer', fontSize: 13, color: 'var(--dsw-alias-label-primary)', transition: 'background 0.12s ease' },
-      countBadge: { fontSize: 11, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-4)', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' },
+      countBadge: { fontSize: 11, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap' },
       reasoningBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-tertiary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, whiteSpace: 'nowrap' },
       needsBtn: { boxSizing: 'border-box', background: 'transparent', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', padding: '3px 10px', borderRadius: 'var(--dsw-radius-xs, 6px)', fontSize: 11.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', flexShrink: 0 },
       needsPanel: { borderTop: '0.5px solid var(--dsw-alias-border-l2)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -1044,8 +1001,8 @@ window.__ModuleLoader__.load({
       needHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
       needHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.4 },
       needInput: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 4, color: 'var(--dsw-alias-label-primary)', padding: '3px 8px', fontSize: 12, height: 26, outline: 'none', width: 120 },
-      drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: 250 },
-      drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, maxWidth: '92vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 36px rgba(0,0,0,0.5)', zIndex: 251, display: 'flex', flexDirection: 'column' },
+      drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: 1100 },
+      drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, maxWidth: '92vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 36px rgba(0,0,0,0.5)', zIndex: 1101, display: 'flex', flexDirection: 'column' },
       drawerHeader: { padding: '18px 24px', borderBottom: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
       drawerBody: { padding: '16px 24px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 },
       drawerHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', margin: 0 },
@@ -1099,40 +1056,13 @@ window.__ModuleLoader__.load({
       },
       sidebarLabel: { fontSize: 13.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
       sidebarCountBadge: { fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
-      railDirtyDot: { position: 'absolute', top: 5, right: 5, width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', boxShadow: '0 0 4px #f59e0b' },
+      railDirtyDot: { position: 'absolute', top: 5, right: 5, width: 7, height: 7, borderRadius: '50%', background: 'var(--dsw-alias-state-warn-primary)', boxShadow: '0 0 4px rgba(245, 158, 11, 0.8)' },
 
       // Modal window styles
-      modalOverlay: {
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'rgba(0, 0, 0, 0.65)',
-        backdropFilter: 'blur(6px)',
-        zIndex: 1000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 24,
-      },
-      modalDialog: {
-        width: 1000,
-        maxWidth: '96vw',
-        height: '88vh',
-        maxHeight: 960,
-        background: 'var(--dsw-alias-bg-layer-1, #18181c)',
-        borderRadius: 'var(--dsw-radius-lg, 16px)',
-        border: '0.5px solid var(--dsw-alias-border-l3)',
-        boxShadow: '0 24px 64px rgba(0, 0, 0, 0.55)',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      },
       modalTopBar: {
         padding: '12px 20px',
         borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
-        background: 'var(--dsw-alias-bg-layer-0, rgba(20,20,24,0.6))',
+        background: 'var(--dsw-alias-bg-layer-2)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -1349,6 +1279,18 @@ window.__ModuleLoader__.load({
       return hh + ':' + mm + ':' + ss
     }
 
+    /**
+     * One tone→style map, so the health dots, the compact pill and the timeline
+     * bars cannot drift apart. `unknown` is the only tone carrying a border: it
+     * means "nothing observed yet", not a status.
+     */
+    function healthToneStyle(tone) {
+      if (tone === 'healthy') return S.dotHealthy
+      if (tone === 'degraded') return S.dotDegraded
+      if (tone === 'unhealthy') return S.dotUnhealthy
+      return S.dotUnknown
+    }
+
     /** Client-side mirror of the host's structural checks, for a blocked save. */
     function validate(draft) {
       var problems = []
@@ -1370,6 +1312,12 @@ window.__ModuleLoader__.load({
         })
         if (!(profile.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: { id: profile.id } })
         if (!(profile.stickyTurns >= 0)) problems.push({ key: 'problemBadSticky', vars: { id: profile.id } })
+        // 空链已经报了 problemEmptyChain，别再叠加一条权重提示；默认兜底池没有
+        // "空链" 这一说，所以它那边不设长度闸（与 host 的抛出点一致）。
+        if (profile.strategy === 'weight' && profile.candidates.length > 0
+          && profile.candidates.every(function (c) { return !(c.weight > 0) })) {
+          problems.push({ key: 'problemProfileWeightNoPositive', vars: { id: profile.id } })
+        }
       })
       if (!(draft.default.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadDefaultTotal', vars: {} })
       if (!(draft.default.stickyTurns >= 0)) problems.push({ key: 'problemBadDefaultSticky', vars: {} })
@@ -1509,7 +1457,6 @@ window.__ModuleLoader__.load({
             discover: ui.discover,
             checking: ui.checking,
           },
-          catalog: ui.catalog,
         }
       }
       var store = createSnapshotStore(project())
@@ -1637,7 +1584,8 @@ window.__ModuleLoader__.load({
         })
       }
 
-      /** Ask one route whether its endpoint answers and advertises this model. */      function checkRoute(provider, model) {
+      /** Ask one route whether its endpoint answers and advertises this model. */
+      function checkRoute(provider, model) {
         return loadDiscoverFacts().then(function (facts) {
           if (facts === null) return { kind: 'unavailable', reason: 'discoveryUnavailable' }
           var fact = facts[provider]
@@ -1657,8 +1605,14 @@ window.__ModuleLoader__.load({
       }
 
       scope.subscribe(function () {
-        host = seed()
-        draft = seed()
+        // mirror 的每次发布都会走到这里：保存被拒后的恢复读、连接重置、用户在
+        // 别的设置页保存，都会重发整个文档。本 namespace 的值没变就什么都不做——
+        // 把用户未保存的草稿冲掉，比晚一步反映宿主变化糟得多。裁定与代价见
+        // .agents/notes/implemented/2026-10-15-ui-refactor-hardening.md。
+        var next = seed()
+        if (deepEqual(next, host)) return
+        host = next
+        draft = next
         failed = false
         // 配置变了，provider 目录也可能变了：旧的端点映射不能再拿去问。
         discoverFacts = null
@@ -1671,6 +1625,18 @@ window.__ModuleLoader__.load({
       function activeProfile() {
         if (ui.activeId === '__default__') return null
         return draft.profiles.find(function (profile) { return profile.id === ui.activeId }) ?? draft.profiles[0] ?? null
+      }
+      /**
+       * The candidate list an edit addresses: the default pool, or one
+       * profile's chain. An id that matches nothing throws rather than
+       * silently editing a phantom list — every caller passes an id the UI
+       * has just rendered.
+       */
+      function listOf(profileId, isDefault) {
+        if (isDefault) return draft.default.candidates
+        var profile = draft.profiles.find(function (p) { return p.id === profileId })
+        if (profile === undefined) throw new Error('model-router: no profile "' + profileId + '" in the draft')
+        return profile.candidates
       }
       /**
        * Re-establish the active tab while it is still auto-managed: the first
@@ -1698,6 +1664,8 @@ window.__ModuleLoader__.load({
           saving = true
           failed = false
           publish()
+          // mutate 拒绝（wire 抛错、恢复读失败）时必须自己收尾：saving 卡在 true
+          // 会让保存按钮永久转圈，且用户看不到任何失败原因。
           scope.mutate([
             { op: 'set', path: ['enabled'], value: draft.enabled },
             { op: 'set', path: ['profiles'], value: draft.profiles },
@@ -1706,6 +1674,10 @@ window.__ModuleLoader__.load({
           ], scope.getSnapshot().revision).then(function (accepted) {
             saving = false
             failed = !accepted
+            publish()
+          }, function () {
+            saving = false
+            failed = true
             publish()
           })
         },
@@ -1739,7 +1711,7 @@ window.__ModuleLoader__.load({
           publish()
         },
         addCandidates: function (profileId, entries, isDefault) {
-          var list = isDefault ? draft.default.candidates : (draft.profiles.find(function (p) { return p.id === profileId }) ?? {}).candidates
+          var list = listOf(profileId, isDefault)
           entries.forEach(function (entry) {
             list.push({ provider: entry.provider, model: entry.model, maxAttempts: 1 })
           })
@@ -1747,14 +1719,15 @@ window.__ModuleLoader__.load({
           publish()
         },
         removeCandidate: function (profileId, index, isDefault) {
-          if (index <= 0) return
-          var list = isDefault ? draft.default.candidates : draft.profiles.find(function (p) { return p.id === profileId }).candidates
-          list.splice(index, 1)
+          // 只有 profile 的第一个候选是钉死的 when 模型；默认兜底池没有 primary，
+          // 它的第一个候选和别的候选一样可增删、可换序。
+          if (index <= 0 && !isDefault) return
+          listOf(profileId, isDefault).splice(index, 1)
           publish()
         },
         moveCandidate: function (profileId, index, direction, isDefault) {
-          if (index <= 0) return
-          var list = isDefault ? draft.default.candidates : draft.profiles.find(function (p) { return p.id === profileId }).candidates
+          if (index <= 0 && !isDefault) return
+          var list = listOf(profileId, isDefault)
           var target = index + direction
           if (target < 1 || target >= list.length) return
           var swapped = list[target]
@@ -1763,16 +1736,14 @@ window.__ModuleLoader__.load({
           publish()
         },
         setMaxAttempts: function (profileId, index, value, isDefault) {
-          var list = isDefault ? draft.default.candidates : draft.profiles.find(function (p) { return p.id === profileId }).candidates
-          var candidate = list[index]
+          var candidate = listOf(profileId, isDefault)[index]
           var parsed = Number(value)
           candidate.maxAttempts = Number.isFinite(parsed) ? Math.min(5, Math.max(1, Math.round(parsed))) : 1
           publish()
         },
         /** Patch one candidate's `needs`; an empty patch clears the field. */
         setNeeds: function (profileId, index, patch, isDefault) {
-          var list = isDefault ? draft.default.candidates : draft.profiles.find(function (p) { return p.id === profileId }).candidates
-          var candidate = list[index]
+          var candidate = listOf(profileId, isDefault)[index]
           var next = Object.assign({}, candidate.needs ?? {})
           // images 三态：require/forbid 各设一极，any 删掉这个字段。
           if (patch.imagesMode !== undefined) {
@@ -1806,19 +1777,24 @@ window.__ModuleLoader__.load({
           target[key] = !target[key]
           publish()
         },
-        setStrategy: function (value) {
-          // 策略只管起点，所以名单本身不动——只改"从哪条开始"。
-          if (draft.default.enabled && activeProfile() === null) draft.default.strategy = value
-          else {
+        setStrategy: function (profileId, value, isDefault) {
+          if (arguments.length === 1) {
             var profile = activeProfile()
-            if (profile !== null) profile.strategy = value
+            if (profile === null) draft.default.strategy = profileId
+            else profile.strategy = profileId
+          } else {
+            if (isDefault) draft.default.strategy = value
+            else {
+              var target = draft.profiles.find(function (p) { return p.id === profileId })
+              if (target !== undefined) target.strategy = value
+            }
           }
           publish()
         },
-        setWeight: function (index, value, isDefault) {
+        setWeight: function (profileId, index, value, isDefault) {
           var parsed = Number(value)
           var clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 0
-          var list = isDefault ? draft.default.candidates : activeProfile().candidates
+          var list = listOf(profileId, isDefault)
           if (list[index] !== undefined) list[index].weight = clamped
           publish()
         },
@@ -1883,7 +1859,7 @@ window.__ModuleLoader__.load({
           draft.profiles.forEach(function (profile) {
             profile.candidates.forEach(collect)
           })
-          ;(draft.default.candidates || []).forEach(collect)
+          draft.default.candidates.forEach(collect)
           var keys = Object.keys(routes)
           Promise.all(keys.map(function (key) {
             var route = routes[key]
@@ -1961,6 +1937,9 @@ window.__ModuleLoader__.load({
     var ICON_SPINNER = 'M8 1.5a6.5 6.5 0 1 0 6.5 6.5A.75.75 0 0 0 13 8a5 5 0 1 1-5-5 .75.75 0 0 0 0-1.5z'
     var ICON_BOLT = 'M8.5 1.5 3 9h4.5L6.5 14.5 13 7H8.5z'
     var ICON_GEAR = 'M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311a1.464 1.464 0 0 1-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.86z'
+    var ICON_ROUTE = 'M13.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM11 2.5a2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 0 5 2.5 2.5 0 0 1-2.004-1H8.5a2.5 2.5 0 0 0-2.5 2.5v4.004a2.5 2.5 0 1 1-1 0V6.5A3.5 3.5 0 0 1 8.5 3h2.496A2.5 2.5 0 0 1 11 2.5zM2.5 12a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm1-1.004A2.5 2.5 0 1 1 5 13.5a2.5 2.5 0 0 1-1.5-2.504z'
+    var ICON_SHIELD = 'M5.072.56C6.157.265 7.31 0 8 0s1.843.265 2.928.56c1.11.3 2.229.655 2.887.87a1.54 1.54 0 0 1 1.044 1.262c.596 4.477-.787 7.795-2.465 9.99a11.775 11.775 0 0 1-2.517 2.453 7.159 7.159 0 0 1-1.048.625c-.28.132-.581.24-.829.24s-.548-.108-.829-.24a7.158 7.158 0 0 1-1.048-.625 11.777 11.777 0 0 1-2.517-2.453C1.928 10.487.545 7.169 1.141 2.692A1.54 1.54 0 0 1 2.185 1.43 62.456 62.456 0 0 1 5.072.56z'
+    var ICON_CHART = 'M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-4zm5-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7zm5-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V2z'
 
     /** The catalog's reasoning efforts for one route, for the node badge. */
     function reasoningLabelOf(catalog, provider, model) {
@@ -1983,10 +1962,7 @@ window.__ModuleLoader__.load({
     function HealthDot(props) {
       var t = props.t
       var tone = props.tone
-      var style = tone === 'healthy' ? S.dotHealthy
-        : tone === 'degraded' ? S.dotDegraded
-          : tone === 'unhealthy' ? S.dotUnhealthy
-            : S.dotUnknown
+      var style = healthToneStyle(tone)
       return h('span', { style: Object.assign({}, S.healthDot, style), title: props.title ?? '' })
     }
 
@@ -2064,19 +2040,17 @@ window.__ModuleLoader__.load({
           return h('div', {
             key: 'bar-' + idx,
             className: 'dsh-timeline-pill',
-            style: Object.assign({}, S.timelinePill, { background: 'var(--dsw-alias-bg-layer-4, rgba(255, 255, 255, 0.08))' }),
+            style: Object.assign({}, S.timelinePill, { background: healthToneStyle('unknown').background }),
             title: t('healthBarIdle'),
           })
         }
         // DSH's own state tokens, so the bars follow the active theme instead
         // of hard-coded hex that only looks right on one of them.
-        var barBg = 'var(--dsw-alias-state-success-primary, #22c55e)'
+        var barBg = healthToneStyle(item.status).background
         var statusLabel = t('healthStatusHealthy')
         if (item.status === 'degraded') {
-          barBg = 'var(--dsw-alias-state-warn-primary, #f59e0b)'
           statusLabel = t('healthStatusDegraded')
         } else if (item.status === 'unhealthy') {
-          barBg = 'var(--dsw-alias-state-error-primary, #ef4444)'
           statusLabel = t('healthStatusUnhealthy')
         }
         var tip = '[' + formatTime(item.time) + '] ' + statusLabel
@@ -2111,16 +2085,12 @@ window.__ModuleLoader__.load({
       var t = props.t
       var record = props.record
       var status = record ? record.status : 'unknown'
-      var dotColor = 'var(--dsw-alias-border-l4, #888)'
       var statusText = t('compactHealthIdle')
       if (status === 'healthy') {
-        dotColor = 'var(--dsw-alias-state-success-primary, #22c55e)'
         statusText = t('compactHealthHealthy')
       } else if (status === 'degraded') {
-        dotColor = 'var(--dsw-alias-state-warn-primary, #f59e0b)'
         statusText = t('compactHealthDegraded')
       } else if (status === 'unhealthy') {
-        dotColor = 'var(--dsw-alias-state-error-primary, #ef4444)'
         statusText = t('compactHealthUnhealthy')
       }
       var latency = record && typeof record.latencyMs === 'number' ? formatLatency(record.latencyMs) : null
@@ -2136,7 +2106,7 @@ window.__ModuleLoader__.load({
         title: t('compactHealthTooltip') + ': ' + label,
         onClick: props.onClick,
       },
-        h('span', { style: Object.assign({}, S.compactHealthDot, { background: dotColor }) }),
+        h('span', { style: Object.assign({}, S.compactHealthDot, healthToneStyle(status)) }),
         h('span', { style: S.compactHealthText }, label))
     }
 
@@ -2243,14 +2213,14 @@ window.__ModuleLoader__.load({
                   h('button', {
                     type: 'button',
                     className: 'dsh-router-icon-btn',
-                    style: Object.assign({}, S.iconBtn, index <= 0 ? S.iconBtnDisabled : null),
-                    disabled: index <= 0 || props.disabled,
+                    style: Object.assign({}, S.iconBtn, index <= 0 && !props.isDefault ? S.iconBtnDisabled : null),
+                    disabled: (index <= 0 && !props.isDefault) || props.disabled,
                     title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
                     onClick: function () { props.onRemove(index) },
                   }, h(Icon, { d: ICON_CLOSE })))))),
           expanded ? h('div', { style: S.needsPanel },
             h('div', { style: S.needsGrid },
-              h('div', { style: S.needCard },
+              h('div', { style: S.needCard, id: 'images-' + imagesMode + '-panel-' + index, role: 'tabpanel', 'aria-labelledby': 'images-' + imagesMode + '-' + index },
                 h('div', { style: S.needHeader },
                   h('span', null, t('needImagesTitle')),
                   h(SegmentedTabs, {
@@ -2291,10 +2261,17 @@ window.__ModuleLoader__.load({
       var t = props.t
       var ui = props.state.ui
       var rows = ui.drawerRows
+      var panelRef = React.useRef(null)
+      // 抽屉是自建的 body-portal 层。接入官方的 modal 层栈：Escape 先关它而不是
+      // 关它下面的快捷控制中心，焦点也圈在抽屉里；z-index 抬到 Modal 之上，
+      // 从控制中心里打开时才真的看得见。
+      useModalLayer(panelRef, ui.drawerOpen, props.onClose)
       var body = []
       if (ui.drawerLoading) body.push(h('p', { key: 'loading', style: S.drawerHint }, t('failoverHistoryLoading')))
-      else if (ui.drawerError) body.push(h('button', { key: 'retry', type: 'button', style: S.manualBtn, onClick: props.onReload }, t('failoverHistoryRetry')))
-      else if (rows.length === 0) body.push(h('p', { key: 'empty', style: S.drawerHint }, t('failoverHistoryEmpty')))
+      else if (ui.drawerError) {
+        body.push(h('p', { key: 'error', style: S.drawerHint }, t('failoverHistoryError')))
+        body.push(h('button', { key: 'retry', type: 'button', style: S.manualBtn, onClick: props.onReload }, t('failoverHistoryRetry')))
+      } else if (rows.length === 0) body.push(h('p', { key: 'empty', style: S.drawerHint }, t('failoverHistoryEmpty')))
       else {
         rows.forEach(function (row, rowIndex) {
           if (rowIndex > 0) body.push(h('div', { key: 'sep' + rowIndex, style: { height: 1, background: 'var(--dsw-alias-border-l2)', margin: '12px 0' } }))
@@ -2303,15 +2280,20 @@ window.__ModuleLoader__.load({
             body.push(h('div', { key: 'e' + rowIndex + '_' + index, style: S.drawerEntry },
               h('div', { style: S.drawerEntryTime }, new Date(entry.time).toLocaleString()),
               h('div', { style: S.drawerEntryText },
-                '主模型 ' + entry.from + ' 失败（' + codeLabel(t, entry.code) + '），切换至 ' + entry.to,
-                h('span', { style: Object.assign({}, S.failoverTag, entry.settled ? null : { color: 'var(--dsw-alias-state-warn)' }) },
+                fill(t('failoverEntryLine'), { from: entry.from, code: codeLabel(t, entry.code), to: entry.to }),
+                h('span', { style: Object.assign({}, S.failoverTag, entry.settled ? null : { color: 'var(--dsw-alias-state-warn-primary)' }) },
                   entry.settled ? t('failoverEntrySettled') : t('failoverEntryUnsettled')))))
           })
         })
       }
       return ReactDOM.createPortal(
-        h('div', { style: S.drawerOverlay },
-          h('div', { style: S.drawerPanel, role: 'dialog', 'aria-label': t('failoverHistoryDrawerTitle') },
+        h('div', {
+          style: S.drawerOverlay,
+          onClick: function (e) {
+            if (e.target === e.currentTarget) props.onClose()
+          },
+        },
+          h('div', { ref: panelRef, style: S.drawerPanel, role: 'dialog', 'aria-modal': true, 'aria-label': t('failoverHistoryDrawerTitle') },
             h('div', { style: S.drawerHeader },
               h('h3', { style: { fontSize: 15, fontWeight: 600, margin: 0 } }, t('failoverHistoryDrawerTitle')),
               h('button', { type: 'button', style: S.iconBtn, 'aria-label': t('close'), onClick: props.onClose }, h(Icon, { d: ICON_CLOSE }))),
@@ -2376,7 +2358,12 @@ window.__ModuleLoader__.load({
             onChange: function (value) { if (props.onStrategy) props.onStrategy(value) },
           }),
           h('span', { style: S.strategyHintTag }, t('strategyHint' + strategy))),
-        nodes)
+        // 三个策略共用同一个面板：id 跟着选中项走，aria-controls 才指向真实节点。
+        h('div', {
+          id: 'strategy-panel-' + strategy,
+          role: 'tabpanel',
+          'aria-labelledby': 'strategy-' + strategy,
+        }, nodes))
     }
 
     /** The six switchOn cards. */
@@ -2454,6 +2441,44 @@ window.__ModuleLoader__.load({
           h(Tag, { tone: 'neutral' }, t('backoffBadge'))))
     }
 
+    /**
+     * The diagnostic tool buttons, shared by the page header, the quick modal's
+     * top bar and the telemetry card. Each surface names the actions in its own
+     * words, so the labels are props; the wiring and the busy state are not.
+     * Omit `onOpenDrawer` for surfaces without the history drawer.
+     */
+    function HeaderTools(props) {
+      var t = props.t
+      var busy = props.busy === true
+      var checkTitle = props.checkTitle ? t(props.checkTitle) : (props.checkLabel === 'telemetryCheckBtn' ? t('telemetryCheckBtn') : t('checkAllBtn'))
+      var healthTitle = props.healthTitle ? t(props.healthTitle) : (props.healthLabel === 'telemetryBreakerBtn' ? t('telemetryBreakerBtn') : t('healthConfigBtn'))
+      var historyTitle = props.historyTitle ? t(props.historyTitle) : t('failoverHistoryButton')
+      return h('div', { style: S.headerTools },
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-tool-btn',
+          style: Object.assign({}, S.toolBtn, busy ? { opacity: 0.6, cursor: 'wait' } : null),
+          disabled: props.disabled || busy,
+          title: checkTitle,
+          onClick: props.onCheckAll,
+        }, h(Icon, { d: busy ? ICON_SPINNER : ICON_BOLT, size: 13, spin: busy }), busy ? t('checkingText') : t(props.checkLabel)),
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-tool-btn',
+          style: S.toolBtn,
+          disabled: props.disabled,
+          title: healthTitle,
+          onClick: props.onOpenHealthModal,
+        }, h(Icon, { d: ICON_GEAR, size: 13 }), t(props.healthLabel)),
+        props.onOpenDrawer === undefined ? null : h('button', {
+          type: 'button',
+          className: 'dsh-router-tool-btn',
+          style: S.toolBtn,
+          title: historyTitle,
+          onClick: props.onOpenDrawer,
+        }, h(Icon, { d: ICON_CLOCK, size: 13 }), t(props.historyLabel)))
+    }
+
     /** The telemetry and health monitoring dashboard for candidates in a chain. */
     function TelemetryView(props) {
       var t = props.t
@@ -2466,21 +2491,14 @@ window.__ModuleLoader__.load({
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
             h('h3', { style: S.sectionTitle }, t('telemetryTitle')),
             h('p', { style: S.sectionSubtitle }, t('telemetrySubtitle'))),
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
-            h('button', {
-              type: 'button',
-              className: 'dsh-router-tool-btn',
-              style: S.toolBtn,
-              disabled: props.disabled,
-              onClick: props.onCheckAll,
-            }, h(Icon, { d: ICON_BOLT, size: 14 }), t('telemetryCheckBtn')),
-            h('button', {
-              type: 'button',
-              className: 'dsh-router-tool-btn',
-              style: S.toolBtn,
-              disabled: props.disabled,
-              onClick: props.onOpenHealthModal,
-            }, h(Icon, { d: ICON_GEAR, size: 14 }), t('telemetryBreakerBtn')))),
+          h(HeaderTools, {
+            t: t,
+            disabled: props.disabled,
+            checkLabel: 'telemetryCheckBtn',
+            healthLabel: 'telemetryBreakerBtn',
+            onCheckAll: props.onCheckAll,
+            onOpenHealthModal: props.onOpenHealthModal,
+          })),
 
         candidates.length === 0
           ? h('div', {
@@ -2511,12 +2529,17 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One profile's view: 3 sub-tabs (pipeline, policies, telemetry).
+     * One chain's view: 3 sub-tabs (pipeline, policies, telemetry). A profile
+     * and the default fallback pool differ only in the panel-id scope, the
+     * delete button, the vision guide, and the pool's intro/switch above the
+     * tabs — so both render through this one component.
      * Decision note: .agents/notes/implemented/2026-10-15-ui-layout-and-ia-redesign.md
      */
-    function ProfileView(props) {
+    function ChainView(props) {
       var t = props.t
-      var profile = props.profile
+      var chain = props.chain
+      var isDefault = props.isDefault
+      var chainId = isDefault ? null : chain.id
       var subTabState = React.useState('pipeline')
       var subTab = subTabState[0]
       var setSubTab = subTabState[1]
@@ -2525,172 +2548,112 @@ window.__ModuleLoader__.load({
       var guideOpen = guideOpenState[0]
       var setGuideOpen = guideOpenState[1]
 
-      return h('div', null,
-        // Sub-Navigation Tabs Bar
-        h('div', { className: 'dsh-router-subnav-bar', style: S.subNavBar },
-          h(SegmentedTabs, {
-            items: [
-              { value: 'pipeline', label: h('span', { style: S.subTabLabel }, '🔄 ' + t('subTabPipeline')), id: 'subtab-pipeline-' + profile.id, panelId: 'subpanel-pipeline-' + profile.id },
-              { value: 'policies', label: h('span', { style: S.subTabLabel }, '⚡ ' + t('subTabPolicies')), id: 'subtab-policies-' + profile.id, panelId: 'subpanel-policies-' + profile.id },
-              { value: 'telemetry', label: h('span', { style: S.subTabLabel }, '📊 ' + t('subTabTelemetry')), id: 'subtab-telemetry-' + profile.id, panelId: 'subpanel-telemetry-' + profile.id },
-            ],
-            value: subTab,
-            onChange: function (val) { setSubTab(val) },
-            label: t('profilesTitle'),
-          }),
-          h('button', {
-            type: 'button',
-            className: 'dsh-router-danger-btn',
-            style: S.dangerBtn,
-            onClick: function () { props.onDeleteProfile(profile.id) },
-          }, h(Icon, { d: ICON_CLOSE, size: 12 }), t('deleteProfileBtn'))),
-
-        subTab === 'pipeline' ? h('section', { style: S.card },
-          h('div', { style: S.sectionHeader },
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-              h('h2', { style: S.sectionTitle }, t('pipelineTitle')),
-              h('p', { style: S.sectionSubtitle }, t('pipelineSubtitle')))),
-          h(PipelineEditor, {
-            t: t,
-            candidates: profile.candidates,
-            strategy: profile.strategy,
-            onStrategy: function (value) { props.onStrategy(value) },
-            disabled: props.disabled,
-            catalog: props.catalog,
-            passive: props.passive,
-            discover: props.discover,
-            showPassive: props.showPassive,
-            showDiscover: props.showDiscover,
-            onGoTelemetry: function () { setSubTab('telemetry') },
-            onMaxAttempts: function (index, value) { props.onMaxAttempts(profile.id, index, value, false) },
-            onMove: function (index, direction) { props.onMove(profile.id, index, direction, false) },
-            onRemove: function (index) { props.onRemove(profile.id, index, false) },
-            onNeeds: function (index, patch) { props.onNeeds(profile.id, index, patch, false) },
-            onWeight: function (index, value) { props.onWeight(index, value, false) },
-          }),
-          h('div', { style: S.guideBox },
-            h('div', {
-              className: 'dsh-router-guide-header',
-              style: S.guideHeader,
-              onClick: function () { setGuideOpen(!guideOpen) },
-            },
-              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                h(Icon, { d: ICON_WARN, size: 16 }),
-                h('strong', null, t('visionWorkflowTitle'))),
-              h('button', { type: 'button', style: S.guideToggleBtn }, guideOpen ? t('visionGuideCollapse') : t('visionGuideExpand'))),
-            guideOpen ? h('p', { style: S.guideContent }, t('visionWorkflowText')) : null),
-          h('div', { style: S.addBar },
-            h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(profile.id, false) } }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addFromCatalog')),
-            h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(profile.id, false) } }, t('addManual')))) : null,
-
-        subTab === 'policies' ? h('div', null,
-          h('section', { style: S.card },
-            h('div', { style: S.sectionHeader },
-              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-                h('h2', { style: S.sectionTitle }, t('switchOnTitle')),
-                h('p', { style: S.sectionSubtitle }, t('switchOnSubtitle')))),
-            h(SwitchOnGrid, {
-              t: t,
-              value: profile.switchOn,
-              disabled: props.disabled,
-              onToggle: function (key) { props.onToggleSwitchOn(profile.id, key, false) },
-            })),
-          h('section', { style: S.card },
-            h('div', { style: S.sectionHeader },
-              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-                h('h2', { style: S.sectionTitle }, t('budgetTitle')),
-                h('p', { style: S.sectionSubtitle }, t('budgetSubtitle')))),
-            h(BudgetRow, {
-              t: t,
-              maxTotalAttempts: profile.maxTotalAttempts,
-              stickyTurns: profile.stickyTurns,
-              disabled: props.disabled,
-              onMaxTotal: function (value) { props.onMaxTotal(profile.id, value, false) },
-              onStickyTurns: function (value) { props.onStickyTurns(profile.id, value, false) },
-            }))) : null,
-
-        subTab === 'telemetry' ? h('section', { style: S.card },
-          h(TelemetryView, {
-            t: t,
-            candidates: profile.candidates,
-            passive: props.passive,
-            discover: props.discover,
-            showPassive: props.showPassive,
-            showDiscover: props.showDiscover,
-            disabled: props.disabled,
-            onCheckAll: props.onCheckAll,
-            onOpenHealthModal: props.onOpenHealthModal,
-          })) : null)
-    }
-
-    /** The default fallback pool's view with 3 sub-tabs. */
-    function DefaultView(props) {
-      var t = props.t
-      var pool = props.pool
-      var subTabState = React.useState('pipeline')
-      var subTab = subTabState[0]
-      var setSubTab = subTabState[1]
+      // 面板 id 的作用域：profile 按 id 区分，默认池全局唯一。
+      var tabId = function (name) { return isDefault ? 'default-subtab-' + name : 'subtab-' + name + '-' + chainId }
+      var panelId = function (name) { return isDefault ? 'default-subpanel-' + name : 'subpanel-' + name + '-' + chainId }
+      var subTabIcon = function (name) {
+        if (name === 'pipeline') return ICON_ROUTE
+        if (name === 'policies') return ICON_SHIELD
+        return ICON_CHART
+      }
+      var subTabs = ['pipeline', 'policies', 'telemetry'].map(function (name) {
+        return {
+          value: name,
+          label: h('span', { style: S.subTabLabel },
+            h(Icon, { d: subTabIcon(name), size: 12 }),
+            t('subTab' + name[0].toUpperCase() + name.slice(1))),
+          id: tabId(name),
+          panelId: panelId(name),
+        }
+      })
 
       return h('div', null,
-        h('div', { style: S.introBox },
+        isDefault ? h('div', { style: S.introBox },
           h(Icon, { d: ICON_WARN, size: 20 }),
           h('div', null,
             h('h3', { style: S.introTitle }, t('defaultProfileIntroTitle')),
-            h('p', { style: S.introDesc }, t('defaultProfileIntroDesc')))),
-        h('section', { style: S.card },
+            h('p', { style: S.introDesc }, t('defaultProfileIntroDesc')))) : null,
+        isDefault ? h('section', { style: S.card },
           h('div', { style: S.sectionHeader },
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
               h('h2', { style: S.sectionTitle }, t('defaultProfileSwitchLabel')),
               h('p', { style: S.sectionSubtitle }, t('defaultProfileSwitchDesc')))),
           h(Switch, {
-            checked: pool.enabled,
+            checked: chain.enabled,
             label: t('defaultProfileSwitchLabel'),
             disabled: props.disabled,
             onChange: function (next) { props.onDefaultEnabled(next) },
-          })),
-
-        pool.enabled ? h('div', null,
+          })) : null,
+        // 默认兜底池关闭时只显示说明与开关，不露一条空链路编辑区。
+        !isDefault || chain.enabled ? h('div', null,
           h('div', { className: 'dsh-router-subnav-bar', style: S.subNavBar },
             h(SegmentedTabs, {
-              items: [
-                { value: 'pipeline', label: h('span', { style: S.subTabLabel }, '🔄 ' + t('subTabPipeline')), id: 'default-subtab-pipeline', panelId: 'default-subpanel-pipeline' },
-                { value: 'policies', label: h('span', { style: S.subTabLabel }, '⚡ ' + t('subTabPolicies')), id: 'default-subtab-policies', panelId: 'default-subpanel-policies' },
-                { value: 'telemetry', label: h('span', { style: S.subTabLabel }, '📊 ' + t('subTabTelemetry')), id: 'default-subtab-telemetry', panelId: 'default-subpanel-telemetry' },
-              ],
+              items: subTabs,
               value: subTab,
               onChange: function (val) { setSubTab(val) },
-              label: t('defaultPoolTitle'),
-            })),
+              label: t('subTabsLabel'),
+            }),
+            isDefault ? null : h('button', {
+              type: 'button',
+              className: 'dsh-router-danger-btn',
+              style: S.dangerBtn,
+              onClick: function () { props.onDeleteProfile(chainId) },
+            }, h(Icon, { d: ICON_CLOSE, size: 12 }), t('deleteProfileBtn'))),
 
-          subTab === 'pipeline' ? h('section', { style: S.card },
+          subTab === 'pipeline' ? h('section', {
+            id: panelId('pipeline'),
+            role: 'tabpanel',
+            'aria-labelledby': tabId('pipeline'),
+            style: S.card,
+          },
             h('div', { style: S.sectionHeader },
               h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-                h('h3', { style: Object.assign({}, S.sectionTitle, { fontSize: 13.5 }) }, t('defaultPoolTitle')),
-                h('p', { style: S.sectionSubtitle }, t('defaultPoolSubtitle')))),
+                h(isDefault ? 'h3' : 'h2', { style: Object.assign({}, S.sectionTitle, isDefault ? { fontSize: 13.5 } : null) },
+                  isDefault ? t('defaultPoolTitle') : t('pipelineTitle')),
+                h('p', { style: S.sectionSubtitle }, isDefault ? t('defaultPoolSubtitle') : t('pipelineSubtitle')))),
             h(PipelineEditor, {
               t: t,
-              candidates: pool.candidates,
-              strategy: pool.strategy,
-              isDefault: true,
+              candidates: chain.candidates,
+              strategy: chain.strategy,
+              isDefault: isDefault,
               disabled: props.disabled,
               catalog: props.catalog,
               passive: props.passive,
               discover: props.discover,
               showPassive: props.showPassive,
               showDiscover: props.showDiscover,
-              onStrategy: props.onStrategy,
+              onStrategy: function (val) { props.onStrategy(chainId, val, isDefault) },
               onGoTelemetry: function () { setSubTab('telemetry') },
-              onMaxAttempts: function (index, value) { props.onMaxAttempts(null, index, value, true) },
-              onMove: function (index, direction) { props.onMove(null, index, direction, true) },
-              onRemove: function (index) { props.onRemove(null, index, true) },
-              onNeeds: function (index, patch) { props.onNeeds(null, index, patch, true) },
-              onWeight: function (index, value) { props.onWeight(index, value, true) },
+              onMaxAttempts: function (index, value) { props.onMaxAttempts(chainId, index, value, isDefault) },
+              onMove: function (index, direction) { props.onMove(chainId, index, direction, isDefault) },
+              onRemove: function (index) { props.onRemove(chainId, index, isDefault) },
+              onNeeds: function (index, patch) { props.onNeeds(chainId, index, patch, isDefault) },
+              onWeight: function (index, value) { props.onWeight(chainId, index, value, isDefault) },
             }),
+            isDefault ? null : h('div', { style: S.guideBox },
+              h('div', { style: S.guideHeader },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                  h(Icon, { d: ICON_WARN, size: 16 }),
+                  h('strong', null, t('visionWorkflowTitle'))),
+                // 折叠开关只在这一个按钮上：整行 div 不可聚焦，onClick 挂在外头上
+                // 键盘用户永远展开不了指南。
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-guide-toggle',
+                  style: S.guideToggleBtn,
+                  'aria-expanded': guideOpen,
+                  onClick: function () { setGuideOpen(!guideOpen) },
+                }, guideOpen ? t('visionGuideCollapse') : t('visionGuideExpand'))),
+              guideOpen ? h('p', { style: S.guideContent }, t('visionWorkflowText')) : null),
             h('div', { style: S.addBar },
-              h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(null, true) } }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addFromCatalog')),
-              h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(null, true) } }, t('addManual')))) : null,
+              h('button', { type: 'button', className: 'dsh-router-catalog-btn', style: S.catalogBtn, disabled: props.disabled, onClick: function () { props.onOpenCatalog(chainId, isDefault) } }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addFromCatalog')),
+              h('button', { type: 'button', className: 'dsh-router-manual-btn', style: S.manualBtn, disabled: props.disabled, onClick: function () { props.onOpenManual(chainId, isDefault) } }, t('addManual')))) : null,
 
-          subTab === 'policies' ? h('div', null,
+          subTab === 'policies' ? h('div', {
+            id: panelId('policies'),
+            role: 'tabpanel',
+            'aria-labelledby': tabId('policies'),
+          },
             h('section', { style: S.card },
               h('div', { style: S.sectionHeader },
                 h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
@@ -2698,9 +2661,9 @@ window.__ModuleLoader__.load({
                   h('p', { style: S.sectionSubtitle }, t('switchOnSubtitle')))),
               h(SwitchOnGrid, {
                 t: t,
-                value: pool.switchOn,
+                value: chain.switchOn,
                 disabled: props.disabled,
-                onToggle: function (key) { props.onToggleSwitchOn(null, key, true) },
+                onToggle: function (key) { props.onToggleSwitchOn(chainId, key, isDefault) },
               })),
             h('section', { style: S.card },
               h('div', { style: S.sectionHeader },
@@ -2709,18 +2672,23 @@ window.__ModuleLoader__.load({
                   h('p', { style: S.sectionSubtitle }, t('budgetSubtitle')))),
               h(BudgetRow, {
                 t: t,
-                maxTotalAttempts: pool.maxTotalAttempts,
-                stickyTurns: pool.stickyTurns,
+                maxTotalAttempts: chain.maxTotalAttempts,
+                stickyTurns: chain.stickyTurns,
                 disabled: props.disabled,
-                onMaxTotal: function (value) { props.onMaxTotal(null, value, true) },
-                onStickyTurns: function (value) { props.onStickyTurns(null, value, true) },
+                onMaxTotal: function (value) { props.onMaxTotal(chainId, value, isDefault) },
+                onStickyTurns: function (value) { props.onStickyTurns(chainId, value, isDefault) },
               }))) : null,
 
-          subTab === 'telemetry' ? h('section', { style: S.card },
+          subTab === 'telemetry' ? h('section', {
+            id: panelId('telemetry'),
+            role: 'tabpanel',
+            'aria-labelledby': tabId('telemetry'),
+            style: S.card,
+          },
             h(TelemetryView, {
               t: t,
-              candidates: pool.candidates,
-              isDefault: true,
+              candidates: chain.candidates,
+              isDefault: isDefault,
               passive: props.passive,
               discover: props.discover,
               showPassive: props.showPassive,
@@ -2731,15 +2699,6 @@ window.__ModuleLoader__.load({
             })) : null) : null)
     }
 
-    /** Health Settings Modal dialog. */
-    /**
-     * Health settings: three independent tiers, each with its own switch.
-     *
-     * The plugin does not pick a winner between them. Runtime observation is
-     * free but only knows the past; a connectivity check sends no content and
-     * present; a real probe is the only thing that proves a model can answer,
-     * and it costs tokens — so the user decides which of those they want.
-     */
     /**
      * Health settings: the tiers the user can actually choose between.
      *
@@ -2761,6 +2720,10 @@ window.__ModuleLoader__.load({
       var [rules, setRules] = React.useState((breaker.rules || []).map(function (rule) {
         return { code: rule.code || '', message: rule.message || '', cooldownSeconds: rule.cooldownSeconds ?? 300 }
       }))
+      // 一条两个字段都空白的规则永远命中不了任何东西。这里不静默过滤——弹窗
+      // 替用户删掉规则，就会和页面级 validate() 对同一份数据说出两种结论；
+      // 禁掉确认、把问题摆在规则旁边，两边始终是同一条消息。
+      var hasEmptyRule = rules.some(function (rule) { return !rule.code && !rule.message })
 
       function patchRule(index, patch) {
         var next = rules.slice()
@@ -2782,6 +2745,7 @@ window.__ModuleLoader__.load({
           h(Button, { variant: 'outline', onClick: props.onClose }, t('cancel')),
           h(Button, {
             variant: 'primary',
+            disabled: hasEmptyRule,
             onClick: function () {
               // The probe tier is not offered, so whatever a previous save left
               // in it is preserved rather than overwritten with defaults.
@@ -2792,7 +2756,7 @@ window.__ModuleLoader__.load({
                 probe: current.probe,
                 breaker: {
                   enabled: breakerOn,
-                  rules: rules.filter(function (rule) { return rule.code || rule.message }),
+                  rules,
                 },
               })
               props.onClose()
@@ -2821,7 +2785,8 @@ window.__ModuleLoader__.load({
           h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
               h('span', { style: S.formLabel }, t('healthDiscoverLabel')),
-              h('span', { style: S.formHint }, t('healthDiscoverHint'))),            h(Switch, {
+              h('span', { style: S.formHint }, t('healthDiscoverHint'))),
+            h(Switch, {
               checked: discoverOn,
               label: t('healthDiscoverLabel'),
               onChange: function (next) { setDiscoverOn(next) },
@@ -2929,7 +2894,8 @@ window.__ModuleLoader__.load({
               type: 'button',
               style: Object.assign({}, S.manualBtn, { marginTop: 8 }),
               onClick: function () { setRules(rules.concat([{ code: '', message: '', cooldownSeconds: 300 }])) },
-            }, t('breakerAddRule'))) : null)
+            }, t('breakerAddRule')),
+            hasEmptyRule ? h('span', { style: S.formHint, role: 'alert' }, t('problemBreakerEmptyRule')) : null) : null)
       )
     }
 
@@ -3173,7 +3139,7 @@ window.__ModuleLoader__.load({
         activeProfile = draft.profiles.find(function (profile) { return profile.id === state.ui.activeId }) ?? draft.profiles[0] ?? null
       }
       var modal = state.ui.modal
-      var routableProviders = state.catalog?.routableProviders ?? []
+      var routableProviders = state.ui.catalog?.routableProviders ?? []
       var isModalView = Boolean(props.isModalView)
 
       // Shortcut: Ctrl+S / Cmd+S save
@@ -3203,30 +3169,17 @@ window.__ModuleLoader__.load({
                 state.dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null),
               h('p', { style: S.desc }, t('pluginDesc')))),
           h('div', { style: S.headerActions },
-            h('div', { style: S.headerTools },
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-tool-btn',
-                style: Object.assign({}, S.toolBtn, state.ui.checking ? { opacity: 0.6, cursor: 'wait' } : null),
-                disabled: disabled || state.ui.checking,
-                title: t('checkAllBtn'),
-                onClick: props.onCheckAll,
-              }, h(Icon, { d: state.ui.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state.ui.checking }), state.ui.checking ? t('checkingText') : t('toolCheckAll')),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-tool-btn',
-                style: S.toolBtn,
-                disabled: disabled,
-                title: t('healthConfigBtn'),
-                onClick: props.onOpenHealthModal,
-              }, h(Icon, { d: ICON_GEAR, size: 13 }), t('toolHealthConfig')),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-tool-btn',
-                style: S.toolBtn,
-                title: t('failoverHistoryButton'),
-                onClick: props.onOpenDrawer,
-              }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory'))),
+            h(HeaderTools, {
+              t: t,
+              disabled: disabled,
+              busy: state.ui.checking,
+              checkLabel: 'toolCheckAll',
+              healthLabel: 'toolHealthConfig',
+              historyLabel: 'toolHistory',
+              onCheckAll: props.onCheckAll,
+              onOpenHealthModal: props.onOpenHealthModal,
+              onOpenDrawer: props.onOpenDrawer,
+            }),
             h('div', { style: S.headerDivider }),
             h('div', { style: S.switchWrap },
               h('span', { style: S.switchLabel }, t('globalSwitchLabel')),
@@ -3255,7 +3208,7 @@ window.__ModuleLoader__.load({
             },
               state.saving ? h(Icon, { d: ICON_SPINNER, size: 14, spin: true }) : (state.dirty ? h(Icon, { d: ICON_SAVE, size: 14 }) : h(Icon, { d: ICON_CHECK, size: 14 })),
               state.saving ? t('formSaving') : t('formSave'),
-              state.dirty ? h('kbd', { style: S.kbdTag }, 'Ctrl+S') : null))) : null,
+              state.dirty ? h('kbd', { style: S.kbdTag }, t('saveShortcutKey')) : null))) : null,
 
         // Top validation problems alert (if any)
         state.problems.length > 0 ? h('div', { style: S.problemsBox, role: 'alert' },
@@ -3268,7 +3221,8 @@ window.__ModuleLoader__.load({
         state.failed ? h('div', { style: S.problemsBox, role: 'alert' },
           h('strong', null, t('formSaveFailed'))) : null,
 
-        // SettingsForm container (preserves lifecycle and bottom save contract)
+        // SettingsForm container (preserves lifecycle and bottom save contract).
+        // Its own footer is suppressed by structure below — see .dsh-router-form-body.
         h(SettingsForm, {
           labels: {
             unavailable: t('formUnavailable'),
@@ -3288,89 +3242,75 @@ window.__ModuleLoader__.load({
           onSave: props.onSave,
           onDiscard: props.onDiscard,
         },
-          h('section', { style: S.card },
-            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 12, flexWrap: 'wrap' } },
-              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
-                h('span', { style: { fontSize: 13, fontWeight: 700, color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase', letterSpacing: 0.6 } }, t('profilesTitle')),
-                h('span', { style: S.countBadge }, String(draft.profiles.length))),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-add-profile-btn',
-                style: S.addProfileBtn,
-                disabled: disabled,
-                onClick: function () { props.onOpenNewProfile() },
-              }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addProfile'))),
-            h(SegmentedTabs, {
-              items: draft.profiles.map(function (profile) {
-                return {
-                  value: profile.id,
+          // One wrapper around everything the page contributes: the SettingsForm
+          // footer is the element right after it, so the suppression rule needs no
+          // DSH class name.
+          h('div', { className: 'dsh-router-form-body' },
+            h('section', { style: S.card },
+              h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 12, flexWrap: 'wrap' } },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                  h('span', { style: { fontSize: 13, fontWeight: 700, color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase', letterSpacing: 0.6 } }, t('profilesTitle')),
+                  h('span', { style: S.countBadge }, String(draft.profiles.length))),
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-add-profile-btn',
+                  style: S.addProfileBtn,
+                  disabled: disabled,
+                  onClick: function () { props.onOpenNewProfile() },
+                }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addProfile'))),
+              h(SegmentedTabs, {
+                items: draft.profiles.map(function (profile) {
+                  return {
+                    value: profile.id,
+                    label: h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+                      h('span', { style: { fontWeight: 500 } }, profile.when.model),
+                      h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: profile.candidates.length }))),
+                    id: 'tab-' + profile.id,
+                    panelId: 'panel-' + profile.id,
+                  }
+                }).concat([{
+                  value: '__default__',
                   label: h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
-                    h('span', { style: { fontWeight: 500 } }, profile.when.model),
-                    h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: profile.candidates.length }))),
-                  id: 'tab-' + profile.id,
-                  panelId: 'panel-' + profile.id,
-                }
-              }).concat([{
-                value: '__default__',
-                label: h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
-                  h('span', { style: { fontWeight: 500 } }, t('defaultProfileTab')),
-                  h('span', { style: S.countBadge }, draft.default.enabled ? t('candidateCountTag').replace('{n}', String(draft.default.candidates.length)) : t('defaultProfileNotActive'))),
-                id: 'tab-default',
-                panelId: 'panel-default',
-              }]),
-              value: activeProfile === null ? '__default__' : activeProfile.id,
-              onChange: function (value) { props.onActive(value) },
-              label: t('profilesTitle'),
-            })),
-          activeProfile === null
-            ? h(DefaultView, {
-              t: t,
-              pool: draft.default,
-              disabled: disabled,
-              catalog: state.catalog,
-              passive: state.ui.passive,
-              discover: state.ui.discover,
-              showPassive: draft.health.passive !== false,
-              showDiscover: draft.health.discover?.enabled === true,
-              onDefaultEnabled: props.onDefaultEnabled,
-              onStrategy: props.onStrategy,
-              onWeight: props.onWeight,
-              onMaxAttempts: props.onMaxAttempts,
-              onMove: props.onMove,
-              onRemove: props.onRemove,
-              onMaxTotal: props.onMaxTotal,
-              onToggleSwitchOn: props.onToggleSwitchOn,
-              onNeeds: props.onNeeds,
-              onOpenCatalog: props.onOpenCatalog,
-              onOpenManual: props.onOpenManual,
-              onCheckAll: props.onCheckAll,
-              onOpenHealthModal: props.onOpenHealthModal,
-            })
-            : h(ProfileView, {
-              t: t,
-              profile: activeProfile,
-              disabled: disabled,
-              catalog: state.catalog,
-              passive: state.ui.passive,
-              discover: state.ui.discover,
-              showPassive: draft.health.passive !== false,
-              showDiscover: draft.health.discover?.enabled === true,
-              onDeleteProfile: props.onDeleteProfile,
-              onStrategy: props.onStrategy,
-              onWeight: props.onWeight,
-              onMaxAttempts: props.onMaxAttempts,
-              onMove: props.onMove,
-              onRemove: props.onRemove,
-              onMaxTotal: props.onMaxTotal,
-              onToggleSwitchOn: props.onToggleSwitchOn,
-              onNeeds: props.onNeeds,
-              onOpenCatalog: props.onOpenCatalog,
-              onOpenManual: props.onOpenManual,
-              onCheckAll: props.onCheckAll,
-              onOpenHealthModal: props.onOpenHealthModal,
-            })),
-
-
+                    h('span', { style: { fontWeight: 500 } }, t('defaultProfileTab')),
+                    h('span', { style: S.countBadge }, draft.default.enabled ? fill(t('candidateCountTag'), { n: draft.default.candidates.length }) : t('defaultProfileNotActive'))),
+                  id: 'tab-default',
+                  panelId: 'panel-default',
+                }]),
+                value: activeProfile === null ? '__default__' : activeProfile.id,
+                onChange: function (value) { props.onActive(value) },
+                label: t('profilesTitle'),
+              })),
+            h('div', {
+              id: activeProfile === null ? 'panel-default' : 'panel-' + activeProfile.id,
+              role: 'tabpanel',
+              'aria-labelledby': activeProfile === null ? 'tab-default' : 'tab-' + activeProfile.id,
+            },
+              h(ChainView, Object.assign({
+                key: activeProfile === null ? 'default' : activeProfile.id,
+                t: t,
+                chain: activeProfile === null ? draft.default : activeProfile,
+                isDefault: activeProfile === null,
+                disabled: disabled,
+                catalog: state.ui.catalog,
+                passive: state.ui.passive,
+                discover: state.ui.discover,
+                showPassive: draft.health.passive !== false,
+                showDiscover: draft.health.discover?.enabled === true,
+                onStrategy: props.onStrategy,
+                onWeight: props.onWeight,
+                onMaxAttempts: props.onMaxAttempts,
+                onMove: props.onMove,
+                onRemove: props.onRemove,
+                onMaxTotal: props.onMaxTotal,
+                onToggleSwitchOn: props.onToggleSwitchOn,
+                onNeeds: props.onNeeds,
+                onOpenCatalog: props.onOpenCatalog,
+                onOpenManual: props.onOpenManual,
+                onCheckAll: props.onCheckAll,
+                onOpenHealthModal: props.onOpenHealthModal,
+                onDefaultEnabled: props.onDefaultEnabled,
+                onDeleteProfile: props.onDeleteProfile,
+              }))))),
 
         modal !== null && modal.kind === 'health' ? h(HealthSettingsModal, {
           t: t,
@@ -3380,7 +3320,7 @@ window.__ModuleLoader__.load({
         }) : null,
         modal !== null && modal.kind === 'new-profile' ? h(NewProfileModal, {
           t: t,
-          catalog: state.catalog,
+          catalog: state.ui.catalog,
           catalogLoading: state.ui.catalogLoading,
           profiles: draft.profiles,
           configured: draft.profiles.map(function (profile) { return profile.when.provider + '/' + profile.when.model }),
@@ -3390,13 +3330,13 @@ window.__ModuleLoader__.load({
         modal !== null && modal.kind === 'manual' ? h(ManualChannelModal, {
           t: t,
           routableProviders: routableProviders,
-          catalog: state.catalog,
+          catalog: state.ui.catalog,
           onClose: props.onCloseModal,
           onAdd: function (entries) { props.onAddCandidates(modal.profileId, entries, modal.isDefault) },
         }) : null,
         modal !== null && modal.kind === 'catalog' ? h(CatalogPickerModal, {
           t: t,
-          catalog: state.catalog,
+          catalog: state.ui.catalog,
           catalogLoading: state.ui.catalogLoading,
           onClose: props.onCloseModal,
           onAdd: function (entries) { props.onAddCandidates(modal.profileId, entries, modal.isDefault) },
@@ -3431,18 +3371,9 @@ window.__ModuleLoader__.load({
       var open = openState[0]
       var setOpen = openState[1]
       var isWide = Boolean(props.wide)
-      var enabled = state?.draft?.enabled ?? true
-      var dirty = state?.dirty ?? false
-      var profileCount = (state?.draft?.profiles ?? []).length
-
-      React.useEffect(function () {
-        if (!open) return
-        function handleKeyDown(e) {
-          if (e.key === 'Escape') setOpen(false)
-        }
-        window.addEventListener('keydown', handleKeyDown)
-        return function () { window.removeEventListener('keydown', handleKeyDown) }
-      }, [open])
+      var enabled = state.draft.enabled
+      var dirty = state.dirty
+      var profileCount = state.draft.profiles.length
 
       var buttonProps = {
         type: 'button',
@@ -3454,81 +3385,67 @@ window.__ModuleLoader__.load({
         onClick: function () { setOpen(true) },
       }
 
-      var modalElement = open ? ReactDOM.createPortal(
-        h('div', {
-          style: S.modalOverlay,
-          onClick: function (e) { if (e.target === e.currentTarget) setOpen(false) },
-        },
-          h('div', { className: 'dsh-router-modal-dialog', style: S.modalDialog, role: 'dialog', 'aria-modal': true },
-            h('div', { style: S.modalTopBar },
-              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 } },
-                h(ModelRouterIcon, { size: 24, color: 'var(--dsw-alias-brand-primary, #4A65E8)' }),
-                h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
-                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                    h('span', { style: S.modalTopTitle }, t('quickModalTitle')),
-                    h('span', {
-                      style: enabled ? S.badgeRunning : S.badgePaused,
-                    }, enabled ? '● ' + t('statusRunningBadge') : '○ ' + t('statusDisabledBadge')),
-                    dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null,
-                    state.failed ? h('span', { style: S.saveFailedBadge }, t('formSaveFailed')) : null),
-                  h('span', { style: S.modalTopSubtitle }, t('pluginDesc')))),
-              h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 } },
-                h('div', { style: S.headerTools },
-                  h('button', {
-                    type: 'button',
-                    className: 'dsh-router-tool-btn',
-                    style: Object.assign({}, S.toolBtn, state?.ui?.checking ? { opacity: 0.6, cursor: 'wait' } : null),
-                    disabled: !state?.writable || state?.saving || state?.ui?.checking,
-                    title: t('checkAllBtn'),
-                    onClick: props.onCheckAll,
-                  }, h(Icon, { d: state?.ui?.checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: state?.ui?.checking }), state?.ui?.checking ? t('checkingText') : t('toolCheckAll')),
-                  h('button', {
-                    type: 'button',
-                    className: 'dsh-router-tool-btn',
-                    style: S.toolBtn,
-                    disabled: !state?.writable || state?.saving,
-                    title: t('healthConfigBtn'),
-                    onClick: props.onOpenHealthModal,
-                  }, h(Icon, { d: ICON_GEAR, size: 13 }), t('toolHealthConfig')),
-                  h('button', {
-                    type: 'button',
-                    className: 'dsh-router-tool-btn',
-                    style: S.toolBtn,
-                    title: t('failoverHistoryButton'),
-                    onClick: props.onOpenDrawer,
-                  }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory'))),
-                h('div', { style: S.headerDivider }),
-                dirty ? h('button', {
-                  type: 'button',
-                  className: 'dsh-router-discard-btn',
-                  style: S.discardBtnHeader,
-                  disabled: !state.writable || state.saving,
-                  onClick: props.onDiscard,
-                }, h(Icon, { d: ICON_UNDO, size: 13 }), t('formDiscard')) : null,
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-save-btn',
-                  style: Object.assign({}, S.saveBtn, (!dirty || !state.writable || state.saving || state.invalid) ? S.saveBtnDisabled : S.saveBtnHighlight),
-                  disabled: !dirty || !state.writable || state.saving || state.invalid,
-                  title: dirty ? t('saveShortcutHint') : t('savedStateTip'),
-                  onClick: props.onSave,
-                },
-                  state.saving ? h(Icon, { d: ICON_SPINNER, size: 14, spin: true }) : (dirty ? h(Icon, { d: ICON_SAVE, size: 14 }) : h(Icon, { d: ICON_CHECK, size: 14 })),
-                  state.saving ? t('formSaving') : t('formSave'),
-                  dirty ? h('kbd', { style: S.kbdTag }, 'Ctrl+S') : null),
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-modal-close-btn',
-                  style: S.modalCloseBtn,
-                  title: t('close'),
-                  onClick: function () { setOpen(false) },
-                }, h(Icon, { d: ICON_CLOSE, size: 16 })))),
-            h('div', { style: S.modalContentArea },
-              h(RouterPage, Object.assign({}, props, {
-                isModalView: true,
-                onCloseModalView: function () { setOpen(false) },
-              }))))),
-        document.body
+      // The official Modal owns the mask, Escape, focus entry/return and the
+      // Tab trap; `headless` keeps the plugin's own top bar and content area.
+      var modalElement = open ? h(Modal, {
+        open: true,
+        headless: true,
+        title: t('quickModalTitle'),
+        className: 'dsh-router-modal-dialog',
+        onClose: function () { setOpen(false) },
+      },
+        h('div', { style: S.modalTopBar },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 } },
+            h(ModelRouterIcon, { size: 24, color: 'var(--dsw-alias-brand-primary, #4A65E8)' }),
+            h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                h('span', { style: S.modalTopTitle }, t('quickModalTitle')),
+                h('span', {
+                  style: enabled ? S.badgeRunning : S.badgePaused,
+                }, enabled ? '● ' + t('statusRunningBadge') : '○ ' + t('statusDisabledBadge')),
+                dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null,
+                state.failed ? h('span', { style: S.saveFailedBadge }, t('formSaveFailed')) : null),
+              h('span', { style: S.modalTopSubtitle }, t('pluginDesc')))),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 } },
+            h(HeaderTools, {
+              t: t,
+              disabled: !state.writable || state.saving,
+              busy: state.ui.checking,
+              checkLabel: 'toolCheckAll',
+              healthLabel: 'toolHealthConfig',
+              historyLabel: 'toolHistory',
+              onCheckAll: props.onCheckAll,
+              onOpenHealthModal: props.onOpenHealthModal,
+              onOpenDrawer: props.onOpenDrawer,
+            }),
+            h('div', { style: S.headerDivider }),
+            dirty ? h('button', {
+              type: 'button',
+              className: 'dsh-router-discard-btn',
+              style: S.discardBtnHeader,
+              disabled: !state.writable || state.saving,
+              onClick: props.onDiscard,
+            }, h(Icon, { d: ICON_UNDO, size: 13 }), t('formDiscard')) : null,
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-save-btn',
+              style: Object.assign({}, S.saveBtn, (!dirty || !state.writable || state.saving || state.invalid) ? S.saveBtnDisabled : S.saveBtnHighlight),
+              disabled: !dirty || !state.writable || state.saving || state.invalid,
+              title: dirty ? t('saveShortcutHint') : t('savedStateTip'),
+              onClick: props.onSave,
+            },
+              state.saving ? h(Icon, { d: ICON_SPINNER, size: 14, spin: true }) : (dirty ? h(Icon, { d: ICON_SAVE, size: 14 }) : h(Icon, { d: ICON_CHECK, size: 14 })),
+              state.saving ? t('formSaving') : t('formSave'),
+              dirty ? h('kbd', { style: S.kbdTag }, t('saveShortcutKey')) : null),
+            h('button', {
+              type: 'button',
+              className: 'dsh-router-modal-close-btn',
+              style: S.modalCloseBtn,
+              title: t('close'),
+              onClick: function () { setOpen(false) },
+            }, h(Icon, { d: ICON_CLOSE, size: 16 })))),
+        h('div', { style: S.modalContentArea },
+          h(RouterPage, Object.assign({}, props, { isModalView: true })))
       ) : null
 
       return h(React.Fragment, null,
@@ -3538,7 +3455,7 @@ window.__ModuleLoader__.load({
             isWide ? h('span', { style: S.sidebarLabel }, t('sidebarActionLabel')) : null),
           isWide
             ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
-                dirty ? h('span', { style: { width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }, title: t('unsavedChangesBadge') }) : null,
+                dirty ? h('span', { style: { width: 6, height: 6, borderRadius: '50%', background: 'var(--dsw-alias-state-warn-primary)', flexShrink: 0 }, title: t('unsavedChangesBadge') }) : null,
                 h('span', { style: S.sidebarCountBadge }, String(profileCount)))
             : (dirty ? h('span', { style: S.railDirtyDot }) : null)),
         modalElement
@@ -3586,8 +3503,8 @@ window.__ModuleLoader__.load({
         onMaxTotal: function (profileId, value, isDefault) { controller.setMaxTotalAttempts(profileId, value, isDefault) },
         onStickyTurns: function (profileId, value, isDefault) { controller.setStickyTurns(profileId, value, isDefault) },
         onToggleSwitchOn: function (profileId, key, isDefault) { controller.toggleSwitchOn(profileId, key, isDefault) },
-        onStrategy: function (value) { controller.setStrategy(value) },
-        onWeight: function (index, value, isDefault) { controller.setWeight(index, value, isDefault) },
+        onStrategy: function (profileId, value, isDefault) { controller.setStrategy(profileId, value, isDefault) },
+        onWeight: function (profileId, index, value, isDefault) { controller.setWeight(profileId, index, value, isDefault) },
         onOpenNewProfile: function () { controller.openModal({ kind: 'new-profile' }) },
         onOpenManual: function (profileId, isDefault) { controller.openModal({ kind: 'manual', profileId: profileId, isDefault: isDefault }) },
         onOpenCatalog: function (profileId, isDefault) { controller.openModal({ kind: 'catalog', profileId: profileId, isDefault: isDefault }) },

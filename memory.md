@@ -6,8 +6,8 @@
 
 - 完整插件项目（`packages/dsh-model-router/`：宿主 + UI 半包 + 条件路由 + lineage 投影 + 遥测抽屉 + 双引擎渠道健康监控 + 识图路由），GitHub 仓库 `Imzl-zl/dsh-model-router`（公开）。
 - DSH 参考 checkout：`D:\sudy\github\deepseek-harness`（严格只读）；项目根：`D:\sudy\myproject\dsh-model-router`。
-- 最后更新：2026-10-15（UI 布局与信息架构重构：分段式控制台 Segmented Console + 候选卡片健康胶囊 CompactHealthBadge + 顶栏 headerTools 收拢）。
-- 验证状态：单测 66/66 + 组合测试 12/12（真实 headless Loader + stub）+ 真实 provider 1/1 + 浏览器全链路；`tsc --noEmit` 0 错误；DSH checkout `status --porcelain` 0 行。
+- 最后更新：2026-10-15（UI 布局与信息架构重构：分段式控制台 Segmented Console + 候选卡片健康胶囊 CompactHealthBadge + 顶栏 headerTools 收拢；同日 UI 重构审查修复批次：控制器状态机四缺陷 + DSH 规范对齐，新增 client-controller 测试）。
+- 验证状态：单测 66/66 + 组合测试 12/12（真实 headless Loader + stub）+ client-controller 13/13（红/绿对照过）+ 真实 provider 1/1 + 浏览器全链路；`tsc --noEmit` 0 错误；DSH checkout `status --porcelain` 0 行。
 
 ## 已完成能力
 
@@ -27,7 +27,7 @@
   5. *主动极速探测*：支持自定义探测内容（避开渠道违禁词）、探测超时（默认 8s）与自动轮询周期（默认 0 关闭防偷跑资费）；
   6. *控制中心与远程接入*：吸顶顶栏与弹窗顶栏配备「⚡ 探测全部渠道」与「⚙️ 健康设置」弹窗；实现 `RouterHealthService` 继承 `TypertRemoteService`（namespace: `'routerHealth'`），安全兼容 Node 24 原型描述符与 client 侧 `$mount` fail-open 保护。
 - **识图路由闭环（2026-10-14）**：`needs.images` 三态（true=仅带图轮 / false=仅无图轮 / 不填=不限）+ 显式条件可作用于 primary（修订 open-questions 二.5）+ `hasImages` 按 turn 累积（取数 = 本步 claimed 用户消息 ∪ 本轮 tool/result 嵌套图片块）+ `stickyTurns` 粘滞窗口（默认 0）+ 条件跳过 notice 按 (turn, 跳过组) 去重 + 修掉落回原路由路径不推进状态导致的无限空转 bug。边界裁定：DSH 发送准入门（`session-controller/src/commands.ts:336-348`）在路由之前且查"选中的模型"，插件够不着；闭环形态 = 用户在 DSH 模型配置里给文本模型勾 `input:[text,image]`（门禁只查声明）+ 互斥条件保证 API 收不到图。
-- 决策笔记状态：`implemented/` 10 篇（含本次 `2026-10-15-ui-layout-and-ia-redesign.md`）。
+- 决策笔记状态：`implemented/` 11 篇（含 `2026-10-15-ui-layout-and-ia-redesign.md` 与 `2026-10-15-ui-refactor-hardening.md`）。
 
 ## 仍需注意的坑点
 
@@ -46,6 +46,7 @@
 
 ## 最近活跃窗口
 
+- **UI 重构审查修复批次（2026-10-15）**：对当日 UI 重构做完整审查并逐项修复。行为缺陷：`save()` 补 mutate 拒绝路径（原来 `saving` 永久卡死）；`validate()` 补 per-profile 权重校验与 host `assertStructural` 对齐；`scope.subscribe` 加深比较闸（mirror 任何发布——含保存被拒的恢复读、别处设置保存——不再静默冲掉未保存草稿）；默认兜底池第一个候选解除 primary 钉死。DSH 规范对齐：7 类不存在的 design token 全部换成真实 token（亮色主题深色吸顶栏、暗色主题白-on-白保存钮随之消失）；抽屉失败行进字典；5 处 `SegmentedTabs` 的 `panelId` 接到真实 `role="tabpanel"`；识图指南折叠改键盘可操作；快捷控制中心改用 `prim.Modal headless`（焦点/Escape/Tab 圈禁来自 `useModalLayer`），故障转移抽屉接入同一层栈并抬 z-index；工具按钮组三处合一（`HeaderTools`）；健康色调统一 `healthToneStyle`；插件蓝收进 `--dsh-router-accent`；删 13 个死字典键。复查阶段又抓到一个当时漏掉的真 bug：重构给 4 个控件补了带 `!important` 的 CSS 基规则，与同名内联样式重复且 CSS 恒赢，导致「高级路由条件」按钮的已配条件高亮完全失效——删掉这 4 个基规则（插件页面内控件约定=内联基样式 + CSS 伪状态），高亮恢复。**第二轮优雅优化**：`ProfileView`/`DefaultView`（~110 行、85% 重复）合并为按 `isDefault` 参数化的 `ChainView`；SettingsForm 底栏抑制从「猜 DSH CSS-modules 类名」改为结构兄弟选择器（孩子包进 `.dsh-router-form-body`，上游改类名会响亮失败而非静默失效）；快照去掉重复的 `catalog` 字段；`setStrategy` 分支化简；侧栏全局覆盖补上 DSH 源码锚点注释。**深查修复**：抓出 `actions.onWeight` 漏参导致默认池调权崩溃抛错（已补参并新加单测）、`actions.onStrategy` 参数化；修掉快捷控制中心 Modal 因 className 未直接挂在原语上导致外层卡片被 380px 挤压切边的问题；抽屉补空白处点击退出；子 Tab 弃用 Emoji 改用矢量 SVG 图标。client.js 3546 行。新增 `tests/client-controller.mjs` 增至 13/13 绿。**仍待浏览器实测**（渲染层改动无自动化覆盖）。
 - **四路并行深挖 DSH 能力边界**并关闭九项未决问题，Phase 1 spike 实跑通过。
 - **Phase 1~2 host + UI 落地**（2026-10-12~13）：组合测试 9/9 + 单测 12/12 + 浏览器全链路；抓到并修 10 个真 bug。
 - **真实 provider 实测 + 开源门面**（2026-10-13）：活网关真 500 → SERVER → 跨 key 切换全对；GitHub 公开仓库与同构图标落成。
