@@ -361,6 +361,71 @@ test('routeStatus prefers the passive record; a check that could not run is unkn
   assert.equal(routeStatus({}, {}, 'a/b'), 'unknown')
 })
 
+// ---- cross-session health merge ----
+
+test('passive health merges the recent sessions oldest-first, so the newest observation wins', async () => {
+  // 实测踩过：合并在并发回调里做，谁最后 resolve 谁赢——同一渠道时而显示三天
+  // 前的延迟、时而显示今天的，刷新就变；而数组是新的在前，语义上又恰好反了。
+  // 这条用例守住"读齐后旧→新合并、最新观测赢"，以及"只有旧会话见过的渠道
+  // 仍然在列"。
+  const record = (status, latencyMs, time) => ({
+    route: 'a/b', provider: 'a', model: 'b', status,
+    latencyMs, throughputTps: 1, lastCheckedAt: time,
+    timeline: [{ time, status, latencyMs }],
+  })
+  const bySession = {
+    old: { 'a/b': record('healthy', 100, 1), 'a/only-old': { ...record('unhealthy', 50, 1), route: 'a/only-old', model: 'only-old' } },
+    new: { 'a/b': record('degraded', 999, 2) },
+  }
+  const h = mount({
+    value: config(),
+    remote: {
+      session: {
+        // 故意把新的放前面、并给乱序 updatedAt：排序与合并顺序都得由插件自己负责。
+        list: () => Promise.resolve({ ok: true, value: { items: [
+          { sessionId: 'new', updatedAt: 200 },
+          { sessionId: 'old', updatedAt: 100 },
+        ] } }),
+        projections: (request) => Promise.resolve({ ok: true, value: { values: { 'router/channel-health': bySession[request.sessionId] } } }),
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  const passive = h.state().ui.passive
+  assert.equal(passive['a/b']?.latencyMs, 999, 'the newest session wins, not the oldest and not a race')
+  assert.equal(passive['a/b']?.status, 'degraded')
+  assert.ok(passive['a/only-old'], 'a route only the older session saw is still listed')
+})
+
+test('opening the health workspace re-reads the passive snapshot, so a failover during the session shows up', async () => {
+  // 被动快照原本只在控制器创建时读一次：故障转移发生后工作台还显示挂载那一刻
+  // 的延迟与可用率——监控视图在事故进行中给人看旧数字。这条守住"打开健康视图
+  // 会重取"。
+  const records = [
+    { 'a/b': { route: 'a/b', provider: 'a', model: 'b', status: 'unhealthy', latencyMs: 10, throughputTps: 1, lastCheckedAt: 1, timeline: [{ time: 1, status: 'unhealthy', latencyMs: 10 }] } },
+    { 'a/b': { route: 'a/b', provider: 'a', model: 'b', status: 'healthy', latencyMs: 20, throughputTps: 2, lastCheckedAt: 2, timeline: [{ time: 2, status: 'healthy', latencyMs: 20 }] } },
+  ]
+  let round = 0
+  const h = mount({
+    value: config(),
+    remote: {
+      session: {
+        list: () => Promise.resolve({ ok: true, value: { items: [{ sessionId: 's', updatedAt: 1 }] } }),
+        projections: () => {
+          const record = records[Math.min(round, records.length - 1)]
+          round += 1
+          return Promise.resolve({ ok: true, value: { values: { 'router/channel-health': record } } })
+        },
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(h.state().ui.passive['a/b']?.status, 'unhealthy', 'the mount-time snapshot shows the pre-failover record')
+  h.actions.onActive('__health__')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(h.state().ui.passive['a/b']?.status, 'healthy', 're-opening the health view re-reads the snapshot')
+})
+
 // ---- workbench structure (hand-written createElement nesting) ----
 
 test('the workbench keeps the sidebar and the workspace pane as siblings', () => {

@@ -48,6 +48,7 @@ const C = (provider, maxAttempts = 1, over = {}) => ({ provider, model: 'stub-mo
 // the check that catches a wrong assumption about an event's shape: the usage a
 // settlement reports sits beside `message`, and only real events carry it there.
 import { channelHealthProjection } from '../src/health.ts'
+import { failoverHistoryProjection } from '../src/lineage.ts'
 
 const SCENARIOS = [
   {
@@ -93,6 +94,15 @@ const SCENARIOS = [
       ok('health: answering route measures a turn cost', typeof health['stub-backup/stub-model']?.latencyMs === 'number')
       ok('health: answering route measures throughput', typeof health['stub-backup/stub-model']?.throughputTps === 'number')
       eq('health: timeline is bounded', health['stub-primary/stub-model']?.timeline.length, 2)
+      // The failover-history drawer's data, folded by the production lineage
+      // projection from the same log: one entry, the throttled route handing
+      // over to the route that answered, settled once that route succeeded.
+      const history = failoverHistory(events)
+      eq('lineage: one entry', history.length, 1)
+      eq('lineage: from the throttled route', history[0]?.from, 'stub-primary/stub-model')
+      eq('lineage: to the answering route', history[0]?.to, 'stub-backup/stub-model')
+      eq('lineage: keeps the failure code', history[0]?.code, 'RATE_LIMIT')
+      eq('lineage: settled by the successful turn', history[0]?.settled, true)
     },
   },
   {
@@ -427,6 +437,13 @@ const finalRoute = events => {
 const turnEnd = events => events.filter(e => e.type === 'turn/end').at(-1)?.data.reason.kind
 
 /** Fold one boot's durable log through the real health projection. */
+/** Fold one boot's durable log through the real lineage projection (the drawer's data). */
+const failoverHistory = events => {
+  let state = failoverHistoryProjection.init()
+  for (const event of events) state = failoverHistoryProjection.apply(state, event)
+  return failoverHistoryProjection.wire.view(state)
+}
+
 const channelHealth = events => {
   let state = channelHealthProjection.init()
   for (const event of events) state = channelHealthProjection.apply(state, event)

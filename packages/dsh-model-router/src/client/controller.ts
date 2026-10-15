@@ -132,8 +132,12 @@ export function createController(ctx, scope, t) {
     session.list({}).then(function (result) {
       if (!result.ok) return
       var sessions = (result.value?.items ?? []).slice()
-        .sort(function (a, b) { return (b.updatedAt ?? 0) - (a.updatedAt ?? 0) })
-        .slice(0, 20)
+        .sort(function (a, b) { return (a.updatedAt ?? 0) - (b.updatedAt ?? 0) })
+        .slice(-20)
+      // 先读齐、再按旧→新合并。两个坑都实测踩过：① 在并发回调里直接
+      // Object.assign，谁最后 resolve 谁赢——同一条路由时而显示三天前的延迟、
+      // 时而显示今天的，刷新就变；② 数组新的在前时最后 assign 的是最旧一条，
+      // 语义恰好反了。旧→新顺序保证每条渠道留下的是最近一次观测。
       return Promise.all(sessions.map(function (entry) {
         return session.projections({ sessionId: entry.sessionId }).then(function (read) {
           // The live read is `{ asOfSeq, values }`; a migration-required
@@ -141,15 +145,17 @@ export function createController(ctx, scope, t) {
           // straight out of `values` — no `kind` gate (the wire payload
           // does not carry one).
           var values = read.ok && read.value !== null ? (read.value.values ?? {}) : {}
-          var records = values['router/channel-health']
-          if (records) {
-            // 先拷贝再写入：store 的 set 会 dev-freeze 它收到的对象，之后往
-            // 原对象上赋值在 dev 构建里会静默失败（圆点永远显示"未探测"）。
-            ui.passive = Object.assign({}, ui.passive, records)
-          }
-        }).catch(function () {})
+          // 先拷贝再写入：store 的 set 会 dev-freeze 它收到的对象，之后往
+          // 原对象上赋值在 dev 构建里会静默失败（圆点永远显示"未探测"）。
+          return values['router/channel-health'] ?? null
+        }).catch(function () { return null })
       }))
-    }).then(function () { publish() }).catch(function () {})
+    }).then(function (reads) {
+      for (var i = 0; i < reads.length; i++) {
+        if (reads[i]) ui.passive = Object.assign({}, ui.passive, reads[i])
+      }
+      publish()
+    }).catch(function () {})
   }
   loadPassive()
 
@@ -284,7 +290,16 @@ export function createController(ctx, scope, t) {
   var controller = {
     store: store,
     setEnabled: function (value) { draft.enabled = value; publish() },
-    setActive: function (id) { ui.activeId = id; autoActive = false; publish() },
+    setActive: function (id) {
+      ui.activeId = id
+      autoActive = false
+      // 打开健康工作台时重取一次被动快照。它原本只在控制器创建时读一次，
+      // 故障转移发生后工作台还显示着旧延迟/旧可用率——监控视图在事故进行中
+      // 给人看旧数字，比没有这个数字更糟。重取是同一套 20 会话合并，代价是
+      // 几次本地投影读。
+      if (id === '__health__') loadPassive()
+      publish()
+    },
     discard: function () {
       draft = seed()
       failed = false
@@ -445,8 +460,9 @@ export function createController(ctx, scope, t) {
       ctx.remote.session.list({}).then(function (result) {
         if (!result.ok) throw new Error('session list refused')
         var sessions = (result.value?.items ?? []).slice()
-          .sort(function (a, b) { return (b.updatedAt ?? 0) - (a.updatedAt ?? 0) })
-          .slice(0, 20)
+          .sort(function (a, b) { return (a.updatedAt ?? 0) - (b.updatedAt ?? 0) })
+          .slice(-20)
+        // 与 loadPassive 同一套合并：读齐后旧→新，每条渠道留最近一次观测。
         return Promise.all(sessions.map(function (session) {
           return ctx.remote.session.projections({ sessionId: session.sessionId }).then(function (read) {
             // The live read is `{ asOfSeq, values }`; a migration-required
@@ -454,12 +470,21 @@ export function createController(ctx, scope, t) {
             // straight out of `values` — no `kind` gate (the wire payload
             // does not carry one).
             var values = read.ok && read.value !== null ? (read.value.values ?? {}) : {}
-            var records = values['router/channel-health']
-            if (records) ui.passive = Object.assign({}, ui.passive, records)
-            return { sessionId: session.sessionId, entries: values['router/failover-history'] ?? [] }
-          })
+            return {
+              sessionId: session.sessionId,
+              entries: values['router/failover-history'] ?? [],
+              records: values['router/channel-health'] ?? null,
+            }
+          }).catch(function () { return { sessionId: session.sessionId, entries: [], records: null } })
         }))
       }).then(function (rows) {
+        // 合并放在这里而不是并发回调里：数组已按旧→新，最后赋值的才是最近一次
+        // 观测；在回调里 assign 等于让 resolve 顺序决定赢家，刷新就变。
+        for (var i = 0; i < rows.length; i++) {
+          // 先拷贝再写入：store 的 set 会 dev-freeze 它收到的对象，之后往
+          // 原对象上赋值在 dev 构建里会静默失败（圆点永远显示"未探测"）。
+          if (rows[i].records) ui.passive = Object.assign({}, ui.passive, rows[i].records)
+        }
         ui.drawerRows = rows.filter(function (row) { return row.entries.length > 0 })
         ui.drawerLoading = false
         publish()
@@ -496,6 +521,9 @@ export function createController(ctx, scope, t) {
         })
       })).then(function () {
         ui.checking = false
+        // 连通性检查跑完顺带重取被动快照：定时轮次开着的时候，健康工作台要跟着
+        // 真实发生的事走，而不是停在页面挂载那一刻。
+        loadPassive()
         publish()
       }).catch(function () {
         ui.checking = false
