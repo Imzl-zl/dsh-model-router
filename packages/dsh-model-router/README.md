@@ -152,19 +152,23 @@ step.
 
 ```sh
 npm install                       # repo root: installs the DSH CLI + peers
+npm run bundle --prefix packages/dsh-model-router   # build lib/ (host + client + typert)
 node packages/dsh-model-router/tests/unit.mjs    # pure decision logic
 node packages/dsh-model-router/tests/run.mjs     # Loader composition tests
+node packages/dsh-model-router/tests/client-controller.mjs   # browser-half controller (runs the built lib/client.js)
 npx tsc --noEmit --skipLibCheck --strict --module nodenext \
   --moduleResolution nodenext --target es2022 --allowImportingTsExtensions \
   packages/dsh-model-router/src/index.ts
 ```
 
-The composition tests boot the real headless Loader with a deterministic stub
-adapter and assert on the durable session log — the real Cordis Loader
-composition the DSH package rules require, not hand-built contexts. The web
-profile is verified by installing the bundle (`dsh plugin --profile web add
-<dir>`) and driving the Plugins page in a browser. A live-gateway check
-(`tests/real-run.mjs`, credentials in a gitignored local file, machine proxy
-required) has verified the failover end-to-end against a real upstream 500:
-two same-route retries, one cross-channel switch, a Chinese notice, and a
-completed turn.
+The browser half and the host face are consumed from the build output, so
+`npm run bundle` must run after any source change before a browser or
+`--dump-config` check sees it. The composition tests boot the real headless
+Loader with a deterministic stub adapter and assert on the durable session log
+— the real Cordis Loader composition the DSH package rules require, not
+hand-built contexts. The web profile is verified by installing the bundle
+(`dsh plugin --profile web add <dir>`) and driving the Plugins page in a
+browser. A live-gateway check (`tests/real-run.mjs`, credentials in a
+gitignored local file, machine proxy required) has verified the failover
+end-to-end against a real upstream 500: two same-route retries, one
+cross-channel switch, a Chinese notice, and a completed turn.

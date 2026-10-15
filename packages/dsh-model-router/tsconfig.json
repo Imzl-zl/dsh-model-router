@@ -1,0 +1,33 @@
+{
+  // Package project for the Typert host face and the declaration half of the
+  // build. The root tsconfig.host.json aggregates this file, which is how the
+  // typert generator discovers the package
+  // (packages/typert/generator/src/analyzer.ts:481-489).
+  //
+  // JavaScript is emitted by tsdown from the TypeScript sources; this project
+  // emits declarations only, into lib/types, which is what exports "." points
+  // its `types` condition at (the same two-artifact split DSH uses:
+  // packages/experimental/client-ui-cot-translation/tsconfig.host.json).
+  //
+  // src/client is excluded: the browser half is bundled by tsdown without a
+  // type-check pass (it predates this build as hand-written JavaScript), and the
+  // Typert host-face program must not compile browser modules.
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": true,
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"],
+  "exclude": ["src/client"]
+}

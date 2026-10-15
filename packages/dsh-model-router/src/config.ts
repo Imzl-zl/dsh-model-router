@@ -32,6 +32,10 @@ import z from '@deepseek-ai/schemastery'
  * exempt is the automatic machinery (breaker cooldowns, capability
  * pre-validation) — DSH validated the selection when it was made.
  */
+// 联合手写而不用 `(typeof STRATEGIES)[number]`：Typert 的 Zod 发射器不支持
+// indexed-access 节点（packages/typert/generator/src/emitter.ts:777-788），
+// 而 `Profile` 的 Typert surface 经由 `strategy` 引用它。`STRATEGIES` 的显式
+// 注解让两份清单在编译期保持同源——写错一个值 tsc 就红。
 /**
  * 选路策略：只决定"从哪条渠道开始"。
  *
@@ -40,9 +44,9 @@ import z from '@deepseek-ai/schemastery'
  * DSH 核心没有任何原生的权重/轮询/负载均衡，所以这里自己实现，但枚举用
  * schemastery 的 `union` 写法（`llm-pi-ai` 的 `transport` 同款），没有 `z.enum`。
  */
-export const STRATEGIES = ['order', 'weight', 'round-robin'] as const
+export type Strategy = 'order' | 'weight' | 'round-robin'
 
-export type Strategy = (typeof STRATEGIES)[number]
+export const STRATEGIES: readonly Strategy[] = ['order', 'weight', 'round-robin']
 
 export const strategySchema = z.union([...STRATEGIES]).default('order')
   .description('从哪条渠道开始：按顺序 / 按权重随机 / 轮询')
@@ -211,7 +215,17 @@ export interface SwitchOn {
   invalidRequest: boolean
 }
 
-/** One backup chain for the exact provider/model the user picks. */
+// The `@typert` tag below marks this interface as the package's host-face
+// surface: the generator emits a contribution only for a package whose
+// reachable sources carry a marked declaration
+// (packages/typert/generator/src/analyzer.ts:2775-2808), and `Profile` is the
+// plugin's central business type. Why this type, and which alternatives were
+// rejected, are recorded in
+// .agents/notes/implemented/2026-10-16-out-of-tree-build-pipeline.md
+/** One backup chain for the exact provider/model the user picks.
+ *
+ * @typert
+ */
 export interface Profile {
   id: string
   when: { provider: string; model: string }

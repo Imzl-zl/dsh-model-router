@@ -1,0 +1,18 @@
+{
+  // Typert workspace aggregate for the out-of-tree plugin. The generator's
+  // package mode locates the workspace root by walking up from the package's
+  // outDir to the nearest tsconfig.host.json
+  // (packages/typert/generator/src/tsdown-plugin.ts:154-161), then reads this
+  // file's project references for package registrations; a referenced package
+  // must live under <root>/packages
+  // (packages/typert/generator/src/analyzer.ts:488).
+  //
+  // Compiler options come from the package project through extends, so the
+  // analyzer's face program and the package's own tsc run share one setting.
+  "extends": "./packages/dsh-model-router/tsconfig.json",
+  "references": [
+    {
+      "path": "./packages/dsh-model-router/tsconfig.json"
+    }
+  ]
+}

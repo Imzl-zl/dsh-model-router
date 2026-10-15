@@ -12,6 +12,11 @@
  * What these cover is the draft/save state machine — the part the Loader
  * composition tests cannot reach because they exercise the Host half only.
  *
+ * The suite runs against the built browser half (lib/client.js, the artifact
+ * the client module system serves), so `npm run bundle` in the package
+ * directory must have run first; the source-text guards read that same
+ * artifact, which is what the browser actually loads.
+ *
  * Usage:
  *   node packages/dsh-model-router/tests/client-controller.mjs
  *   CLIENT_PATH=<file> node packages/dsh-model-router/tests/client-controller.mjs
@@ -22,7 +27,17 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-const CLIENT_PATH = process.env.CLIENT_PATH ?? fileURLToPath(new URL('../src/client.js', import.meta.url))
+const CLIENT_PATH = process.env.CLIENT_PATH ?? fileURLToPath(new URL('../lib/client.js', import.meta.url))
+
+/**
+ * Authored source of one browser-half module. The structural guards below read
+ * source, not the bundle: the bundler re-prints the AST (single quotes become
+ * double, `function (current)` loses its space, a ternary condition joins its
+ * line), so shape assertions belong on what the author wrote. Behavior is
+ * asserted against the bundle through loadClient(), which is what the browser
+ * loads.
+ */
+const sourceOf = (name) => readFileSync(fileURLToPath(new URL(`../src/client/${name}`, import.meta.url)), 'utf8')
 
 let passed = 0
 const pending = []
@@ -103,8 +118,9 @@ function applyOps(value, ops) {
  * @param options.writable - whether the section accepts writes.
  * @param options.mutate - override for scope.mutate; the default folds the ops
  *   into the served value and republishes, the way the Host's write answer does.
+ * @param options.remote - overrides merged over the default remote stubs.
  */
-function mount({ value, writable = true, mutate } = {}) {
+function mount({ value, writable = true, mutate, remote } = {}) {
   const calls = []
   let snapshot = { status: 'ready', value, writable, revision: 1 }
   const listeners = new Set()
@@ -129,14 +145,14 @@ function mount({ value, writable = true, mutate } = {}) {
       inject: (_name, fn) => { fn(); return () => {} },
       register: (options) => { registrations.push(options); return () => {} },
     },
-    remote: {
+    remote: Object.assign({
       session: {
         list: () => Promise.resolve({ ok: false }),
         projections: () => Promise.resolve({ ok: false }),
       },
       llm: {},
       settings: {},
-    },
+    }, remote),
   }
   loadClient().apply(ctx)
   const registration = registrations.find((entry) => entry.name === 'plugins.bundle.config')
@@ -258,6 +274,180 @@ test('a genuinely changed Host value re-seeds the draft', () => {
   h.republish({ value: config({ profiles: [profile({ maxTotalAttempts: 9 })] }), revision: 2 })
   assert.equal(h.state().dirty, false, 'the Host is the authority once its value moves')
   assert.equal(h.state().draft.profiles[0].maxTotalAttempts, 9)
+})
+
+test('an edit after a value-changing republish keeps the draft dirty', () => {
+  // The production boot path: the controller is built while the scope is still
+  // loading, so the first republication is always a value-changing one — the
+  // re-seed runs on every real start, and edits come after it.
+  const h = mount({ value: undefined })
+  h.republish({ value: config(), revision: 1 })
+  h.actions.onMaxAttempts('p1', 0, '3', false)
+  assert.equal(h.state().dirty, true, 'the draft and the Host baseline must stay independent objects')
+})
+
+// ---- single-route connectivity check ----
+
+/** Remote stubs that make one provider discoverable, with a controllable answer. */
+function discoverStubs(answer) {
+  const calls = { discoverModels: 0 }
+  return {
+    calls,
+    remote: {
+      llm: {
+        listConfigurableProviders: () => Promise.resolve({
+          ok: true,
+          value: [{ provider: 'deepseek', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'deepseek'] }],
+        }),
+        discoverModels: () => { calls.discoverModels += 1; return answer() },
+      },
+      settings: {
+        describe: () => Promise.resolve({
+          ok: true,
+          value: { namespaces: [{ ns: 'llm-pi-ai', value: { providers: { deepseek: {} } } }] },
+        }),
+      },
+    },
+  }
+}
+
+test('a single-route check shows busy on that route only, then lands the verdict', async () => {
+  const stubs = discoverStubs(() => Promise.resolve({ ok: true, value: [{ id: 'm' }] }))
+  const h = mount({ value: config(), remote: stubs.remote })
+  const pending = h.actions.onCheckRoute('deepseek', 'm')
+  assert.equal(h.state().ui.checkingRoutes['deepseek/m'], true, 'the route shows busy while the check crosses the wire')
+  assert.equal(h.state().ui.checking, false, 'a single check does not busy the global checker')
+  await pending
+  await flush()
+  assert.equal(h.state().ui.checkingRoutes['deepseek/m'], undefined, 'busy clears once the verdict lands')
+  assert.deepEqual(h.state().ui.discover['deepseek/m'], { kind: 'reachable' }, 'the verdict is folded into the route map')
+  assert.equal(stubs.calls.discoverModels, 1)
+})
+
+test('a second check for the same route while one is in flight is ignored', async () => {
+  let release
+  const stubs = discoverStubs(() => new Promise((resolve) => { release = resolve }))
+  const h = mount({ value: config(), remote: stubs.remote })
+  h.actions.onCheckRoute('deepseek', 'm')
+  await flush()
+  assert.equal(h.state().ui.checkingRoutes['deepseek/m'], true, 'the first check is still in flight')
+  const second = h.actions.onCheckRoute('deepseek', 'm')
+  assert.equal(second, undefined, 'the duplicate call is dropped, not queued')
+  release({ ok: true, value: [{ id: 'm' }] })
+  await flush()
+  assert.equal(stubs.calls.discoverModels, 1, 'only one wire call was made')
+})
+
+test('a failed single check clears the busy state instead of spinning forever', async () => {
+  const stubs = discoverStubs(() => Promise.reject(new Error('wire down')))
+  const h = mount({ value: config(), remote: stubs.remote })
+  await h.actions.onCheckRoute('deepseek', 'm')
+  await flush()
+  assert.equal(h.state().ui.checkingRoutes['deepseek/m'], undefined, 'busy clears on failure too')
+  assert.deepEqual(h.state().ui.discover['deepseek/m'], { kind: 'unreachable', reason: 'wire down' })
+})
+
+// ---- route status derivation (the signal dot, nav badge and filters share it) ----
+
+test('routeStatus prefers the passive record; a check that could not run is unknown, not a fault', () => {
+  const routeStatus = loadClient().routeStatus
+  assert.equal(routeStatus({ 'a/b': { status: 'unhealthy' } }, { 'a/b': { kind: 'reachable' } }, 'a/b'), 'unhealthy',
+    'a real observation outranks a synthetic check')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'reachable' } }, 'a/b'), 'healthy')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'notAdvertised', advertised: 3 } }, 'a/b'), 'degraded')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'unreachable', reason: 'timeout' } }, 'a/b'), 'unhealthy')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'unavailable', reason: 'notConfigurable' } }, 'a/b'), 'unknown',
+    'a check that could not run says nothing about the channel')
+  assert.equal(routeStatus({}, {}, 'a/b'), 'unknown')
+})
+
+// ---- workbench structure (hand-written createElement nesting) ----
+
+test('the workbench keeps the sidebar and the workspace pane as siblings', () => {
+  // A missing paren in the deep h() nesting does not break `node --check`:
+  // the closes just migrate to the end of the return, and the workspace pane
+  // silently becomes the sidebar's third child (squeezed into its 260px
+  // column). Balance is not structure — assert the shape on the source.
+  const source = sourceOf('page.ts')
+  const lines = source.split('\n')
+  const asideLine = lines.findIndex((l) => l.includes("className: 'dsh-router-master-sidebar'"))
+  const ternaryLine = lines.findIndex((l, i) => i > asideLine && /^\s+isHealthMode\s*$/.test(l))
+  assert.ok(asideLine >= 0 && ternaryLine > asideLine, 'fixture: sidebar and workspace switch both exist')
+  // Depth at the aside's own opening line, after that line is consumed.
+  const depthAfter = (upto) => {
+    let depth = 0
+    for (let i = asideLine; i <= upto; i++) {
+      for (const ch of lines[i]) {
+        if (ch === '(') depth += 1
+        else if (ch === ')') depth -= 1
+      }
+    }
+    return depth
+  }
+  const asideOpenDepth = depthAfter(asideLine)
+  // Walk forward until the aside's call closes; it must happen before the
+  // workspace ternary, or the pane lands inside the sidebar.
+  let closeLine = -1
+  for (let i = asideLine + 1; i < lines.length; i++) {
+    if (depthAfter(i) < asideOpenDepth) { closeLine = i; break }
+  }
+  assert.ok(closeLine >= 0, 'the sidebar call closes somewhere')
+  assert.ok(closeLine < ternaryLine,
+    `the sidebar must close (L${closeLine + 1}) before the workspace switch (L${ternaryLine + 1})`)
+})
+
+// ---- modal bounds (a settings dialog must never escape the viewport) ----
+
+test('every plugin dialog is capped to the viewport and scrolls inside itself', () => {
+  // A `prim.Modal` is centred in a `position: fixed; inset: 0` root, so a card
+  // taller than the viewport pushes its own header above the top edge with no
+  // way to scroll to it. The bound therefore lives on the dialog element, and
+  // it has to be reached through the `className` hook — DSH's own `.dialog`
+  // rule carries no `max-height` at all, so dropping either side of this pair
+  // (the class on the Modal, or the rule in ROUTER_CSS) silently restores the
+  // clipped-header failure the user reported. The class names live on the
+  // dialog components; the rules live in the stylesheet module.
+  const components = sourceOf('modals.ts')
+  const css = sourceOf('styles.ts').slice(
+    sourceOf('styles.ts').indexOf('var ROUTER_CSS'),
+    sourceOf('styles.ts').indexOf('function ensureStyles'),
+  )
+
+  for (const cls of ['dsh-router-settings-modal', 'dsh-router-candidate-modal']) {
+    assert.ok(components.includes(`className: '${cls}'`),
+      `${cls} must be handed to Modal so the bound has something to bind to`)
+    assert.ok(css.includes(`.${cls}`),
+      `ROUTER_CSS must carry a rule for .${cls}`)
+  }
+  // One shared rule block bounds both: assert it once, on the block itself.
+  const dialogBlock = css.slice(
+    css.indexOf('.dsh-router-settings-modal'),
+    css.indexOf('.dsh-router-settings-modal [class*="content"]'),
+  )
+  assert.match(dialogBlock, /max-height:\s*84vh\s*!important/,
+    'the dialog block must cap height against the viewport, not its content')
+  assert.match(dialogBlock, /overflow:\s*hidden\s*!important/,
+    'the dialog block must clip so the body is the only scroller')
+  // The body rule is a separate block that follows the content rule.
+  assert.match(css, /\[class\*="body"\][^}]*\{[^}]*overflow-y:\s*auto\s*!important/,
+    'the body must scroll, which is what keeps the header and footer on screen')
+})
+
+// ---- breaker rule edits must not read the render-time closure ----
+
+test('breaker rule mutations go through the state updater, not the closure', () => {
+  // `setRules(rules.concat(...))` reads the array captured at render. React
+  // batches, so two clicks in one tick both append to that same array and the
+  // last write wins: a fast double-click on a preset chip or on "+ 添加规则"
+  // silently drops a rule the user just saw appear. The updater form is the
+  // only version that survives batching.
+  const source = sourceOf('modals.ts')
+  const closureWrites = source.match(/setRules\(rules[.)]/g) ?? []
+  assert.deepEqual(closureWrites, [],
+    `breaker rule edits must use setRules(current => ...), found ${closureWrites.length} closure write(s)`)
+  // And the updater form must actually be there, so the guard is not vacuous.
+  assert.ok(source.includes('setRules(function (current)'),
+    'fixture: the updater form is present in the source')
 })
 
 // ---- per-candidate edits ----

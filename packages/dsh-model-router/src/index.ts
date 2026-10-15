@@ -42,6 +42,11 @@ export const inject = ['llm']
 
 export { Config } from './config.ts'
 
+// The Typert host-face surface: re-exported so the generator's package model
+// collects the @typert-marked declaration from this entry module
+// (packages/typert/generator/src/analyzer.ts:748-789).
+export type { Profile } from './config.ts'
+
 export function apply(ctx: Context, config: Config): void {
   const states = new RouterState()
   const breaker = new CircuitBreaker()
