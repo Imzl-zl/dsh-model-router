@@ -13,6 +13,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -557,6 +558,57 @@ const channelHealth = events => {
   return state.records
 }
 
+/**
+ * fork/resume 一致性（open-questions §三.3 的待实测项）。
+ *
+ * DSH 的 resume/fork 靠「checkpoint + 尾序重放」重建投影状态
+ * （docs/subsystems/session-projection.md），所以插件侧有两条硬契约：
+ *   ① apply 是纯函数——不改入参、不依赖调用顺序之外的任何东西；
+ *   ② state 是 plain JSON，且它的 JSON 形态过得了自己单元的 stateSchema
+ *      （持久缓存与冷读路径都要 parse 它）。
+ * 任一条件被破坏，分段时间线就会与一次 fold 分叉——而那正是 fork/resume 会暴露的错误。
+ *
+ * 这里用真 boot 产生的 durable 日志验：一次 fold vs 分三段 fold、每段边界过一遍
+ * JSON 往返（等价于 checkpoint 的 detached structured clone），两者必须逐字相等；
+ * 再把一次 fold 的 JSON 形态喂回 stateSchema（冷读就是这么做的）。
+ */
+const assertFoldIsForkSafe = events => {
+  for (const [name, projection] of [
+    ['failover-history', failoverHistoryProjection],
+    ['channel-health', channelHealthProjection],
+  ]) {
+    let one = projection.init()
+    let purityViolations = 0
+    for (const event of events) {
+      // 纯函数的一半：apply 不得就地修改入参。checkpoint 是"当时状态的副本"，若 apply
+      // 改入参，已取走的 checkpoint 会被后续事件悄悄改写——分段时间线因此与一次 fold
+      // 分叉。持有入参引用，apply 之后再序列化它，与调用前快照比较；汇总成一条断言，
+      // 不每个事件刷一行。
+      const inputSnapshot = JSON.stringify(one)
+      const inputRef = one
+      one = projection.apply(one, event)
+      if (JSON.stringify(inputRef) !== inputSnapshot) purityViolations += 1
+    }
+    eq(`fold ${name}: apply never mutates its input`, purityViolations, 0)
+
+    let chunked = projection.init()
+    const size = Math.max(1, Math.ceil(events.length / 3))
+    for (let i = 0; i < events.length; i += size) {
+      for (const event of events.slice(i, i + size)) chunked = projection.apply(chunked, event)
+      chunked = JSON.parse(JSON.stringify(chunked))
+    }
+
+    // 比较落在**持久化形态**上：fork/resume 重建的就是 JSON 化后的状态，所以
+    // "键顺序"与"值为 undefined 的键被 JSON 丢掉"都不该算差异——两者在冷读时
+    // 语义一致（读回来都是 undefined，schema 也是 .optional()）。
+    const persisted = state => JSON.parse(JSON.stringify(state))
+    deep(`fold ${name}: chunked replay equals one pass`, persisted(chunked), persisted(one))
+    deep(`fold ${name}: wire view survives replay`, persisted(projection.wire.view(chunked)), persisted(projection.wire.view(one)))
+    // 冷读路径：持久化的是 JSON 形态，读回来要过自己的 schema。
+    projection.stateSchema.parse(JSON.parse(JSON.stringify(one)))
+  }
+}
+
 // ---------- assertions ----------
 
 const failures = []
@@ -570,6 +622,17 @@ function eq(label, actual, expected) {
 function ok(label, condition) {
   if (condition) console.log(`    ok  ${label}`)
   else { console.log(`    FAIL ${label}`); failures.push(`${current}: ${label}`) }
+}
+/** 语义相等（忽略键顺序）——JSON 往返会丢掉可选键、由后续 apply 加到末尾，改的是
+ *  插入顺序不是值，投影契约对键顺序无要求（持久化再 parse、fold 都不看顺序）。 */
+function deep(label, actual, expected) {
+  try {
+    assert.deepStrictEqual(actual, expected)
+    console.log(`    ok  ${label}`)
+  } catch (error) {
+    console.log(`    FAIL ${label}: ${error.message.split('\n').slice(0, 6).join(' ')}`)
+    failures.push(`${current}: ${label}`)
+  }
 }
 
 // ---------- main ----------
@@ -593,6 +656,9 @@ for (const scenario of SCENARIOS) {
     continue
   }
   scenario.check(events)
+  // fork/resume 一致性对每个场景都成立——投影状态必须是已提交事件序列的确定性函数。
+  // 各场景的事件形态不同（纯成功 / 跨候选 / 熔断 / 条件跳过），合起来才是完整覆盖。
+  assertFoldIsForkSafe(events)
 }
 console.log(`\n${ran} scenario(s), ${failures.length} failure(s)`)
 if (failures.length > 0) {

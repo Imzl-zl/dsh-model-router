@@ -240,8 +240,7 @@ waterfall 里 `await next()` 的解析值就是内层结果；llm-retry 放弃�
 
 ## 仍未处理（下批）
 
-1. fork/resume 投影一致性测试（open-questions §三.3）——需要真实 checkpoint 重放 harness。
-2. 渲染层其余结论（断点、间距、魔法数）未经浏览器量测，本轮未动。
+1. 渲染层其余结论（断点、间距、魔法数）未经浏览器量测，本轮未动。
 
 ## 浏览器实测（2026-10-16，隔离 `.dshhome-view` + 端口 3391 + Chrome MCP）
 
@@ -268,3 +267,20 @@ context`）；② `dsh.client.inject` 按 DSH 源码只是加载/预取元数据
 DSH 自己的 `flex row`，不再波及其他同 slot 注册者），满宽对齐改到自己按钮的
 `.wide:only-child` 规则上；实测按钮 260×42、`margin:4px -2px` 与 DSH 自己的设置行对齐，
 视觉与改前一致。
+
+## 投影 fork/resume 一致性（open-questions §三.3，2026-10-16 实测关闭）
+
+DSH 的 resume/fork 靠「checkpoint + 尾序重放」重建投影状态，所以插件侧有两条硬契约：
+**apply 是纯函数**（不改入参）与 **state 是 plain JSON 且过得了自己的 stateSchema**
+（持久缓存与冷读都要 parse 它）。`tests/run.mjs` 的 `assertFoldIsForkSafe` 用每个场景真
+boot 产生的 durable 日志验四件事：一次 fold 与「分三段 fold + 每段边界 JSON 往返」
+（= checkpoint 的 detached clone）的**持久形态**一致、wire view 一致、持久形态过单元
+自己的 `stateSchema`、以及 apply 从不就地修改入参。
+
+比较落在持久形态上而非原对象：JSON 往返会丢掉值为 `undefined` 的键、后续 apply 再把它
+加到末尾，改的是插入顺序不是值——冷读时两者语义一致（都读成 `undefined`，schema 也是
+`.optional()`）。第一版断言用 `JSON.stringify` 全量比较，被这个键顺序差异误报，是断言写错
+不是产品缺陷。
+
+**red-check**：把 lineage 的 `apply` 改成就地写 `state.lastRoute`，纯度断言立刻报红 7 处、
+恢复后全绿——证明这道断言不是空转的。

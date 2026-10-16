@@ -40,11 +40,14 @@ last_updated: "2026-10-14"
 
 ## 三、剩余待实测（非决策，不阻塞开工）
 
-1. 完整候选链 `runLoaderSmoke` 组合测试（含预校验跳过候选用例）。
-2. notice 在浏览器的实际折叠行样式（源码路径已确认）。
-3. 投影 fork/resume 与 snapshot 重放一致性。
-4. 设置页读自有投影（`list` → `projections`）无同型先例；机制已核实（guard 放行 + 值含插件 key），组合测试覆盖。
-5. 插件热卸载：listeners、投影注册、UI slot 全部清除。
+1. notice 在浏览器的实际折叠行样式（源码路径已确认）。
+2. 设置页读自有投影（`list` → `projections`）无同型先例；机制已核实（guard 放行 + 值含插件 key），组合测试覆盖。
+3. 插件热卸载：listeners、投影注册、UI slot 全部清除（宿主侧定时器已有 remote.mjs 断言）。
+4. **投影 fork/resume 一致性**（2026-10-16 已实测关闭）：`tests/run.mjs` 的
+   `assertFoldIsForkSafe` 用每个场景真 boot 产生的 durable 日志验证——一次 fold 与
+   「分三段 fold + 每段边界 JSON 往返（= checkpoint 的 detached clone）」的持久形态一致、
+   wire view 一致、持久形态过单元自己的 stateSchema、且 apply 从不就地修改入参
+   （red-check 证实：把 apply 改成就地写会立刻报红）。
 
 ## 四、识图路由裁定（2026-10-14，源码核查后）
 
