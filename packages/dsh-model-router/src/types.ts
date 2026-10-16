@@ -13,7 +13,7 @@
  * .agents/notes/implemented/2026-10-15-plugin-remote-probe.md
  */
 
-/** One physical route the probe measures. Identity is DSH's own provider/model. */
+/** One physical route a run addresses. Identity is DSH's own provider/model. */
 export interface ProbeRoute {
   provider: string
   model: string
@@ -49,4 +49,37 @@ export interface ProbeRouteResult {
 export interface ProbeReport {
   at: number
   routes: ProbeRouteResult[]
+}
+
+/** What a connectivity run covers. An empty `routes` means every configured route. */
+export interface ConnectivityRequest {
+  routes: ProbeRoute[]
+}
+
+/**
+ * One route's connectivity-check outcome.
+ *
+ * `unavailable` / `unreachable` draw the same line {@link ProbeRouteResult}
+ * draws, for the tier that asks DSH's own model discovery for a model list
+ * instead of generating a token: `unavailable` means the check could not run at
+ * all — the route is not a configurable provider, DSH registers no model
+ * discovery for its settings namespace, or the Host face did not answer. It
+ * says nothing about the channel, so the UI must read it as "unknown", never as
+ * a fault. `unreachable` means the discovery ran and the endpoint, the
+ * credential, or the listing refused it.
+ *
+ * `notAdvertised` is this tier's own fourth answer: the endpoint answered and
+ * the credential was accepted, but the model is not on its list. That is a fact
+ * about the model, not a fault of the channel.
+ */
+export interface ConnectivityVerdict {
+  provider: string
+  model: string
+  kind: 'reachable' | 'notAdvertised' | 'unreachable' | 'unavailable'
+  /** Why the check could not run at all — a plugin-owned token, never a channel fault. */
+  reason?: string
+  /** Provider-neutral failure code, when the discovery ran and failed. */
+  error?: string
+  /** How many models the endpoint advertised, when it answered. */
+  advertised?: number
 }

@@ -373,33 +373,61 @@ test('a single-route check shows busy on that route only, then lands the verdict
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], true, 'the route shows busy while the check crosses the wire')
   assert.equal(h.state().ui.checking, false, 'a single check does not busy the global checker')
   await pending
-  await flush()
+  await settleBusy()
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], undefined, 'busy clears once the verdict lands')
-  assert.deepEqual(h.state().ui.discover['deepseek/m'], { kind: 'reachable' }, 'the verdict is folded into the route map')
-  assert.equal(stubs.calls.discoverModels, 1)
+  assert.deepEqual(h.state().ui.discover['deepseek/m'], { provider: 'deepseek', model: 'm', kind: 'reachable' },
+    'the verdict is folded into the route map, keyed the way the Host names it')
+  assert.equal(stubs.calls.checkConnectivity, 1)
+  assert.deepEqual(stubs.calls.routes[0], [{ provider: 'deepseek', model: 'm' }])
 })
 
 test('a second check for the same route while one is in flight is ignored', async () => {
   let release
-  const stubs = discoverStubs(() => new Promise((resolve) => { release = resolve }))
+  const stubs = healthStubs(() => new Promise((resolve) => { release = resolve }))
   const h = await mount({ value: config(), remote: stubs.remote })
   h.actions.onCheckRoute('deepseek', 'm')
   await flush()
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], true, 'the first check is still in flight')
   const second = h.actions.onCheckRoute('deepseek', 'm')
   assert.equal(second, undefined, 'the duplicate call is dropped, not queued')
-  release({ ok: true, value: [{ id: 'm' }] })
+  release({ ok: true, value: [{ provider: 'deepseek', model: 'm', kind: 'reachable' }] })
   await flush()
-  assert.equal(stubs.calls.discoverModels, 1, 'only one wire call was made')
+  assert.equal(stubs.calls.checkConnectivity, 1, 'only one wire call was made')
 })
 
 test('a failed single check clears the busy state instead of spinning forever', async () => {
-  const stubs = discoverStubs(() => Promise.reject(new Error('wire down')))
+  const stubs = healthStubs(() => Promise.reject(new Error('wire down')))
   const h = await mount({ value: config(), remote: stubs.remote })
   await h.actions.onCheckRoute('deepseek', 'm')
-  await flush()
+  await settleBusy()
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], undefined, 'busy clears on failure too')
-  assert.deepEqual(h.state().ui.discover['deepseek/m'], { kind: 'unreachable', reason: 'wire down' })
+  assert.deepEqual(h.state().ui.discover['deepseek/m'],
+    { provider: 'deepseek', model: 'm', kind: 'unavailable', reason: 'hostUnavailable' },
+    'a check that never reached the Host is 没能检查, never a channel fault')
+})
+
+test('a route the Host cannot check at all is 没能检查, and a refusal still is not', async () => {
+  // The boundary this round fixed: DSH registers no model discovery for the
+  // DeepSeek family (llm-deepseek/src/host.ts:55 registers an adapter only), so
+  // a connectivity check is structurally impossible for `deepseek-official`.
+  // That used to arrive as `unreachable` and painted the card red. The reverse
+  // boundary rides along: a discovery that really ran and refused keeps its
+  // code and stays a fault.
+  const stubs = healthStubs(answerWith((route) => route.provider === 'deepseek'
+    ? { provider: route.provider, model: route.model, kind: 'unavailable', reason: 'noDiscovery', error: 'NO_DISCOVERY' }
+    : { provider: route.provider, model: route.model, kind: 'unreachable', error: 'AUTH' }))
+  const h = await mount({ value: config(), remote: stubs.remote })
+  await h.actions.onCheckRoute('deepseek', 'm')
+  await settleBusy()
+  const verdict = h.state().ui.discover['deepseek/m']
+  assert.equal(verdict.kind, 'unavailable')
+  assert.equal(verdict.reason, 'noDiscovery')
+  assert.equal(verdict.error, 'NO_DISCOVERY')
+  await h.actions.onCheckRoute('other', 'm2')
+  await settleBusy()
+  const refused = h.state().ui.discover['other/m2']
+  assert.equal(refused.kind, 'unreachable', 'a discovery that ran and refused is still a fault')
+  assert.equal(refused.error, 'AUTH')
 })
 
 // ---- route status derivation (the signal dot, nav badge and filters share it) ----
@@ -416,6 +444,8 @@ test('routeStatus prefers the passive record; a check that could not run is unkn
   assert.equal(routeStatus({}, { 'a/b': { kind: 'unreachable', reason: 'timeout' } }, {}, 'a/b'), 'unhealthy')
   assert.equal(routeStatus({}, { 'a/b': { kind: 'unavailable', reason: 'notConfigurable' } }, {}, 'a/b'), 'unknown',
     'a check that could not run says nothing about the channel')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'unavailable', reason: 'noDiscovery', error: 'NO_DISCOVERY' } }, {}, 'a/b'), 'unknown',
+    'a channel DSH cannot check at all is unknown too, never a fault')
   assert.equal(routeStatus({}, {}, { 'a/b': { kind: 'unavailable', reason: 'notConfigurable' } }, 'a/b'), 'unknown',
     'a probe that could not run is unknown too, never a fault')
   assert.equal(routeStatus({}, {}, {}, 'a/b'), 'unknown')
@@ -588,28 +618,23 @@ test('checkAll walks every configured route and lands its verdict keyed by route
       default: defaultPool({ enabled: true, candidates: [{ provider: 'third', model: 'm3', maxAttempts: 1, weight: 0 }] }),
     }),
     remote: {
-      llm: {
-        listConfigurableProviders: () => Promise.resolve({ ok: true, value: [
-          { provider: 'deepseek', settingsNs: 'ns-a', settingsPath: [] },
-          { provider: 'other', settingsNs: 'ns-b', settingsPath: [] },
-          { provider: 'third', settingsNs: 'ns-c', settingsPath: [] },
-        ] }),
-        discoverModels: (_ns, request) => {
-          asked.push(request.provider)
+      routerHealth: {
+        checkConnectivity: (request) => {
+          asked.push(...request.routes.map((route) => route.provider))
           // 每个渠道广告不同的模型 id，让三种判定各出现一次：在清单里 / 不在清单里。
           var advertised = { deepseek: ['m'], other: ['not-this-one'], third: ['m3'] }
-          return Promise.resolve({ ok: true, value: (advertised[request.provider] ?? []).map((id) => ({ id })) })
+          return Promise.resolve({
+            ok: true,
+            value: request.routes.map((route) => advertised[route.provider].includes(route.model)
+              ? { provider: route.provider, model: route.model, kind: 'reachable' }
+              : { provider: route.provider, model: route.model, kind: 'notAdvertised', advertised: advertised[route.provider].length }),
+          })
         },
       },
-      settings: { describe: () => Promise.resolve({ ok: true, value: { namespaces: [
-        { ns: 'ns-a', value: { baseURL: 'https://a.example' } },
-        { ns: 'ns-b', value: { baseURL: 'https://b.example' } },
-        { ns: 'ns-c', value: { baseURL: 'https://c.example' } },
-      ] } }) },
     },
   })
   h.actions.onCheckAll()
-  await new Promise((resolve) => setTimeout(resolve, 60))
+  await settleBusy()
   // 三条渠道各问一次（去重后），verdict 按 `provider/model` 落库。
   assert.deepEqual(asked.sort(), ['deepseek', 'other', 'third'])
   const discover = h.state().ui.discover
@@ -618,6 +643,29 @@ test('checkAll walks every configured route and lands its verdict keyed by route
   assert.equal(discover['third/m3']?.kind, 'reachable')
   assert.equal(h.state().ui.checking, false, 'the run settles')
   assert.ok(h.state().ui.checkSummary, 'the summary line is what the user sees after a run')
+  assert.equal(h.state().ui.checkSummary.total, 3, 'the summary counts every route the run was asked about')
+})
+
+test('a run the Host cannot answer still counts every route as 没能检查', async () => {
+  // The summary must not silently drop the routes nobody answered for: a run
+  // that reports "可达 1" when three were asked under-reports what the user
+  // asked for, which is the same lie in the other direction.
+  const h = await mount({
+    value: config({
+      profiles: [profile({ candidates: [
+        { provider: 'deepseek', model: 'm', maxAttempts: 1, weight: 0 },
+        { provider: 'other', model: 'm2', maxAttempts: 1, weight: 0 },
+      ] })],
+    }),
+    remote: { routerHealth: { checkConnectivity: () => Promise.resolve({ ok: false }) } },
+  })
+  h.actions.onCheckAll()
+  await settleBusy()
+  const summary = h.state().ui.checkSummary
+  assert.equal(summary.total, 2)
+  assert.equal(summary.counts.unknown, 2, 'both routes are counted as 没能检查')
+  assert.equal(summary.counts.bad, undefined, 'nothing is counted as 不可达')
+  assert.match(summary.text, /没能检查 2/)
 })
 
 test('the workbench keeps the sidebar and the workspace pane as siblings', async () => {
@@ -705,6 +753,85 @@ test('breaker rule mutations go through the state updater, not the closure', asy
   // And the updater form must actually be there, so the guard is not vacuous.
   assert.ok(source.includes('setRules(function (current)'),
     'fixture: the updater form is present in the source')
+})
+
+// 连通性检查的分类只能发生在宿主侧。`LlmRuntime.discoverModels` 抛的
+// `LlmError` 带着可路由的 `code`，而 `remoteDiscoverModels` 用
+// `RemoteError('llm/model-discovery-rejected', message)` 把它包掉
+// （llm/src/index.ts:639-647），code 到不了浏览器。所以客户端一旦自己调
+// `remote.llm.discoverModels`，就只剩下"按 message 猜"这一条路——那正是
+// HarnessError 契约明令禁止的（llm/src/error.ts："route on this, never by
+// parsing `message`"）。这条守卫盯着那个回归：浏览器半包重新伸手去够 DSH 的
+// llm/settings remote。
+test('the connectivity check is classified on the Host, never by parsing a message in the browser', async () => {
+  // Comments legitimately name DSH's remote to explain why it is not used, so
+  // the guard reads code only.
+  const codeOf = (name) => sourceOf(name)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|\s)\/\/.*$/gm, '$1')
+  const controller = codeOf('controller.ts')
+  assert.ok(controller.includes('ctx.remote.routerHealth'),
+    'the check must go through this plugin\'s own Host face')
+  assert.ok(!controller.includes('discoverModels'),
+    'the browser half must not call DSH\'s discovery remote itself — its error code does not survive the wrapper')
+  assert.ok(!controller.includes('listConfigurableProviders'),
+    'the configurable-provider directory is the Host\'s read, not the browser\'s')
+  assert.ok(!controller.includes('settings.describe'),
+    'the stored baseURL is the Host\'s read, not the browser\'s')
+  // 浏览器半包不再需要 DSH 的这两个 remote：留着就是一条没人走的依赖声明，
+  // 而"谁能调谁"正是这次搬迁要收窄的东西。
+  const apply = codeOf('apply.ts')
+  for (const face of ['remote.llm', 'remote.settings']) {
+    assert.ok(!apply.includes(`'${face}'`),
+      `${face} must leave the browser half's inject list now that the check runs on the Host`)
+  }
+  // 但 `remote.routerHealth` 只能出现在 UI fiber 的 inject 里：它是本包自己的
+  // 贡献，由 applyInner 里的 `$mount` 挂上。写进顶层 inject 就是向一个只有
+  // 本次 apply 才能提供的服务要服务——实测整个 entry 永不激活
+  // （"waiting for service: remote.routerHealth"）。
+  const topLevel = apply.slice(apply.indexOf('export const inject'), apply.indexOf('export async function apply'))
+  assert.ok(!topLevel.includes('remote.routerHealth'),
+    'the plugin\'s own Remote must not be declared at the top level — only its own $mount can provide it')
+  assert.ok(/ctx\.inject\(\['remote\.routerHealth'/.test(apply),
+    'the UI fiber declares it after the mount, which is what makes it resolvable')
+  // 四个判定理由都必须在渲染侧有名字：少一个就会出现"通用兜底句"把真实
+  // 原因抹平——那正是本轮修掉的那条谎的复发形式。
+  const workspace = sourceOf('workspace.ts')
+  for (const reason of ['notConfigurable', 'noDiscovery', 'hostUnavailable']) {
+    assert.ok(workspace.includes(`'${reason}'`),
+      `the unavailable reason ${reason} must have its own tooltip branch`)
+  }
+  for (const key of ['connectivityNoDiscovery', 'connectivityHostUnavailable']) {
+    const locales = sourceOf('locales.ts')
+    assert.equal((locales.match(new RegExp(`\\b${key}:`, 'g')) ?? []).length, 2,
+      `${key} must be worded in both dictionaries`)
+  }
+})
+
+// 忙态必须看得见。预检即失败的路由（NO_ADAPTER / MISSING_CREDENTIAL）在微任务里
+// resolve，"置忙"和"清忙"两次 publish 被 React 批进同一帧：实测两次 DOM 提交落在
+// 点击后 2ms 与 7ms，转圈存在 5 毫秒且从未被绘制——用户看到的就是"点了没反应"。
+// 每个异步入口都必须经过 holdBusy，让忙态至少停留 MIN_BUSY_MS。
+test('every async run holds its busy state long enough to be painted', async () => {
+  const source = sourceOf('controller.ts')
+  assert.ok(/var MIN_BUSY_MS = \d+/.test(source), 'the busy floor must be a named constant')
+  const floor = Number(source.match(/var MIN_BUSY_MS = (\d+)/)[1])
+  assert.ok(floor >= 300 && floor <= 1200,
+    `the floor must be perceptible but not sluggish, got ${floor}ms`)
+  assert.ok(/function holdBusy|holdBusy: function/.test(source),
+    'the floor must live in one helper, not four copies')
+  // 四个入口：全量巡检、单路连通性、全量探测、单路探测。
+  for (const entry of ['checkAll: function', 'checkRouteSingle: function', 'probeAll: function', 'probeRouteSingle: function']) {
+    const at = source.indexOf(entry)
+    assert.ok(at > 0, `fixture: ${entry} exists`)
+    const end = source.indexOf('\n    },', at)
+    const body = source.slice(at, end === -1 ? undefined : end)
+    assert.ok(/holdBusy\(started/.test(body),
+      `${entry} must settle through holdBusy, or an instant failure shows no feedback`)
+  }
+  // 而且 settle 必须真的在 holdBusy 里面（在它外面清忙等于没包）。
+  const clearings = source.match(/ui\.(checking|probing|checkingRoutes|probingRoutes)\s*=\s*false|delete ui\.(checkingRoutes|probingRoutes)\[key\]/g) ?? []
+  assert.ok(clearings.length > 0, 'fixture: busy states are cleared somewhere')
 })
 
 // ---- per-candidate edits ----

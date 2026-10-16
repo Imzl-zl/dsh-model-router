@@ -26,6 +26,28 @@ function probeVerdictText(t, verdict) {
   return t('probeBadgeUnknown')
 }
 
+/**
+ * Why a connectivity check could not run at all, as the button's tooltip.
+ *
+ * The reasons are the plugin's own tokens and each names a different thing the
+ * user can act on: the route is not a configurable provider (nothing to ask),
+ * DSH registers no model discovery for it (use the 1-token probe instead), or
+ * the plugin's own Host face did not answer (nothing ran). The DSH code rides
+ * along when there is one, so a future member of the family stays legible
+ * instead of being flattened into the generic sentence.
+ *
+ * Note: 为何这个按钮保持可点、为何每个 reason 都要有自己的句子 —— 见
+ * .agents/notes/implemented/2026-10-16-connectivity-no-discovery-is-not-a-refusal.md
+ */
+function connectivityUnavailableTitle(t, verdict) {
+  if (verdict.reason === 'notConfigurable') return t('connectivityNotConfigurable')
+  if (verdict.reason === 'noDiscovery') {
+    return t('connectivityNoDiscovery') + (verdict.error ? '（' + verdict.error + '）' : '')
+  }
+  if (verdict.reason === 'hostUnavailable') return t('connectivityHostUnavailable')
+  return t('connectivityUnavailable')
+}
+
 export function GlobalHealthWorkspace(props) {
   var t = props.t
   var draft = props.draft
@@ -305,8 +327,8 @@ export function GlobalHealthWorkspace(props) {
                   title: disc
                     ? (disc.kind === 'reachable' ? t('connectivityReachable')
                       : disc.kind === 'notAdvertised' ? t('connectivityNotAdvertised') + '（' + t('connectivityAdvertisedCount') + ' ' + (disc.advertised ?? 0) + '）'
-                        : disc.kind === 'unavailable' ? (disc.reason === 'notConfigurable' ? t('connectivityNotConfigurable') : t('connectivityUnavailable'))
-                          : t('connectivityUnreachable'))
+                        : disc.kind === 'unavailable' ? connectivityUnavailableTitle(t, disc)
+                          : t('connectivityUnreachable') + (disc.error ? '（' + disc.error + '）' : ''))
                     : t('connectivityNotRun'),
                   onClick: function () { props.onCheckRoute(ch.provider, ch.model) },
                 },

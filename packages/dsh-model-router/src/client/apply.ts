@@ -12,21 +12,27 @@ import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts'
 import remote from 'dsh-model-router/remote'
 import { createController } from './controller.ts'
 import { ModelRouterFooterAction } from './footer.ts'
-import { RouterPage } from './page.ts'
 import { CONFIG_NS, NS, en, zh } from './locales.ts'
 import { ensureStyles } from './styles.ts'
 
 export const name = NS + '/client'
 
-// `remote.llm` carries the connectivity check (DSH's own model discovery) and
-// `remote.settings` carries the endpoint facts it needs. `remote` is the Remote
-// namespace this package's own `./remote` contribution mounts into, which is
-// what the 1-token probe endpoint is reached through.
+// `remote` is the Remote namespace this package's own `./remote` contribution
+// mounts into, and `remote.session` carries the catalog and the passive fold.
+// `remote.routerHealth` is deliberately NOT in this top-level list: it is this
+// package's own contribution, mounted by `$mount` inside `applyInner` below, so
+// declaring it here asks for a service that only this very apply can provide
+// (measured: the entry then never activates — "waiting for service:
+// remote.routerHealth"). The UI fiber declares it in its own `inject` below,
+// which runs after the mount.
+// The browser half also no longer needs DSH's own `remote.llm` /
+// `remote.settings` — the connectivity check moved to the Host so its
+// classification can see the `LlmError` code (see ../../connectivity.ts).
 // `shortcuts` 走 Cordis fiber inject——不是 dsh.client.inject：按 DSH 源码
 // （client/modules/src/client/manifest.ts 与 ui-workspace/src/client/index.ts:88-98 的
 // 注释），dsh.client.inject 只是加载/预取元数据，"never apply sequencing"。顺序由依赖
 // 表达：fiber inject 让本插件等 shortcuts 服务就绪才激活。ui-workspace 同款注入。
-export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings', 'shortcuts']
+export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'shortcuts']
 
 /**
  * Mount the config page for this bundle.
@@ -60,7 +66,7 @@ async function applyInner(ctx: Context): Promise<() => Promise<void>> {
   // 同样声明"要依赖哪个服务就列哪个"）。`shortcuts` 必须出现在这里，因为
   // registerUi 在这个 child 上注册保存命令——漏列它会在激活时抛
   // "cannot get required service shortcuts in inactive context"。
-  var ui = ctx.inject(['remote.routerHealth', 'slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings', 'shortcuts'], function (child) {
+  var ui = ctx.inject(['remote.routerHealth', 'slots', 'locale', 'configForms', 'remote', 'remote.session', 'shortcuts'], function (child) {
     registerUi(child, t)
   })
   try {
@@ -77,7 +83,24 @@ async function applyInner(ctx: Context): Promise<() => Promise<void>> {
 }
 
 /**
- * Register the page, the sidebar entry, and the controller behind them.
+ * Register the sidebar entry, the quick dialog behind it, and the controller
+ * both of them read.
+ *
+ * There is exactly one surface: the sidebar entry opens a dialog that renders
+ * the whole workbench. This plugin used to also register a `plugins.bundle.config`
+ * page, which put the same workbench on DSH's Plugins page — inside that page's
+ * own header, its component list, and a 960px settings column. Two carriers for
+ * one editor meant two sets of layout constants (the page's sticky header, its
+ * `margin: 0 -20px` bleed, its 768px media query and its `100vh - 292px` caps),
+ * and every one of them was wrong for the dialog. Measured in the browser
+ * before the removal: the page overflowed its settings column by 222px at a
+ * 768px viewport because its min-content floor came from the sticky header's
+ * nowrap row. The dialog is the surface users actually open, so the page is
+ * gone and its layout debt went with it.
+ *
+ * Note: 载体取舍与被否方案（为何删页面而非修页面）—— 见
+ * .agents/notes/implemented/2026-10-16-single-surface-dialog-and-tone-system.md
+ *
  * @param ctx - child context carrying the mounted probe Remote.
  * @param t - the bound dictionary.
  */
@@ -156,13 +179,10 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     releaseSurface: function () { controller.releaseSurface() },
   }
 
-  ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-    name: 'plugins.bundle.config',
-    key: 'dsh-model-router',
-    locale: NS,
-    inject: () => Object.assign({ hooks: { routerPage: controller.store } }, actions),
-  }, RouterPage)), 'router: config page')
-
+  // The sidebar entry is the only surface: clicking it opens the quick dialog,
+  // which renders the whole workbench (footer.ts). The config namespace comes
+  // from `ctx.configForms.get(CONFIG_NS)` above, not from this registration, so
+  // dropping the Plugins-page carrier cost nothing here.
   ctx.effect(() => ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
     id: 'model-router',

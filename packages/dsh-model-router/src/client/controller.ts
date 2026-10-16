@@ -237,77 +237,46 @@ export function createController(ctx, scope, t) {
   loadPassive()
 
   /**
-   * Connectivity check: ask one route for its model list through DSH's own
-   * discovery remote — the same call the Models page's "fetch available
-   * models" button makes. It sends no content, so it costs no tokens, and
-   * it proves three things a stale config cannot: the endpoint answers,
+   * Connectivity check: ask the Host for one or more routes' model lists
+   * through DSH's own discovery — the same call the Models page's "fetch
+   * available models" button makes. It sends no content, so it costs no tokens,
+   * and it proves three things a stale config cannot: the endpoint answers,
    * the credential is accepted, and this model id is advertised.
    *
-   * The request names only the namespace and the route. A configured route
-   * supplies its own endpoint and credential inside the Host, so the client
-   * reads the namespace from `listConfigurableProviders` and the stored
-   * baseURL from `settings.describe` — both are DSH's own reads, which is why
-   * this never guesses a provider's settings shape.
+   * The call goes to this plugin's own Host face rather than to
+   * `remote.llm.discoverModels` directly, because the classification has to
+   * happen where the `LlmError` code is still alive — see
+   * ../connectivity.ts. The browser receives an already-classified verdict and
+   * never has to guess from a message.
+   *
+   * A run always answers for every route it was asked about: the Host
+   * guarantees one verdict per requested route, and the two paths that cannot
+   * reach it at all (the face unmounted, the call refused) synthesize the
+   * honest "could not check" verdict per route instead of leaving holes — a
+   * route nobody answered for is exactly 没能检查, and a summary that silently
+   * omits it would under-report what the user asked for.
+   *
+   * Note: 为何这条路必须走宿主（LlmError.code 过不了 Remote 信封）—— 见
+   * .agents/notes/implemented/2026-10-16-connectivity-no-discovery-is-not-a-refusal.md
    */
-  /**
-   * provider → (settingsNs, baseURL) 的映射。这是配置事实，可以缓存；但缓存
-   * 必须在 Host 推送新配置时作废，否则用户后来加的 provider 会一直查不到。
-   * 探测本身不缓存——每一轮都重新问，那才是"定时检查"的意义。
-   */
-  var discoverFacts = null
-
-  function loadDiscoverFacts() {
-    if (discoverFacts !== null) return Promise.resolve(discoverFacts)
-    var llm = ctx.remote && ctx.remote.llm
-    var settings = ctx.remote && ctx.remote.settings
-    if (!llm || !settings) return Promise.resolve(null)
-    return Promise.all([
-      llm.listConfigurableProviders(),
-      settings.describe(),
-    ]).then(function (results) {
-      var providers = results[0] && results[0].ok ? results[0].value : []
-      var namespaces = results[1] && results[1].ok ? results[1].value.namespaces : []
-      var byNs = {}
-      namespaces.forEach(function (entry) { byNs[entry.ns] = entry })
-      var facts = {}
-      providers.forEach(function (entry) {
-        var namespace = byNs[entry.settingsNs]
-        if (namespace === undefined) return
-        var profile = namespace.value
-        for (var i = 0; i < entry.settingsPath.length; i++) {
-          profile = profile && typeof profile === 'object' ? profile[entry.settingsPath[i]] : undefined
-        }
-        if (profile === undefined || profile === null || typeof profile !== 'object') return
-        facts[entry.provider] = {
-          settingsNs: entry.settingsNs,
-          baseURL: typeof profile.baseURL === 'string' ? profile.baseURL : undefined,
-        }
+  function runCheck(routes) {
+    var health = ctx.remote && ctx.remote.routerHealth
+    var cannotCheck = function () {
+      return routes.map(function (route) {
+        return { provider: route.provider, model: route.model, kind: 'unavailable', reason: 'hostUnavailable' }
       })
-      discoverFacts = facts
-      return facts
-    }).catch(function () {
-      discoverFacts = null
-      return null
-    })
+    }
+    if (!health || typeof health.checkConnectivity !== 'function') return Promise.resolve(cannotCheck())
+    return health.checkConnectivity({ routes: routes }).then(function (result) {
+      if (!result || result.ok !== true) return cannotCheck()
+      return result.value ?? []
+    }, cannotCheck)
   }
 
   /** Ask one route whether its endpoint answers and advertises this model. */
   function checkRoute(provider, model) {
-    return loadDiscoverFacts().then(function (facts) {
-      if (facts === null) return { kind: 'unavailable', reason: 'discoveryUnavailable' }
-      var fact = facts[provider]
-      if (fact === undefined) return { kind: 'unavailable', reason: 'notConfigurable' }
-      var request = { provider: provider }
-      if (fact.baseURL !== undefined) request.baseURL = fact.baseURL
-      return ctx.remote.llm.discoverModels(fact.settingsNs, request).then(function (response) {
-        if (!response.ok) return { kind: 'unreachable', reason: response.error.message }
-        var models = response.value || []
-        return models.some(function (entry) { return entry.id === model })
-          ? { kind: 'reachable' }
-          : { kind: 'notAdvertised', advertised: models.length }
-      })
-    }).catch(function (error) {
-      return { kind: 'unreachable', reason: String(error && error.message ? error.message : error) }
+    return runCheck([{ provider: provider, model: model }]).then(function (verdicts) {
+      return verdicts[0] ?? { provider: provider, model: model, kind: 'unavailable', reason: 'hostUnavailable' }
     })
   }
 
@@ -325,8 +294,6 @@ export function createController(ctx, scope, t) {
     // false forever. See .agents/notes/implemented/2026-10-15-host-draft-baseline-independence.md。
     draft = clone(next)
     failed = false
-    // 配置变了，provider 目录也可能变了：旧的端点映射不能再拿去问。
-    discoverFacts = null
     // The first snapshot can arrive after the controller was built (status
     // loading, no value), so the active tab is re-established here too.
     ensureActive()
@@ -587,21 +554,25 @@ export function createController(ctx, scope, t) {
       publish()
       var started = Date.now()
       var keys = configuredRouteList(draft)
-      var verdicts = {}
-      Promise.all(keys.map(function (key) {
-        // keys 是 `provider/model` 字符串（共享规则在 ../routes.ts）；拆回两半交给
-        // 检查器。provider 段永不含 `/`，与 host 的 splitRoute 同口径。
+      // keys 是 `provider/model` 字符串（共享规则在 ../routes.ts）；拆回两半交给
+      // 检查器。provider 段永不含 `/`，与 host 的 splitRoute 同口径。
+      var routes = keys.map(function (key) {
         var slash = key.indexOf('/')
-        return checkRoute(key.slice(0, slash), key.slice(slash + 1)).then(function (verdict) {
-          // 先拷贝后写入——store 的 set 会 dev-freeze 它收到的对象，往原对象
-          // 上赋值在 dev 构建里会静默失败。
-          ui.discover = Object.assign({}, ui.discover)
-          ui.discover[key] = verdict
-          verdicts[key] = verdict
-        })
-      })).then(function () {
-        ui.checking = false
-        ui.checkSummary = summarizeChecks(keys.map(function (key) { return verdicts[key] }))
+        return { provider: key.slice(0, slash), model: key.slice(slash + 1) }
+      })
+      // 一次调用问完整轮：分类在宿主侧，一轮检查因此也只是一次往返。
+      runCheck(routes).then(function ( verdicts) {
+        // 先拷贝后写入——store 的 set 会 dev-freeze 它收到的对象，往原对象
+        // 上赋值在 dev 构建里会静默失败。
+        var next = Object.assign({}, ui.discover)
+        verdicts.forEach(function (verdict) { next[verdict.provider + '/' + verdict.model] = verdict })
+        ui.discover = next
+        // 汇总按"这一轮被问到的每一条"算：宿主对每条请求都给一个判定，两条
+        // 到不了宿主的路径也按条补上"没能检查"。少算一条就是少报一次故障。
+        ui.checkSummary = summarizeChecks(routes.map(function (route) {
+          return next[route.provider + '/' + route.model]
+            ?? { provider: route.provider, model: route.model, kind: 'unavailable', reason: 'hostUnavailable' }
+        }))
         // 连通性检查跑完顺带重取被动快照：定时轮次开着的时候，健康工作台要跟着
         // 真实发生的事走，而不是停在页面挂载那一刻。
         loadPassive()

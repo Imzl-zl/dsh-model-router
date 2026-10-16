@@ -37,6 +37,7 @@ const ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 const PKG = `${ROOT}packages/dsh-model-router`
 const DSH_INSTALL = `${ROOT}node_modules/@deepseek-ai/dsh/package.json`
 const STUB = `${HERE}stub-adapter.mjs`.replaceAll('\\', '/')
+const STUB_DISCOVERY = `${HERE}stub-discovery.mjs`.replaceAll('\\', '/')
 const HOME = `${HERE}.dshhome-remote`
 
 let passed = 0
@@ -75,6 +76,8 @@ writeFileSync(`${HERE}stub-script.json`, JSON.stringify({
 const overlay = `- insert:
     - id: stub-adapter
       name: '${STUB}'
+    - id: stub-discovery
+      name: '${STUB_DISCOVERY}'
     - id: model-router
       # The built entry by file path: an ESM import cannot resolve a bare
       # directory, and a bare name needs the package inside node_modules.
@@ -186,6 +189,7 @@ test('the generated artifact passes the loader’s own registration validator', 
   validateTypertManifest('dsh-model-router', artifact.TYPERT)
   const ids = artifact.TYPERT.invocations.map(invocation => invocation.id)
   assert.deepEqual(ids, [
+    'dsh-model-router#routerHealth/checkConnectivity',
     'dsh-model-router#routerHealth/probeAll',
     'dsh-model-router#routerHealth/probeReport',
   ])
@@ -258,6 +262,77 @@ test('a manual run leaves its report readable through probeReport', async () => 
   const report = await invoke('probeReport', {})
   assert.equal(report.routes.length, 1)
   assert.equal(report.routes[0].kind, 'reachable')
+})
+
+// ---- the connectivity check, against the real llm runtime ----
+
+test('checkConnectivity reports a route whose discovery lists the model as reachable', async () => {
+  const verdicts = await invoke('checkConnectivity', {
+    request: { routes: [{ provider: 'stub-answer', model: 'stub-model' }] },
+  })
+  assert.equal(verdicts.length, 1)
+  assert.deepEqual(verdicts[0], { provider: 'stub-answer', model: 'stub-model', kind: 'reachable' })
+})
+
+test('checkConnectivity reports an answered endpoint that does not list the model as notAdvertised', async () => {
+  const [verdict] = await invoke('checkConnectivity', {
+    request: { routes: [{ provider: 'stub-answer', model: 'not-on-the-list' }] },
+  })
+  assert.equal(verdict.kind, 'notAdvertised')
+  assert.equal(verdict.advertised, 2, 'the count is what the endpoint actually advertised')
+})
+
+test('checkConnectivity reads a configurable provider with no registered discovery as unavailable', async () => {
+  // The real NO_DISCOVERY path, from the real registry: the provider is in the
+  // directory, so it is configurable and usable, and `discoverModels` still
+  // refuses because nothing registered a discovery for its namespace
+  // (packages/llm/llm/src/index.ts:596). Reporting that as "the endpoint did
+  // not answer" accuses an endpoint that was never contacted — which is exactly
+  // what `deepseek-official` used to show on the isolated home.
+  const [verdict] = await invoke('checkConnectivity', {
+    request: { routes: [{ provider: 'stub-no-discovery', model: 'stub-model' }] },
+  })
+  assert.equal(verdict.kind, 'unavailable')
+  assert.equal(verdict.reason, 'noDiscovery')
+  assert.equal(verdict.error, 'NO_DISCOVERY')
+  assert.equal(verdict.advertised, undefined)
+})
+
+test('checkConnectivity reads a provider with no directory entry as unavailable', async () => {
+  // `stub-primary` has an adapter and no configurable-provider declaration, so
+  // there is no settings namespace to interrogate and no discovery is asked.
+  const [verdict] = await invoke('checkConnectivity', {
+    request: { routes: [{ provider: 'stub-primary', model: 'stub-model' }] },
+  })
+  assert.equal(verdict.kind, 'unavailable')
+  assert.equal(verdict.reason, 'notConfigurable')
+})
+
+test('checkConnectivity keeps a discovery that really ran and refused unreachable', async () => {
+  // The reverse boundary, on the real registry: this discovery was invoked and
+  // raised `AUTH`. It is the channel's own answer about this route, so it stays
+  // a fault — the closed set is per code, not a blanket downgrade.
+  const [verdict] = await invoke('checkConnectivity', {
+    request: { routes: [{ provider: 'stub-refuse', model: 'stub-model' }] },
+  })
+  assert.equal(verdict.kind, 'unreachable')
+  assert.equal(verdict.error, 'AUTH')
+})
+
+test('checkConnectivity answers every requested route in one call', async () => {
+  const verdicts = await invoke('checkConnectivity', {
+    request: { routes: [
+      { provider: 'stub-answer', model: 'stub-model' },
+      { provider: 'stub-refuse', model: 'stub-model' },
+      { provider: 'stub-no-discovery', model: 'stub-model' },
+      { provider: 'stub-primary', model: 'stub-model' },
+    ] },
+  })
+  assert.deepEqual(verdicts.map(verdict => verdict.kind),
+    ['reachable', 'unreachable', 'unavailable', 'unavailable'])
+  // One verdict per requested route, keyed the way the browser half keys them.
+  assert.deepEqual(verdicts.map(verdict => `${verdict.provider}/${verdict.model}`),
+    ['stub-answer/stub-model', 'stub-refuse/stub-model', 'stub-no-discovery/stub-model', 'stub-primary/stub-model'])
 })
 
 test('a per-route probe prompt override reaches the wire, and the shared prompt covers the rest', async () => {

@@ -47,8 +47,9 @@ import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice } from '
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
 import { channelHealthProjection } from './health.ts'
 import { CircuitBreaker, type RouteBlock } from './breaker.ts'
+import { checkConnectivity, type ConnectivityLlm, type ConnectivitySettings } from './connectivity.ts'
 import { probePromptFor, probeRoute } from './probe.ts'
-import type { ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
+import type { ConnectivityRequest, ConnectivityVerdict, ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
 
 /**
  * No `declare module '@deepseek-ai/cordis'` augmentation here on purpose. The
@@ -64,11 +65,12 @@ import type { ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
  */
 
 /**
- * Every physical route the config names, deduplicated, as probe targets:
- * profiles and the default pool alike. The rule lives in ./routes.ts because the
- * browser half lists the same set for its checks — one definition, both halves.
+ * Every physical route the config names, deduplicated: the target set both the
+ * probe and the connectivity check run over. The rule lives in ./routes.ts
+ * because the browser half lists the same set for its checks — one definition,
+ * both halves.
  */
-function configuredProbeRoutes(config: { profiles: readonly Profile[]; default: DefaultProfile }): ProbeRoute[] {
+function configuredRunRoutes(config: { profiles: readonly Profile[]; default: DefaultProfile }): ProbeRoute[] {
   return configuredRoutes(config.profiles, config.default).map((key) => {
     const slash = key.indexOf('/')
     return { provider: key.slice(0, slash), model: key.slice(slash + 1) }
@@ -376,7 +378,7 @@ export default class ModelRouter extends TypertRemoteService {
     const timeoutSeconds = health?.timeoutSeconds ?? 8
     const wanted = request.routes.length > 0
       ? request.routes
-      : configuredProbeRoutes(readConfig(this.config))
+      : configuredRunRoutes(readConfig(this.config))
     const at = Date.now()
     const routes: ProbeReport['routes'] = []
     this.probeInFlight += 1
@@ -408,6 +410,35 @@ export default class ModelRouter extends TypertRemoteService {
   @Remote
   async probeReport(): Promise<ProbeReport> {
     return this.lastProbeReport
+  }
+
+  /**
+   * Ask one or more routes whether their endpoint answers and advertises this
+   * model, through DSH's own model discovery. An empty `routes` means every
+   * route the config names.
+   *
+   * This runs on the Host because the classification needs the `LlmError` code
+   * that `remoteDiscoverModels` strips: see ./connectivity.ts. The browser used
+   * to call `remote.llm.discoverModels` itself and could not tell a channel DSH
+   * cannot check at all from one whose endpoint refused the listing.
+   *
+   * The routes are checked concurrently, as the browser half did before the
+   * move: a check costs no tokens, so a run's wall clock is the slowest
+   * provider rather than their sum.
+   *
+   * Note: 为何搬宿主、封闭集合只收哪两个码、为何不禁用按钮 —— 见
+   * .agents/notes/implemented/2026-10-16-connectivity-no-discovery-is-not-a-refusal.md
+   */
+  @Remote
+  async checkConnectivity(request: ConnectivityRequest): Promise<ConnectivityVerdict[]> {
+    const wanted = request.routes.length > 0
+      ? request.routes
+      : configuredRunRoutes(readConfig(this.config))
+    // `settings` is read through the optional-service rule (packages/AGENTS.md):
+    // a composition without it still checks, it just cannot supply a stored
+    // baseURL and lets the discovery decide from the provider route alone.
+    const settings = this.ctx.get('settings') as ConnectivitySettings | undefined
+    return await Promise.all(wanted.map(route => checkConnectivity(this.ctx.llm, settings, route)))
   }
 
   /**

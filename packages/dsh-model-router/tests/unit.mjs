@@ -28,6 +28,7 @@ import { breakerNotice } from '../src/notice.ts'
 import { assertStructural, switchOnKeyOf } from '../src/config.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
+import { checkConnectivity } from '../src/connectivity.ts'
 
 let passed = 0
 const pending = []
@@ -1192,6 +1193,143 @@ test('probePromptFor uses the per-route override, else the shared default', () =
   assert.equal(probePromptFor(route, '1', overrides), 'hi there')
   assert.equal(probePromptFor({ provider: 'p', model: 'other' }, '1', overrides), '1')
   assert.equal(probePromptFor(route, '1', []), '1')
+})
+
+// ---- the connectivity check's classification (the Host side) ----
+
+/**
+ * An llm face with a configurable-provider directory and one discovery answer
+ * per namespace. `answer` may return a model list or throw, which is how a
+ * real discovery refuses.
+ */
+function discoveryLlm({ directory = [], answers = {}, settings } = {}) {
+  const asked = []
+  return {
+    asked,
+    listConfigurableProviders: () => directory,
+    discoverModels: (settingsNs, request) => {
+      asked.push({ settingsNs, request })
+      const answer = answers[settingsNs]
+      if (answer === undefined) {
+        // Exactly what LlmRuntime does when no discovery is registered for the
+        // namespace (packages/llm/llm/src/index.ts:594-597).
+        throw Object.assign(new Error(`no model discovery is registered for "${settingsNs}"`), { code: 'NO_DISCOVERY' })
+      }
+      // A function answer is the discovery itself: calling it is what lets a
+      // case make the refusal happen on the call rather than before it.
+      return typeof answer === 'function' ? answer() : answer
+    },
+  }
+}
+
+const checkRoute = { provider: 'deepseek-official', model: 'deepseek-chat' }
+
+test('checkConnectivity reports a route whose endpoint lists the model as reachable', async () => {
+  const llm = discoveryLlm({
+    directory: [{ provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: { 'ns-a': Promise.resolve([{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }]) },
+  })
+  const verdict = await checkConnectivity(llm, undefined, checkRoute)
+  assert.deepEqual(verdict, { provider: 'deepseek-official', model: 'deepseek-chat', kind: 'reachable' })
+  assert.deepEqual(llm.asked, [{ settingsNs: 'ns-a', request: { provider: 'deepseek-official' } }],
+    'the request names the provider; the namespace comes from the directory entry')
+})
+
+test('checkConnectivity reads the stored baseURL out of the settings namespace', async () => {
+  // The settingsPath walk is the plugin's own: the directory entry says where
+  // inside the namespace the profile lives, and only the Host can read it.
+  const llm = discoveryLlm({
+    directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: ['providers', 'gw'] }],
+    answers: { 'ns-a': Promise.resolve([{ id: 'm' }]) },
+  })
+  await checkConnectivity(llm, {
+    describe: () => [{ ns: 'ns-a', value: { providers: { gw: { baseURL: 'https://gw.example/v1' } } } }],
+  }, { provider: 'gw', model: 'm' })
+  assert.deepEqual(llm.asked[0].request, { provider: 'gw', baseURL: 'https://gw.example/v1' })
+})
+
+test('checkConnectivity reports an endpoint that answered without this model as notAdvertised', async () => {
+  const llm = discoveryLlm({
+    directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: { 'ns-a': Promise.resolve([{ id: 'other' }, { id: 'another' }]) },
+  })
+  const verdict = await checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' })
+  assert.equal(verdict.kind, 'notAdvertised')
+  assert.equal(verdict.advertised, 2)
+})
+
+test('checkConnectivity reads a namespace with no registered discovery as unavailable, not as a refusal', async () => {
+  // The whole DeepSeek family: `registerDeepSeekProvider` registers an adapter
+  // and never a model discovery (llm-deepseek/src/host.ts:55), so the provider
+  // is configurable and usable while a connectivity check is structurally
+  // impossible. Reporting that as "the endpoint did not answer" accuses an
+  // endpoint that was never contacted.
+  const llm = discoveryLlm({
+    directory: [{ provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: {},
+  })
+  const verdict = await checkConnectivity(llm, undefined, checkRoute)
+  assert.equal(verdict.kind, 'unavailable')
+  assert.equal(verdict.reason, 'noDiscovery')
+  assert.equal(verdict.error, 'NO_DISCOVERY')
+  assert.equal(verdict.advertised, undefined, 'a check that never ran counted no models')
+})
+
+test('checkConnectivity reads a request that names neither provider nor baseURL as unavailable', async () => {
+  // The runtime's other pre-dispatch guard (llm/src/index.ts:600-602). This
+  // plugin always names the configured provider, so the case is unreachable
+  // today; it is pinned so a future call shape that forgets the provider lands
+  // in the honest bucket instead of in "the endpoint did not answer".
+  const llm = discoveryLlm({
+    directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: {
+      'ns-a': () => { throw Object.assign(new Error('needs a provider or a baseURL'), { code: 'INVALID_DISCOVERY' }) },
+    },
+  })
+  const verdict = await checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' })
+  assert.equal(verdict.kind, 'unavailable')
+  assert.equal(verdict.reason, 'noDiscovery')
+  assert.equal(verdict.error, 'INVALID_DISCOVERY')
+})
+
+test('checkConnectivity keeps a discovery that really ran and refused unreachable', async () => {
+  // The counterpart, and the reason the set is closed rather than "any refusal
+  // is unavailable": these codes come from a discovery the runtime DID invoke,
+  // and each is the channel's own answer about this route.
+  const refused = Object.assign(new Error('401 from the gateway'), { code: 'AUTH' })
+  const llm = discoveryLlm({
+    directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: { 'ns-a': () => { throw refused } },
+  })
+  const verdict = await checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' })
+  assert.equal(verdict.kind, 'unreachable')
+  assert.equal(verdict.error, 'AUTH')
+  assert.equal(verdict.reason, undefined)
+})
+
+test('checkConnectivity keeps a provider-family refusal unreachable, with its code', async () => {
+  // pi-ai's own discovery raises these after the runtime invoked it
+  // (llm-pi-ai/src/discovery.ts:243,288,301). They name something the user can
+  // fix for THIS channel, so they stay facts about the channel.
+  for (const code of ['DISCOVERY_FAILED', 'DISCOVERY_UNSUPPORTED', 'INVALID_CREDENTIAL']) {
+    const llm = discoveryLlm({
+      directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
+      answers: { 'ns-a': () => { throw Object.assign(new Error('no'), { code }) } },
+    })
+    const verdict = await checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' })
+    assert.equal(verdict.kind, 'unreachable', `${code} is the discovery's own answer about this route`)
+    assert.equal(verdict.error, code)
+  }
+})
+
+test('checkConnectivity reads a route with no configurable-provider entry as unavailable', async () => {
+  // Nothing in DSH's directory declares this provider, so there is no settings
+  // namespace to interrogate and no endpoint to ask.
+  const llm = discoveryLlm({ directory: [], answers: {} })
+  const verdict = await checkConnectivity(llm, undefined, checkRoute)
+  assert.equal(verdict.kind, 'unavailable')
+  assert.equal(verdict.reason, 'notConfigurable')
+  assert.equal(llm.asked.length, 0, 'no discovery was asked for a route with no namespace')
 })
 
 await Promise.all(pending)

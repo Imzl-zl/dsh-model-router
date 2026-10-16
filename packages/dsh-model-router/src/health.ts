@@ -13,9 +13,9 @@
  * conversations. It answers "how has this channel actually behaved", never
  * "will it work next time". The cheap half of that second question — is the
  * endpoint up, is the credential valid, is the model advertised — is answered
- * by the client through DSH's own `ctx.remote.llm.discoverModels`, which is the
- * same call the Models page's "fetch available models" button makes and which
- * writes no session event, so it never reaches this fold.
+ * by the Host through DSH's own model discovery, which the browser reaches as
+ * an already-classified verdict on this plugin's own Remote face; it writes no
+ * session event, so it never reaches this fold.
  *
  * The other half — can the model actually produce a token right now — has no
  * zero-cost answer and no plugin-reachable channel, so it is not implemented
