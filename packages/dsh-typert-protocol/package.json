@@ -1,0 +1,12 @@
+{
+  "name": "@deepseek-ai/dsh-typert-protocol",
+  "private": true,
+  "version": "0.2.0-rc.2",
+  "description": "Analyzer-only registration stub: mirrors the Typert protocol surface this plugin compiles against, so the out-of-tree generator can resolve @Remote markers. Never imported at runtime — the real package comes from node_modules.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts"
+    }
+  }
+}

@@ -3,17 +3,30 @@
 import { useEffect, useMemo, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, healthToneStyle, routeStatus } from './format.ts'
+import { fill, formatLatency, healthToneStyle, routeStatus } from './format.ts'
 import { ChannelMetricsDashboard } from './health-ui.ts'
 import { Icon, ICON_BOLT, ICON_CHART, ICON_CLOCK, ICON_GEAR, ICON_SEARCH, ICON_SPINNER } from './icons.ts'
+
+/** What one route's last probe says, as the button's tooltip. */
+function probeVerdictTitle(t, verdict) {
+  if (!verdict) return t('probeNotRun')
+  if (verdict.kind === 'reachable') {
+    return t('probeReachable') + (typeof verdict.latencyMs === 'number' ? '（' + formatLatency(verdict.latencyMs) + '）' : '')
+  }
+  if (verdict.kind === 'unreachable') return t('probeUnreachable') + (verdict.error ? '（' + verdict.error + '）' : '')
+  return t('probeUnavailable') + (verdict.error ? '（' + verdict.error + '）' : '')
+}
 
 export function GlobalHealthWorkspace(props) {
   var t = props.t
   var draft = props.draft
   var passive = props.passive || {}
   var discover = props.discover || {}
+  var probe = props.probe || {}
   var checking = props.checking === true
   var checkingRoutes = props.checkingRoutes || {}
+  var probing = props.probing === true
+  var probingRoutes = props.probingRoutes || {}
   // The jump target is an object, so clicking the same route twice re-arms
   // the scroll; entering through the nav entry clears it (null).
   var focusRouteKey = props.focusRoute ? props.focusRoute.route : null
@@ -87,12 +100,19 @@ export function GlobalHealthWorkspace(props) {
       })
     }
 
+    if (probe) {
+      Object.keys(probe).forEach(function (key) {
+        var slash = key.indexOf('/')
+        if (slash > 0) ensure(key.slice(0, slash), key.slice(slash + 1))
+      })
+    }
+
     return Object.values(map)
-  }, [draft, passive, discover, t])
+  }, [draft, passive, discover, probe, t])
 
   // Filtered channels
   var filteredChannels = allChannels.filter(function (ch) {
-    var status = routeStatus(passive, discover, ch.route)
+    var status = routeStatus(passive, discover, probe, ch.route)
 
     if (filter === 'healthy' && status !== 'healthy') return false
     if (filter === 'issue' && status !== 'degraded' && status !== 'unhealthy') return false
@@ -128,6 +148,14 @@ export function GlobalHealthWorkspace(props) {
         h('button', {
           type: 'button',
           className: 'dsh-router-tool-btn',
+          style: Object.assign({}, S.toolBtn, probing ? { opacity: 0.6, cursor: 'wait' } : null),
+          disabled: props.disabled || probing,
+          title: t('toolProbeAllTooltip'),
+          onClick: props.onProbeAll,
+        }, h(Icon, { d: probing ? ICON_SPINNER : ICON_BOLT, size: 13, spin: probing }), probing ? t('probingText') : t('toolProbeAll')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-tool-btn',
           style: S.toolBtn,
           disabled: props.disabled,
           title: t('healthConfigBtn'),
@@ -147,7 +175,7 @@ export function GlobalHealthWorkspace(props) {
         ['all', 'healthy', 'issue', 'idle'].map(function (key) {
           var count = 0
           allChannels.forEach(function (ch) {
-            var st = routeStatus(passive, discover, ch.route)
+            var st = routeStatus(passive, discover, probe, ch.route)
             if (key === 'all') count++
             else if (key === 'healthy' && st === 'healthy') count++
             else if (key === 'issue' && (st === 'degraded' || st === 'unhealthy')) count++
@@ -185,9 +213,11 @@ export function GlobalHealthWorkspace(props) {
       : filteredChannels.map(function (ch) {
           var record = passive[ch.route] || null
           var disc = discover[ch.route] || null
+          var probeVerdict = probe[ch.route] || null
           var isFocused = focusRouteKey === ch.route
           var isCheckingThis = Boolean(checkingRoutes[ch.route])
-          var status = routeStatus(passive, discover, ch.route)
+          var isProbingThis = Boolean(probingRoutes[ch.route])
+          var status = routeStatus(passive, discover, probe, ch.route)
 
           // Availability rate calculation from timeline
           var timeline = record && Array.isArray(record.timeline) ? record.timeline : []
@@ -235,16 +265,21 @@ export function GlobalHealthWorkspace(props) {
                   h(Icon, { d: isCheckingThis ? ICON_SPINNER : ICON_BOLT, size: 11, spin: isCheckingThis }),
                   t('checkRouteBtn') + ' (' + t('checkRouteCost') + ')'),
 
-                // Inline Action 2: 1 Token TTFT Probe — described, not offered:
-                // a clickable button that only explains itself is the same lie
-                // as the save that never landed. See HealthSettingsModal.
+                // Inline Action 2: the 1-token end-to-end probe. It answers what
+                // the connectivity check cannot: whether a completion can
+                // actually be produced on this route. The cost is stated on the
+                // button because it is real — one generated token, cut at the
+                // first content byte.
                 h('button', {
                   type: 'button',
                   className: 'dsh-router-btn-action',
-                  style: Object.assign({}, S.btnProbeDashed, { opacity: 0.5, cursor: 'not-allowed' }),
-                  disabled: true,
-                  title: t('healthProbeUnavailable'),
-                }, t('probeBtn') + ' (' + t('probeCost') + ')'))),
+                  style: Object.assign({}, S.btnActionSmall, isProbingThis ? { opacity: 0.6, cursor: 'wait' } : null),
+                  disabled: isProbingThis || props.disabled,
+                  title: probeVerdictTitle(t, probeVerdict),
+                  onClick: function () { props.onProbeRoute(ch.provider, ch.model) },
+                },
+                  h(Icon, { d: isProbingThis ? ICON_SPINNER : ICON_BOLT, size: 11, spin: isProbingThis }),
+                  t('probeBtn') + ' (' + t('probeCost') + ')'))),
 
             // Metrics & 24-point Sparkline
             h(ChannelMetricsDashboard, { t: t, record: record }))

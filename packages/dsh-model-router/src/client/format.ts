@@ -47,13 +47,29 @@ export function healthToneStyle(tone) {
 }
 
 
-export function routeStatus(passive, discover, route) {
+/**
+ * The status one route's card shows. A real conversation outcome outranks a
+ * synthetic check — the probe measures one generated token, the passive fold
+ * measures what the model actually did — and a check that could not run at all
+ * reads as unknown rather than as a fault.
+ *
+ * @param passive - the host projection's records, keyed by route.
+ * @param discover - the last connectivity-check verdicts, keyed by route.
+ * @param probe - the last end-to-end probe verdicts, keyed by route.
+ * @param route - `provider/model`.
+ */
+export function routeStatus(passive, discover, probe, route) {
   var record = passive && passive[route]
   if (record) return record.status
-  var verdict = discover && discover[route]
-  if (!verdict) return 'unknown'
-  if (verdict.kind === 'reachable') return 'healthy'
-  if (verdict.kind === 'notAdvertised') return 'degraded'
-  if (verdict.kind === 'unreachable') return 'unhealthy'
+  var verdict = probe && probe[route]
+  if (verdict) {
+    if (verdict.kind === 'reachable') return 'healthy'
+    if (verdict.kind === 'unreachable') return 'unhealthy'
+  }
+  var connectivity = discover && discover[route]
+  if (!connectivity) return 'unknown'
+  if (connectivity.kind === 'reachable') return 'healthy'
+  if (connectivity.kind === 'notAdvertised') return 'degraded'
+  if (connectivity.kind === 'unreachable') return 'unhealthy'
   return 'unknown'
 }

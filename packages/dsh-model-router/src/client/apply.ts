@@ -8,6 +8,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import remote from 'dsh-model-router/remote'
 import { createController } from './controller.ts'
 import { ModelRouterFooterAction } from './footer.ts'
 import { RouterPage } from './page.ts'
@@ -17,23 +18,57 @@ import { ensureStyles } from './styles.ts'
 export const name = NS + '/client'
 
 // `remote.llm` carries the connectivity check (DSH's own model discovery) and
-// `remote.settings` carries the endpoint facts it needs. Both are native DSH
-// remotes; this plugin contributes no remote of its own — the Typert host-face
-// artifact it now builds (lib/typert.host.js) carries its reflected `Profile`
-// schema, and a plugin-owned Remote service is part of the probe feature
-// (docs/design/build-pipeline-and-plugin-remote.md).
+// `remote.settings` carries the endpoint facts it needs. `remote` is the Remote
+// namespace this package's own `./remote` contribution mounts into, which is
+// what the 1-token probe endpoint is reached through.
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings']
 
 /**
  * Mount the config page for this bundle.
+ *
+ * The half also mounts this package's own generated Remote (`./remote`) before
+ * the UI registers: the probe endpoint lives on the Host, and the client reaches
+ * it through the generated contribution. That is the pattern DSH's own
+ * cot-translation client uses
+ * (packages/experimental/client-ui-cot-translation/src/client/mount.ts:120-128):
+ * `$mount` first, then `ctx.inject(['remote.<ns>', ...])` so the UI fiber has
+ * the service active.
+ *
+ * Note: 探测档、定时归属与挂载形态的取舍 —— 见
+ * .agents/notes/implemented/2026-10-15-plugin-remote-probe.md
  * @param ctx - browser plugin context.
+ * @returns disposer that withdraws the UI and the Remote contribution together.
  */
-export function apply(ctx: Context): void {
+export async function apply(ctx: Context): Promise<() => Promise<void>> {
   // Labels come from this plugin's own dictionaries, bound by namespace —
   // never from the Config schema's `.description()`.
   var t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh: zh, en: en }), 'router: dictionaries')
   ctx.effect(ensureStyles, 'router: global styles')
+
+  var unmountRemote = await ctx.remote.$mount(remote)
+  var ui = ctx.inject(['remote.routerHealth', 'slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings'], function (child) {
+    registerUi(child, t)
+  })
+  try {
+    await ui
+  } catch (error) {
+    await ui.dispose()
+    await unmountRemote()
+    throw error
+  }
+  return async function () {
+    await ui.dispose()
+    await unmountRemote()
+  }
+}
+
+/**
+ * Register the page, the sidebar entry, and the controller behind them.
+ * @param ctx - child context carrying the mounted probe Remote.
+ * @param t - the bound dictionary.
+ */
+function registerUi(ctx: Context, t: (key: string) => string): void {
   // 定时器随插件半包的生命周期一起销毁，不在设置改动后留下孤儿轮询。
   // 它声明在 createController 里，所以由控制器交回 disposer，而不是在这里
   // 直接够那个变量——function 作用域够不到，只会在每次卸载时抛 ReferenceError。
@@ -71,6 +106,8 @@ export function apply(ctx: Context): void {
     onCloseDrawer: function () { controller.closeDrawer() },
     onCheckAll: function () { controller.checkAll() },
     onCheckRoute: function (provider, model) { controller.checkRouteSingle(provider, model) },
+    onProbeRoute: function (provider, model) { controller.probeRouteSingle(provider, model) },
+    onProbeAll: function () { controller.probeAll() },
     onOpenHealthModal: function () { controller.openHealthModal() },
     onUpdateHealth: function (patch) { controller.updateHealth(patch) },
   }

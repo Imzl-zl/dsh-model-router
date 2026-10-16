@@ -11,9 +11,14 @@ export function HealthSettingsModal(props) {
   var t = props.t
   var health = props.health || {}
   var discover = health.discover || {}
+  var probe = health.probe || {}
   var [passiveOn, setPassiveOn] = useState(health.passive !== false)
   var [discoverOn, setDiscoverOn] = useState(discover.enabled === true)
   var [discoverInterval, setDiscoverInterval] = useState(String(discover.intervalSeconds ?? 0))
+  var [probeOn, setProbeOn] = useState(probe.enabled === true)
+  var [probeInterval, setProbeInterval] = useState(String(probe.intervalSeconds ?? 0))
+  var [probePrompt, setProbePrompt] = useState(typeof probe.prompt === 'string' ? probe.prompt : '1')
+  var [probeTimeout, setProbeTimeout] = useState(String(probe.timeoutSeconds ?? 8))
   var breaker = health.breaker || {}
   var [breakerOn, setBreakerOn] = useState(breaker.enabled === true)
   var [rules, setRules] = useState((breaker.rules || []).map(function (rule) {
@@ -59,13 +64,17 @@ export function HealthSettingsModal(props) {
         variant: 'primary',
         disabled: hasEmptyRule,
         onClick: function () {
-          // The probe tier is not offered, so whatever a previous save left
-          // in it is preserved rather than overwritten with defaults.
-          var current = props.health || {}
           props.onUpdateHealth({
             passive: passiveOn,
             discover: { enabled: discoverOn, intervalSeconds: intervalOf(discoverInterval) },
-            probe: current.probe,
+            probe: {
+              enabled: probeOn,
+              intervalSeconds: intervalOf(probeInterval),
+              prompt: probePrompt.trim().length > 0 ? probePrompt.trim() : '1',
+              timeoutSeconds: Math.max(1, Math.round(Number(probeTimeout)) || 8),
+              // 逐路由覆盖不是这个弹窗编辑的东西，但保存不该顺手删掉它。
+              prompts: Array.isArray(probe.prompts) ? probe.prompts.slice() : [],
+            },
             breaker: {
               enabled: breakerOn,
               rules,
@@ -112,18 +121,54 @@ export function HealthSettingsModal(props) {
             onChange: function (event) { setDiscoverInterval(event.target.value) },
           })) : null),
 
-      // --- Tier 3: real probe (compact placeholder/planned) ---
-      h('div', { style: S.healthTierCardCompact },
+      // --- Tier 3: end-to-end probe ---
+      // 探测是真功能：手动按钮与宿主定时器都通。默认关闭写在默认值里，开不开、
+      // 多久一轮由用户定——插件只提供能力，不替用户决定要不要花这个 token。
+      h('div', { style: S.healthTierCard },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
             h('span', { style: S.formLabel }, t('healthProbeLabel')),
-            h('span', { style: S.badgePlanning }, t('healthTierProbeBadge'))),
+            h('span', { style: S.formHint }, t('healthProbeHint'))),
           h(Switch, {
-            checked: false,
-            disabled: true,
+            checked: probeOn,
             label: t('healthProbeLabel'),
+            onChange: function (next) { setProbeOn(next) },
           })),
-        h('p', { style: S.healthTierSubHint }, t('healthProbeUnavailable'))),
+        h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 6, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }) },
+          h('span', { style: S.formLabel }, t('healthProbeIntervalLabel')),
+          h('span', { style: S.formHint }, t('healthProbeIntervalHint')),
+          h('input', {
+            style: Object.assign({}, S.formInput, { width: 140 }),
+            type: 'text',
+            inputMode: 'numeric',
+            placeholder: '0',
+            'aria-label': t('healthProbeIntervalLabel'),
+            value: probeInterval,
+            onChange: function (event) { setProbeInterval(event.target.value) },
+          })),
+        h('div', { style: S.formGroup },
+          h('span', { style: S.formLabel }, t('healthProbePromptLabel')),
+          h('span', { style: S.formHint }, t('healthProbePromptHint')),
+          h('input', {
+            style: Object.assign({}, S.formInput, { width: '100%' }),
+            type: 'text',
+            placeholder: '1',
+            'aria-label': t('healthProbePromptLabel'),
+            value: probePrompt,
+            onChange: function (event) { setProbePrompt(event.target.value) },
+          })),
+        h('div', { style: S.formGroup },
+          h('span', { style: S.formLabel }, t('healthProbeTimeoutLabel')),
+          h('span', { style: S.formHint }, t('healthProbeTimeoutHint')),
+          h('input', {
+            style: Object.assign({}, S.formInput, { width: 140 }),
+            type: 'text',
+            inputMode: 'numeric',
+            placeholder: '8',
+            'aria-label': t('healthProbeTimeoutLabel'),
+            value: probeTimeout,
+            onChange: function (event) { setProbeTimeout(event.target.value) },
+          }))),
 
       // --- Tier 4: circuit breaker ---
       h('div', { style: S.healthTierCard },

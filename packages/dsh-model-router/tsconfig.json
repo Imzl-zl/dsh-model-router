@@ -12,8 +12,18 @@
   // src/client is excluded: the browser half is bundled by tsdown without a
   // type-check pass (it predates this build as hand-written JavaScript), and the
   // Typert host-face program must not compile browser modules.
+  //
+  // target es2024 (DSH's own base target): the host half uses `using` with the
+  // disposable deadline from @deepseek-ai/dsh-timeout, which needs the
+  // Symbol.dispose lib. The client bundle keeps its own es2022 target in
+  // tsdown.config.ts — the browser half never touches that primitive.
   "compilerOptions": {
-    "target": "es2022",
+    "target": "es2024",
+    // `using` with the disposable deadline needs the explicit-resource-management
+    // lib; it is not part of the plain es2024 lib set. `dom` stays because the
+    // host half talks to AbortSignal/setInterval and the default lib set (which
+    // this replaces) included it.
+    "lib": ["es2024", "esnext.disposable", "dom"],
     "module": "esnext",
     "moduleResolution": "bundler",
     "declaration": true,

@@ -120,7 +120,7 @@ function applyOps(value, ops) {
  *   into the served value and republishes, the way the Host's write answer does.
  * @param options.remote - overrides merged over the default remote stubs.
  */
-function mount({ value, writable = true, mutate, remote } = {}) {
+async function mount({ value, writable = true, mutate, remote } = {}) {
   const calls = []
   let snapshot = { status: 'ready', value, writable, revision: 1 }
   const listeners = new Set()
@@ -152,9 +152,34 @@ function mount({ value, writable = true, mutate, remote } = {}) {
       },
       llm: {},
       settings: {},
+      // The plugin's own probe Remote, which the browser half's apply mounts
+      // from the generated ./remote artifact. The stub answers the shapes the
+      // generated client would, so the probe actions run without a Host.
+      routerHealth: {
+        probeAll: (request) => Promise.resolve({
+          ok: true,
+          value: {
+            at: 1,
+            routes: (request?.routes ?? []).map((route) => ({
+              provider: route.provider, model: route.model, kind: 'reachable', latencyMs: 5, at: 1,
+            })),
+          },
+        }),
+        probeReport: () => Promise.resolve({ ok: true, value: { at: 0, routes: [] } }),
+      },
+      // The browser half's apply mounts the generated ./remote contribution
+      // before registering the UI.
+      $mount: () => Promise.resolve(() => Promise.resolve()),
     }, remote),
+    // The browser half mounts its own Remote and then registers the UI in a
+    // child fiber carrying it; the harness runs the callback against a child
+    // that carries the same stubs.
+    inject: (_deps, fn) => {
+      fn(Object.assign({}, ctx, { remote: ctx.remote }))
+      return { dispose: () => Promise.resolve() }
+    },
   }
-  loadClient().apply(ctx)
+  await loadClient().apply(ctx)
   const registration = registrations.find((entry) => entry.name === 'plugins.bundle.config')
   const injected = registration.inject()
   const store = injected.hooks.routerPage
@@ -187,7 +212,7 @@ const routeOf = (candidate) => `${candidate.provider}/${candidate.model}`
 // ---- save() settlement ----
 
 test('a rejected save surfaces the failure and clears saving', async () => {
-  const h = mount({ value: config(), mutate: () => Promise.reject(new Error('wire down')) })
+  const h = await mount({ value: config(), mutate: () => Promise.reject(new Error('wire down')) })
   h.actions.onMaxAttempts('p1', 0, '3', false)
   h.actions.onSave()
   assert.equal(h.state().saving, true, 'saving is set while the write crosses the wire')
@@ -198,7 +223,7 @@ test('a rejected save surfaces the failure and clears saving', async () => {
 })
 
 test('an accepted save settles clean once the Host republishes', async () => {
-  const h = mount({ value: config() })
+  const h = await mount({ value: config() })
   h.actions.onMaxAttempts('p1', 0, '3', false)
   h.actions.onSave()
   await flush()
@@ -210,8 +235,8 @@ test('an accepted save settles clean once the Host republishes', async () => {
 
 // ---- validate() mirrors the Host's assertStructural ----
 
-test('a profile on the weight strategy with no positive weight blocks the save', () => {
-  const h = mount({ value: config({ profiles: [profile({ strategy: 'weight' })] }) })
+test('a profile on the weight strategy with no positive weight blocks the save', async () => {
+  const h = await mount({ value: config({ profiles: [profile({ strategy: 'weight' })] }) })
   assert.equal(h.state().invalid, true)
   const problem = h.state().problems.find((entry) => entry.key === 'problemProfileWeightNoPositive')
   assert.ok(problem, 'the profile is named in the problem list')
@@ -220,15 +245,15 @@ test('a profile on the weight strategy with no positive weight blocks the save',
   assert.equal(h.mutateCalls.length, 0, 'the write never reaches the Host')
 })
 
-test('the default pool keeps its own weight-strategy problem', () => {
-  const h = mount({ value: config({ default: defaultPool({ enabled: true, strategy: 'weight', candidates: [{ provider: 'a', model: 'x', maxAttempts: 1, weight: 0 }] }) }) })
+test('the default pool keeps its own weight-strategy problem', async () => {
+  const h = await mount({ value: config({ default: defaultPool({ enabled: true, strategy: 'weight', candidates: [{ provider: 'a', model: 'x', maxAttempts: 1, weight: 0 }] }) }) })
   assert.ok(h.state().problems.some((entry) => entry.key === 'problemWeightNoPositive'))
 })
 
 // ---- the pinned primary vs the default pool ----
 
-test('the profile primary stays pinned', () => {
-  const h = mount({ value: config() })
+test('the profile primary stays pinned', async () => {
+  const h = await mount({ value: config() })
   h.actions.onMove('p1', 0, 1, false)
   h.actions.onRemove('p1', 0, false)
   const candidates = h.state().draft.profiles[0].candidates
@@ -236,8 +261,8 @@ test('the profile primary stays pinned', () => {
   assert.equal(routeOf(candidates[0]), 'deepseek/m', 'the primary cannot be reordered')
 })
 
-test('the default pool has no pinned head: its first candidate moves and removes', () => {
-  const h = mount({
+test('the default pool has no pinned head: its first candidate moves and removes', async () => {
+  const h = await mount({
     value: config({
       default: defaultPool({
         enabled: true,
@@ -257,9 +282,9 @@ test('the default pool has no pinned head: its first candidate moves and removes
 
 // ---- scope republish vs the draft ----
 
-test('a republication with the same value keeps the unsaved draft', () => {
+test('a republication with the same value keeps the unsaved draft', async () => {
   const value = config()
-  const h = mount({ value })
+  const h = await mount({ value })
   h.actions.onMaxAttempts('p1', 0, '3', false)
   assert.equal(h.state().dirty, true)
   h.republish({ value, revision: 2 })
@@ -267,8 +292,8 @@ test('a republication with the same value keeps the unsaved draft', () => {
   assert.equal(h.state().draft.profiles[0].candidates[0].maxAttempts, 3)
 })
 
-test('a genuinely changed Host value re-seeds the draft', () => {
-  const h = mount({ value: config() })
+test('a genuinely changed Host value re-seeds the draft', async () => {
+  const h = await mount({ value: config() })
   h.actions.onMaxAttempts('p1', 0, '3', false)
   assert.equal(h.state().dirty, true)
   h.republish({ value: config({ profiles: [profile({ maxTotalAttempts: 9 })] }), revision: 2 })
@@ -276,11 +301,11 @@ test('a genuinely changed Host value re-seeds the draft', () => {
   assert.equal(h.state().draft.profiles[0].maxTotalAttempts, 9)
 })
 
-test('an edit after a value-changing republish keeps the draft dirty', () => {
+test('an edit after a value-changing republish keeps the draft dirty', async () => {
   // The production boot path: the controller is built while the scope is still
   // loading, so the first republication is always a value-changing one — the
   // re-seed runs on every real start, and edits come after it.
-  const h = mount({ value: undefined })
+  const h = await mount({ value: undefined })
   h.republish({ value: config(), revision: 1 })
   h.actions.onMaxAttempts('p1', 0, '3', false)
   assert.equal(h.state().dirty, true, 'the draft and the Host baseline must stay independent objects')
@@ -313,7 +338,7 @@ function discoverStubs(answer) {
 
 test('a single-route check shows busy on that route only, then lands the verdict', async () => {
   const stubs = discoverStubs(() => Promise.resolve({ ok: true, value: [{ id: 'm' }] }))
-  const h = mount({ value: config(), remote: stubs.remote })
+  const h = await mount({ value: config(), remote: stubs.remote })
   const pending = h.actions.onCheckRoute('deepseek', 'm')
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], true, 'the route shows busy while the check crosses the wire')
   assert.equal(h.state().ui.checking, false, 'a single check does not busy the global checker')
@@ -327,7 +352,7 @@ test('a single-route check shows busy on that route only, then lands the verdict
 test('a second check for the same route while one is in flight is ignored', async () => {
   let release
   const stubs = discoverStubs(() => new Promise((resolve) => { release = resolve }))
-  const h = mount({ value: config(), remote: stubs.remote })
+  const h = await mount({ value: config(), remote: stubs.remote })
   h.actions.onCheckRoute('deepseek', 'm')
   await flush()
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], true, 'the first check is still in flight')
@@ -340,7 +365,7 @@ test('a second check for the same route while one is in flight is ignored', asyn
 
 test('a failed single check clears the busy state instead of spinning forever', async () => {
   const stubs = discoverStubs(() => Promise.reject(new Error('wire down')))
-  const h = mount({ value: config(), remote: stubs.remote })
+  const h = await mount({ value: config(), remote: stubs.remote })
   await h.actions.onCheckRoute('deepseek', 'm')
   await flush()
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], undefined, 'busy clears on failure too')
@@ -349,25 +374,31 @@ test('a failed single check clears the busy state instead of spinning forever', 
 
 // ---- route status derivation (the signal dot, nav badge and filters share it) ----
 
-test('routeStatus prefers the passive record; a check that could not run is unknown, not a fault', () => {
+test('routeStatus prefers the passive record; a check that could not run is unknown, not a fault', async () => {
   const routeStatus = loadClient().routeStatus
-  assert.equal(routeStatus({ 'a/b': { status: 'unhealthy' } }, { 'a/b': { kind: 'reachable' } }, 'a/b'), 'unhealthy',
+  assert.equal(routeStatus({ 'a/b': { status: 'unhealthy' } }, { 'a/b': { kind: 'reachable' } }, {}, 'a/b'), 'unhealthy',
     'a real observation outranks a synthetic check')
-  assert.equal(routeStatus({}, { 'a/b': { kind: 'reachable' } }, 'a/b'), 'healthy')
-  assert.equal(routeStatus({}, { 'a/b': { kind: 'notAdvertised', advertised: 3 } }, 'a/b'), 'degraded')
-  assert.equal(routeStatus({}, { 'a/b': { kind: 'unreachable', reason: 'timeout' } }, 'a/b'), 'unhealthy')
-  assert.equal(routeStatus({}, { 'a/b': { kind: 'unavailable', reason: 'notConfigurable' } }, 'a/b'), 'unknown',
+  assert.equal(routeStatus({}, {}, { 'a/b': { kind: 'reachable', latencyMs: 12 } }, 'a/b'), 'healthy',
+    'a passed probe is a real signal, stronger than a connectivity check')
+  assert.equal(routeStatus({}, {}, { 'a/b': { kind: 'unreachable', error: 'AUTH' } }, 'a/b'), 'unhealthy')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'reachable' } }, {}, 'a/b'), 'healthy')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'notAdvertised', advertised: 3 } }, {}, 'a/b'), 'degraded')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'unreachable', reason: 'timeout' } }, {}, 'a/b'), 'unhealthy')
+  assert.equal(routeStatus({}, { 'a/b': { kind: 'unavailable', reason: 'notConfigurable' } }, {}, 'a/b'), 'unknown',
     'a check that could not run says nothing about the channel')
-  assert.equal(routeStatus({}, {}, 'a/b'), 'unknown')
+  assert.equal(routeStatus({}, {}, { 'a/b': { kind: 'unavailable', reason: 'notConfigurable' } }, 'a/b'), 'unknown',
+    'a probe that could not run is unknown too, never a fault')
+  assert.equal(routeStatus({}, {}, {}, 'a/b'), 'unknown')
 })
 
 // ---- cross-session health merge ----
 
-test('passive health merges the recent sessions oldest-first, so the newest observation wins', async () => {
+test('passive health merges the recent sessions into one global record per route', async () => {
   // 实测踩过：合并在并发回调里做，谁最后 resolve 谁赢——同一渠道时而显示三天
   // 前的延迟、时而显示今天的，刷新就变；而数组是新的在前，语义上又恰好反了。
-  // 这条用例守住"读齐后旧→新合并、最新观测赢"，以及"只有旧会话见过的渠道
-  // 仍然在列"。
+  // 更早一版还整记录覆盖，可用率只反映"赢家会话"——但同一个渠道这个会话用、
+  // 那个会话也用，并发三个会话更在同时用，统计必须合在一起算。这条用例守住
+  // 三件事：时间线并集（全局可用率）、标量取最新、只有旧会话见过的渠道仍在列。
   const record = (status, latencyMs, time) => ({
     route: 'a/b', provider: 'a', model: 'b', status,
     latencyMs, throughputTps: 1, lastCheckedAt: time,
@@ -377,7 +408,7 @@ test('passive health merges the recent sessions oldest-first, so the newest obse
     old: { 'a/b': record('healthy', 100, 1), 'a/only-old': { ...record('unhealthy', 50, 1), route: 'a/only-old', model: 'only-old' } },
     new: { 'a/b': record('degraded', 999, 2) },
   }
-  const h = mount({
+  const h = await mount({
     value: config(),
     remote: {
       session: {
@@ -392,8 +423,10 @@ test('passive health merges the recent sessions oldest-first, so the newest obse
   })
   await new Promise((resolve) => setTimeout(resolve, 60))
   const passive = h.state().ui.passive
-  assert.equal(passive['a/b']?.latencyMs, 999, 'the newest session wins, not the oldest and not a race')
+  assert.equal(passive['a/b']?.latencyMs, 999, 'scalars come from the newest session')
   assert.equal(passive['a/b']?.status, 'degraded')
+  assert.deepEqual(passive['a/b']?.timeline.map((p) => p.time), [1, 2],
+    'the timeline is the union across sessions, ordered by time — the availability is a global fact')
   assert.ok(passive['a/only-old'], 'a route only the older session saw is still listed')
 })
 
@@ -406,7 +439,7 @@ test('opening the health workspace re-reads the passive snapshot, so a failover 
     { 'a/b': { route: 'a/b', provider: 'a', model: 'b', status: 'healthy', latencyMs: 20, throughputTps: 2, lastCheckedAt: 2, timeline: [{ time: 2, status: 'healthy', latencyMs: 20 }] } },
   ]
   let round = 0
-  const h = mount({
+  const h = await mount({
     value: config(),
     remote: {
       session: {
@@ -428,7 +461,7 @@ test('opening the health workspace re-reads the passive snapshot, so a failover 
 
 // ---- workbench structure (hand-written createElement nesting) ----
 
-test('the workbench keeps the sidebar and the workspace pane as siblings', () => {
+test('the workbench keeps the sidebar and the workspace pane as siblings', async () => {
   // A missing paren in the deep h() nesting does not break `node --check`:
   // the closes just migrate to the end of the return, and the workspace pane
   // silently becomes the sidebar's third child (squeezed into its 260px
@@ -463,7 +496,7 @@ test('the workbench keeps the sidebar and the workspace pane as siblings', () =>
 
 // ---- modal bounds (a settings dialog must never escape the viewport) ----
 
-test('every plugin dialog is capped to the viewport and scrolls inside itself', () => {
+test('every plugin dialog is capped to the viewport and scrolls inside itself', async () => {
   // A `prim.Modal` is centred in a `position: fixed; inset: 0` root, so a card
   // taller than the viewport pushes its own header above the top edge with no
   // way to scroll to it. The bound therefore lives on the dialog element, and
@@ -500,7 +533,7 @@ test('every plugin dialog is capped to the viewport and scrolls inside itself', 
 
 // ---- breaker rule edits must not read the render-time closure ----
 
-test('breaker rule mutations go through the state updater, not the closure', () => {
+test('breaker rule mutations go through the state updater, not the closure', async () => {
   // `setRules(rules.concat(...))` reads the array captured at render. React
   // batches, so two clicks in one tick both append to that same array and the
   // last write wins: a fast double-click on a preset chip or on "+ 添加规则"
@@ -517,42 +550,42 @@ test('breaker rule mutations go through the state updater, not the closure', () 
 
 // ---- per-candidate edits ----
 
-test('weight edits address the named profile', () => {
-  const h = mount({ value: config() })
+test('weight edits address the named profile', async () => {
+  const h = await mount({ value: config() })
   h.actions.onWeight('p1', 0, '40', false)
   assert.equal(h.state().draft.profiles[0].candidates[0].weight, 40)
 })
 
-test('weight edits address the default pool without throwing', () => {
-  const h = mount({ value: config({ default: defaultPool({ enabled: true, candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 0 }] }) }) })
+test('weight edits address the default pool without throwing', async () => {
+  const h = await mount({ value: config({ default: defaultPool({ enabled: true, candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 0 }] }) }) })
   h.actions.onWeight(null, 0, '60', true)
   assert.equal(h.state().draft.default.candidates[0].weight, 60)
 })
 
-test('strategy edits address both named profile and default pool', () => {
-  const h = mount({ value: config({ default: defaultPool({ enabled: true }) }) })
+test('strategy edits address both named profile and default pool', async () => {
+  const h = await mount({ value: config({ default: defaultPool({ enabled: true }) }) })
   h.actions.onStrategy('p1', 'round-robin', false)
   assert.equal(h.state().draft.profiles[0].strategy, 'round-robin')
   h.actions.onStrategy(null, 'weight', true)
   assert.equal(h.state().draft.default.strategy, 'weight')
 })
 
-test('a strategy edit on an unknown profile id fails loudly', () => {
-  const h = mount({ value: config() })
+test('a strategy edit on an unknown profile id fails loudly', async () => {
+  const h = await mount({ value: config() })
   assert.throws(() => h.actions.onStrategy('nope', 'weight', false), /no profile "nope"/)
 })
 
-test('an unknown profile id fails loudly instead of editing a phantom list', () => {
-  const h = mount({ value: config() })
+test('an unknown profile id fails loudly instead of editing a phantom list', async () => {
+  const h = await mount({ value: config() })
   assert.throws(() => h.actions.onMaxAttempts('nope', 0, '2', false), /no profile "nope"/)
 })
 
 // ---- legacy shapes ----
 
-test('a profile saved before candidates existed reads as an empty, reported chain', () => {
+test('a profile saved before candidates existed reads as an empty, reported chain', async () => {
   const legacy = profile()
   delete legacy.candidates
-  const h = mount({ value: config({ profiles: [legacy] }) })
+  const h = await mount({ value: config({ profiles: [legacy] }) })
   assert.deepEqual(h.state().draft.profiles[0].candidates, [])
   assert.ok(h.state().problems.some((entry) => entry.key === 'problemEmptyChain'))
 })

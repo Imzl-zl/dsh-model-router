@@ -89,7 +89,9 @@ export default defineConfig([
     outDir: 'lib',
     format: ['esm'],
     platform: 'node',
-    target: 'es2022',
+    // DSH's own root tsdown target; the host half uses `using` with the
+    // disposable deadline, which es2024 carries natively on Node 24.
+    target: 'es2024',
     fixedExtension: false,
     dts: false,
     clean: false,

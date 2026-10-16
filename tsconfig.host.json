@@ -9,10 +9,29 @@
   //
   // Compiler options come from the package project through extends, so the
   // analyzer's face program and the package's own tsc run share one setting.
+  //
+  // The `paths` entry is the tree-external equivalent of what the monorepo does
+  // in tsconfig.base.json: it makes @deepseek-ai/dsh-typert-protocol resolve to
+  // a REGISTERED package so the generator can recognize @Remote markers
+  // (packages/typert/generator/src/analyzer.ts:1978-1993 — the marker's symbol
+  // must declare inside that package's registration). In the monorepo the
+  // mapping points at the protocol's own source; out-of-tree there is no such
+  // source tree, so packages/dsh-typert-protocol mirrors the two symbols the
+  // analyzer resolves. Only the analyzer reads this mapping: the package's own
+  // tsconfig has no paths, so tsc and tsdown resolve the real package from
+  // node_modules.
   "extends": "./packages/dsh-model-router/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@deepseek-ai/dsh-typert-protocol": ["./packages/dsh-typert-protocol/src/index.d.ts"]
+    }
+  },
   "references": [
     {
       "path": "./packages/dsh-model-router/tsconfig.json"
+    },
+    {
+      "path": "./packages/dsh-typert-protocol/tsconfig.json"
     }
   ]
 }

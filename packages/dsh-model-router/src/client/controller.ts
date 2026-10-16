@@ -47,6 +47,12 @@ export function createController(ctx, scope, t) {
     discover: {},
     checking: false,
     checkingRoutes: {},
+    // Verdicts from the last end-to-end probe (1 token, TTFT cut), keyed by
+    // route. Ephemeral for the same reason as `discover`; a scheduled run's
+    // report is read from the Host when the health view opens.
+    probe: {},
+    probing: false,
+    probingRoutes: {},
   }
   var saving = false
   var failed = false
@@ -80,6 +86,9 @@ export function createController(ctx, scope, t) {
         discover: ui.discover,
         checking: ui.checking,
         checkingRoutes: ui.checkingRoutes,
+        probe: ui.probe,
+        probing: ui.probing,
+        probingRoutes: ui.probingRoutes,
       },
     }
   }
@@ -122,6 +131,33 @@ export function createController(ctx, scope, t) {
   }
 
   /**
+   * 合并一条渠道在新旧两份记录里的观测。时间线取并集按时间排序——可用率是
+   * 全局事实：同一个渠道这个会话用、那个会话也用，并发三个会话更是同时在用，
+   * 统计必须合在一起算，没有"属于哪个会话"这一说。标量（状态/延迟/吞吐/
+   * 最后错误）取较新那份：最近一次观测说什么就是什么。调用方保证 older 来自
+   * 较旧的会话。
+   *
+   * Note: 为何不是"整记录覆盖 + 最新会话赢"、为何不合并时间线窗口 —— 见
+   * .agents/notes/implemented/2026-10-15-health-monitoring-cross-session-merge.md
+   */
+  function mergeHealthRecord(older, newer) {
+    if (older === undefined || older === null) return newer
+    var points = (older.timeline ?? []).concat(newer.timeline ?? [])
+      .sort(function (a, b) { return a.time - b.time })
+    return Object.assign({}, newer, { timeline: points })
+  }
+
+  /** 把一批会话的记录按旧→新合进 ui.passive。 */
+  function mergePassiveRecords(records) {
+    if (!records) return
+    var next = Object.assign({}, ui.passive)
+    Object.keys(records).forEach(function (route) {
+      next[route] = mergeHealthRecord(next[route], records[route])
+    })
+    ui.passive = next
+  }
+
+  /**
    * Read the host projection's passive records. Health is a cross-session
    * fact, so this merges the same window the failover drawer reads rather
    * than pretending one session is the whole story.
@@ -152,7 +188,7 @@ export function createController(ctx, scope, t) {
       }))
     }).then(function (reads) {
       for (var i = 0; i < reads.length; i++) {
-        if (reads[i]) ui.passive = Object.assign({}, ui.passive, reads[i])
+        mergePassiveRecords(reads[i])
       }
       publish()
     }).catch(function () {})
@@ -296,8 +332,9 @@ export function createController(ctx, scope, t) {
       // 打开健康工作台时重取一次被动快照。它原本只在控制器创建时读一次，
       // 故障转移发生后工作台还显示着旧延迟/旧可用率——监控视图在事故进行中
       // 给人看旧数字，比没有这个数字更糟。重取是同一套 20 会话合并，代价是
-      // 几次本地投影读。
-      if (id === '__health__') loadPassive()
+      // 几次本地投影读。定时探测的报告同理：它是 Host 内存里最近一次运行的
+      // 结果，打开视图时读，而不是假装有实时推送。
+      if (id === '__health__') { loadPassive(); controller.loadProbeReport() }
       publish()
     },
     discard: function () {
@@ -481,9 +518,7 @@ export function createController(ctx, scope, t) {
         // 合并放在这里而不是并发回调里：数组已按旧→新，最后赋值的才是最近一次
         // 观测；在回调里 assign 等于让 resolve 顺序决定赢家，刷新就变。
         for (var i = 0; i < rows.length; i++) {
-          // 先拷贝再写入：store 的 set 会 dev-freeze 它收到的对象，之后往
-          // 原对象上赋值在 dev 构建里会静默失败（圆点永远显示"未探测"）。
-          if (rows[i].records) ui.passive = Object.assign({}, ui.passive, rows[i].records)
+          mergePassiveRecords(rows[i].records)
         }
         ui.drawerRows = rows.filter(function (row) { return row.entries.length > 0 })
         ui.drawerLoading = false
@@ -552,6 +587,84 @@ export function createController(ctx, scope, t) {
     updateHealth: function (patch) {
       draft.health = Object.assign({}, draft.health, patch)
       publish()
+    },
+    /**
+     * Read the Host's last probe report — what the scheduled run measured. The
+     * browser holds no subscription, so this is read when the health view opens
+     * and after every manual run, the same snapshot pattern the passive fold
+     * uses.
+     */
+    loadProbeReport: function () {
+      var health = ctx.remote && ctx.remote.routerHealth
+      if (!health || typeof health.probeReport !== 'function') return
+      health.probeReport().then(function (result) {
+        if (!result || result.ok !== true || !result.value) return
+        var next = {}
+        ;(result.value.routes ?? []).forEach(function (entry) {
+          next[entry.provider + '/' + entry.model] = entry
+        })
+        ui.probe = next
+        publish()
+      }).catch(function () {})
+    },
+    /** Probe one route end to end (1 token, cut at the first content byte). */
+    probeRouteSingle: function (provider, model) {
+      var key = provider + '/' + model
+      if (ui.probingRoutes && ui.probingRoutes[key]) return
+      var health = ctx.remote && ctx.remote.routerHealth
+      if (!health || typeof health.probeAll !== 'function') return
+      ui.probingRoutes = Object.assign({}, ui.probingRoutes)
+      ui.probingRoutes[key] = true
+      publish()
+      health.probeAll({ routes: [{ provider: provider, model: model }] }).then(function (result) {
+        if (result && result.ok === true) {
+          var next = Object.assign({}, ui.probe)
+          ;(result.value.routes ?? []).forEach(function (entry) {
+            next[entry.provider + '/' + entry.model] = entry
+          })
+          ui.probe = next
+        }
+        ui.probingRoutes = Object.assign({}, ui.probingRoutes)
+        delete ui.probingRoutes[key]
+        publish()
+      }).catch(function () {
+        ui.probingRoutes = Object.assign({}, ui.probingRoutes)
+        delete ui.probingRoutes[key]
+        publish()
+      })
+    },
+    /** Probe every configured route: profiles and the default pool alike. */
+    probeAll: function () {
+      if (ui.probing) return
+      var health = ctx.remote && ctx.remote.routerHealth
+      if (!health || typeof health.probeAll !== 'function') return
+      var routes = {}
+      var collect = function (candidate) {
+        var key = routeOf(candidate)
+        if (routes[key]) return
+        routes[key] = { provider: candidate.provider, model: candidate.model }
+      }
+      draft.profiles.forEach(function (profile) {
+        profile.candidates.forEach(collect)
+      })
+      draft.default.candidates.forEach(collect)
+      ui.probing = true
+      publish()
+      health.probeAll({ routes: Object.keys(routes).map(function (key) { return routes[key] }) }).then(function (result) {
+        if (result && result.ok === true) {
+          var next = Object.assign({}, ui.probe)
+          ;(result.value.routes ?? []).forEach(function (entry) {
+            next[entry.provider + '/' + entry.model] = entry
+          })
+          ui.probe = next
+        }
+        ui.probing = false
+        loadProbeReport()
+        publish()
+      }).catch(function () {
+        ui.probing = false
+        publish()
+      })
     },
     openHealthModal: function () {
       ui.modal = { kind: 'health' }

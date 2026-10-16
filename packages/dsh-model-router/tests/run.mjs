@@ -18,7 +18,12 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url))
-const PLUGIN = `${ROOT}packages/dsh-model-router/src/index.ts`.replaceAll('\\', '/')
+// The BUILT host entry, not src/index.ts: the host half is a class carrying
+// @Remote decorators, and the source-mode loader strips types without
+// transforming decorators (Node rejects the `@` token outright). tsdown lowers
+// them during the build, so the composition runs against the artifact the
+// browser and a real install would load. `npm run bundle` must have run.
+const PLUGIN = `${ROOT}packages/dsh-model-router/lib/index.js`.replaceAll('\\', '/')
 const STUB = `${HERE}stub-adapter.mjs`.replaceAll('\\', '/')
 const DSH_BIN = `${ROOT}node_modules/@deepseek-ai/dsh/lib/bin.js`
 const HOME = `${HERE}.dshhome`

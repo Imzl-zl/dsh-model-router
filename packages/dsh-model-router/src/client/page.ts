@@ -74,7 +74,7 @@ export function RouterPage(props) {
   var faultedCount = 0
   var degradedCount = 0
   allPhysicalRoutes.forEach(function (route) {
-    var st = routeStatus(state.ui.passive, state.ui.discover, route)
+    var st = routeStatus(state.ui.passive, state.ui.discover, state.ui.probe, route)
     if (st === 'unhealthy') faultedCount++
     else if (st === 'degraded') degradedCount++
   })
@@ -229,7 +229,7 @@ export function RouterPage(props) {
                     var hasImages = profile.candidates.some(function (c) { return c.needs && c.needs.images !== undefined })
                     var worstCandStatus = 'unknown'
                     profile.candidates.forEach(function (c) {
-                      var st = routeStatus(state.ui.passive, state.ui.discover, c.provider + '/' + c.model)
+                      var st = routeStatus(state.ui.passive, state.ui.discover, state.ui.probe, c.provider + '/' + c.model)
                       if (st === 'unhealthy') worstCandStatus = 'unhealthy'
                       else if (st === 'degraded' && worstCandStatus !== 'unhealthy') worstCandStatus = 'degraded'
                       else if (st === 'healthy' && worstCandStatus === 'unknown') worstCandStatus = 'healthy'
@@ -301,12 +301,17 @@ export function RouterPage(props) {
                   discover: state.ui.discover,
                   checking: state.ui.checking,
                   checkingRoutes: state.ui.checkingRoutes,
+                  probe: state.ui.probe,
+                  probing: state.ui.probing,
+                  probingRoutes: state.ui.probingRoutes,
                   focusRoute: focusRoute,
                   disabled: disabled,
                   onCheckAll: props.onCheckAll,
+                  onProbeAll: props.onProbeAll,
                   onOpenHealthModal: props.onOpenHealthModal,
                   onOpenDrawer: props.onOpenDrawer,
                   onCheckRoute: props.onCheckRoute,
+                  onProbeRoute: props.onProbeRoute,
                 }))
             : h('div', {
                 style: { flex: 1, minWidth: 0 },

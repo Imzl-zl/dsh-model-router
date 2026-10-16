@@ -65,7 +65,10 @@ export function ChannelMetricsDashboard(props) {
     h('div', { style: S.metricsColStatus },
       h('div', { style: S.metricsStatusHeader },
         h('span', { style: S.metricsLabel }, t('healthMetricHistory')),
-        h('span', { style: S.metricsStatusValue }, String(timeline.length) + '/' + 24)),
+        // 时间线是跨会话并集，条数只表示"窗口里累计了多少次观测"；柱子画最近
+        // 24 个（下面 slice(-24)），所以这里不再写 /24——那个上限是单会话投影
+        // 的，合并后不适用。
+        h('span', { style: S.metricsStatusValue }, String(timeline.length))),
       h('div', { style: S.timelineBarContainer }, barElements)),
     h('div', { style: S.metricsColValue },
       h('span', { style: S.metricsLabel }, t('healthMetricLatency')),

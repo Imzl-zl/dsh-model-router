@@ -1,0 +1,16 @@
+{
+  // Referenced by the project-root tsconfig.host.json so the typert generator's
+  // loadRegistrations() sees this directory as the @deepseek-ai/dsh-typert-protocol
+  // package (packages/typert/generator/src/analyzer.ts:485-497). It exists only
+  // for the analyzer: the plugin's own tsconfig has no paths, so tsc and tsdown
+  // resolve the real package from node_modules.
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
