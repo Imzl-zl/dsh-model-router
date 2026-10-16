@@ -753,6 +753,10 @@ test('classifyHealth scores only faults that belong to the channel', () => {
   assert.equal(classifyHealth('EMPTY_RESPONSE'), undefined)
   assert.equal(classifyHealth('ABORTED'), undefined)
   assert.equal(classifyHealth('NO_ADAPTER'), undefined)
+  // The same three codes the probe must report as `unavailable`: a call that
+  // never happened indicts the channel no more here than it does there.
+  assert.equal(classifyHealth('MISSING_CREDENTIAL'), undefined)
+  assert.equal(classifyHealth('INVALID_CREDENTIAL'), undefined)
 })
 
 test('routeKeyOf formats provider and model as provider/model', () => {
@@ -1102,6 +1106,67 @@ test('probeRoute reads a route it cannot even call as unavailable, not as a faul
   const result = await probeRoute(fakeLlm({ prepareError: new Error('no adapter') }), route, 'ping', 8)
   assert.equal(result.kind, 'unavailable')
   assert.match(result.error ?? '', /no adapter/)
+})
+
+// The boundary `types.ts:30-34` draws: `unreachable` is reserved for "the call
+// was made and the endpoint, the credential, or the model refused it". A code
+// DSH raises while *assembling* the call means no request ever existed, so it
+// must land on `unavailable` — otherwise a profile that never registered the
+// provider, or one with no key stored, is painted as a red channel fault.
+//
+// Both delivery shapes are real and both are pinned here:
+//   - `prepareCall` rejects outright (`llm/src/index.ts:995` for `NO_ADAPTER`);
+//   - the adapter fails inside the stream and `adapterStream` converts the
+//     throw into an in-band error finish (`llm/src/index.ts:1113,1161`) — that
+//     is how a keyless `deepseek-official` reports `MISSING_CREDENTIAL`, from
+//     `llm-deepseek-api-key/src/index.ts:30`.
+test('probeRoute reads a provider with no registered adapter as unavailable', async () => {
+  const thrown = Object.assign(
+    new Error('no adapter registered for provider "real-a"'),
+    { code: 'NO_ADAPTER' },
+  )
+  const result = await probeRoute({ prepareCall: () => Promise.reject(thrown) }, route, 'ping', 8)
+  assert.equal(result.kind, 'unavailable')
+  assert.equal(result.error, 'NO_ADAPTER')
+})
+
+test('probeRoute reads a route with no credential as unavailable, in band', async () => {
+  const keyless = (async function* () {
+    yield { type: 'finish', reason: { kind: 'error', failure: { code: 'MISSING_CREDENTIAL', message: 'no key' } } }
+  })()
+  const result = await probeRoute(fakeLlm({ makeStream: () => keyless }), route, 'ping', 8)
+  assert.equal(result.kind, 'unavailable')
+  assert.equal(result.error, 'MISSING_CREDENTIAL')
+  assert.equal(result.latencyMs, undefined, 'a route that never answered has no TTFT')
+})
+
+test('probeRoute reads a stored credential no header can carry as unavailable', async () => {
+  // `assertUsableApiKey` (llm/src/index.ts:151) refuses a blank or
+  // header-hostile key before any request is built — the same class.
+  const unusable = (async function* () {
+    yield { type: 'finish', reason: { kind: 'error', failure: { code: 'INVALID_CREDENTIAL', message: 'blank' } } }
+  })()
+  const result = await probeRoute(fakeLlm({ makeStream: () => unusable }), route, 'ping', 8)
+  assert.equal(result.kind, 'unavailable')
+  assert.equal(result.error, 'INVALID_CREDENTIAL')
+})
+
+test('probeRoute keeps a refusal that really left the Host unreachable', async () => {
+  // The counterpart: the classification is per code, not a blanket downgrade.
+  // `AUTH` means a request went out and the endpoint refused it, so it stays a
+  // fault — in band and thrown alike.
+  const denied = (async function* () {
+    yield { type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', message: 'denied' } } }
+  })()
+  const inBand = await probeRoute(fakeLlm({ makeStream: () => denied }), route, 'ping', 8)
+  assert.equal(inBand.kind, 'unreachable')
+  assert.equal(inBand.error, 'AUTH')
+  const thrown = Object.assign(new Error('refused'), { code: 'TRANSPORT' })
+  const raised = await probeRoute({
+    prepareCall: () => Promise.resolve({ config: {}, stream: () => { throw thrown } }),
+  }, route, 'ping', 8)
+  assert.equal(raised.kind, 'unreachable')
+  assert.equal(raised.error, 'TRANSPORT')
 })
 
 test('probeRoute stops when the caller cancels, and says so', async () => {

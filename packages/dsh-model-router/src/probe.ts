@@ -40,6 +40,44 @@ function unavailable(route: ProbeRoute, now: number, reason: string): ProbeRoute
 }
 
 /**
+ * DSH failure codes that mean the Host could not place a call at all.
+ *
+ * None of these is an endpoint refusing a request — no request exists:
+ *
+ * - `NO_ADAPTER`: no adapter is registered for the provider, so
+ *   `prepareCall` refuses before anything is assembled
+ *   (`packages/llm/llm/src/index.ts:995`).
+ * - `MISSING_CREDENTIAL`: the route resolves no credential, raised while the
+ *   adapter builds auth, before the request is sent
+ *   (`llm-deepseek-api-key/src/index.ts:30`, `llm-pi-ai/src/index.ts:200`).
+ * - `INVALID_CREDENTIAL`: the stored credential is present but unusable —
+ *   blank, or carrying characters no HTTP header can — raised by
+ *   `assertUsableApiKey` before the header is built
+ *   (`llm/src/index.ts:151`). `llm-pi-ai/src/discovery.ts:240` states the
+ *   reason outright: without it, "the `fetch` below would throw ... blaming
+ *   the network for a local, deterministic fault".
+ *
+ * `types.ts` reserves `unreachable` for "the call was made and the endpoint,
+ * the credential, or the model refused it", so all three belong to
+ * `unavailable`. `classifyHealth` in ./health.ts already agrees from the other
+ * side: each returns `undefined` there, i.e. none of them indicts the channel.
+ *
+ * The set is deliberately closed. A code that names a request-shape problem
+ * (`UNSUPPORTED_REASONING_EFFORT`, `INVALID_PREPARED_CALL`) is a fact about the
+ * plugin's own assembly rather than about the channel and is left for its own
+ * round; folding one in here would start reporting a real fault as "could not
+ * measure", which is the same lie in the other direction.
+ *
+ * Note: 划线与被否方案 —— 见
+ * .agents/notes/implemented/2026-10-16-probe-unavailable-means-never-called.md
+ */
+const NEVER_CALLED_CODES: ReadonlySet<string> = new Set([
+  'NO_ADAPTER',
+  'MISSING_CREDENTIAL',
+  'INVALID_CREDENTIAL',
+])
+
+/**
  * Probe one route: send the minimal message, stop at the first content byte.
  *
  * @param llm - the Host llm service (injected so unit tests can supply a fake).
@@ -48,9 +86,11 @@ function unavailable(route: ProbeRoute, now: number, reason: string): ProbeRoute
  * @param timeoutSeconds - hard cap per route; the deadline fires even without a first byte.
  * @param signal - the caller's cancellation, fused into the deadline.
  * @returns the route's outcome; an adapter error becomes `unreachable` carrying
- *   its provider-neutral code, a timeout becomes `unreachable` with
- *   {@link PROBE_TIMEOUT_CODE}, and a call that could not be assembled becomes
- *   `unavailable` — which the UI must not read as a fault.
+ *   its provider-neutral code — unless the code says the call could not be
+ *   placed at all (see {@link NEVER_CALLED_CODES}), which is `unavailable` — a
+ *   timeout becomes `unreachable` with {@link PROBE_TIMEOUT_CODE}, and a call
+ *   that could not be assembled becomes `unavailable` — which the UI must not
+ *   read as a fault.
  */
 export async function probeRoute(
   llm: ProbeLlm,
@@ -93,7 +133,13 @@ export async function probeRoute(
         return { provider: route.provider, model: route.model, kind: 'reachable', latencyMs: Date.now() - started, at: now }
       }
       if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
-        return { provider: route.provider, model: route.model, kind: 'unreachable', error: chunk.reason.failure.code, at: now }
+        // A failure the adapter hit while *building* the request arrives here
+        // rather than as a throw: `adapterStream` converts it into an in-band
+        // error finish (llm/src/index.ts:1113,1161). A missing credential never
+        // reaches the wire, so it must not read as the channel refusing a call.
+        const code = chunk.reason.failure.code
+        if (NEVER_CALLED_CODES.has(code)) return unavailable(route, now, code)
+        return { provider: route.provider, model: route.model, kind: 'unreachable', error: code, at: now }
       }
     }
     // The stream ended without content and without an error finish: nothing to
@@ -111,6 +157,10 @@ export async function probeRoute(
     if (signal?.aborted === true) return unavailable(route, now, 'cancelled')
     const code = (error as { code?: unknown }).code
     if (code === 'ABORTED') return unavailable(route, now, 'cancelled')
+    // 同一个边界，从抛出这一侧再过一遍：没注册适配器的 provider 是
+    // `prepareCall` 直接拒绝的（llm/src/index.ts:995），报告成 unreachable
+    // 就等于说"渠道拒了一次从未发生的调用"。
+    if (typeof code === 'string' && NEVER_CALLED_CODES.has(code)) return unavailable(route, now, code)
     if (typeof code === 'string' && code.length > 0) {
       return { provider: route.provider, model: route.model, kind: 'unreachable', error: code, at: now }
     }
