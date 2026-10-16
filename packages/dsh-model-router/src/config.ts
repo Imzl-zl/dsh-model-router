@@ -86,7 +86,7 @@ export const profileSchema = z.object({
     .description('按顺序尝试的候选渠道；第一个必须就是 when 模型（钉死，但权重/轮询策略下不一定是第一跳）'),
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
   maxTotalAttempts: z.number().step(1).min(1).default(6)
-    .description('这个请求最多真实调用多少次（硬上限，含同渠道重试与跨渠道降级）'),
+    .description('这个请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
   stickyTurns: z.number().step(1).min(0).max(99).default(0)
     .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）。追问刚发过的图片时设 2~3，识图模型多粘几轮'),
   strategy: strategySchema,
@@ -99,7 +99,7 @@ export const defaultSchema = z.object({
     .description('通用降级池；用户当前选中的模型永远是第一跳，本池是纯备用'),
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
   maxTotalAttempts: z.number().step(1).min(1).default(3)
-    .description('接管时单请求最多真实调用多少次（硬上限）'),
+    .description('接管时单请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
   stickyTurns: z.number().step(1).min(0).max(99).default(0)
     .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）'),
   strategy: strategySchema,

@@ -368,6 +368,28 @@ const SCENARIOS = [
     check() {},
   },
   {
+    name: 'budget-cap-when-the-whole-chain-dies',
+    note: '整条链都失败：总真实调用数等于用户配的上限，llm-retry 的同路由重试不能越过它',
+    // 两个候选各 1 枪、总上限 2，两条都一直 429（既在 switchOn 里、也是 llm-retry
+    // 默认可重试码）。这一场景同时钉住两件事：跨候选行走被上限截断，以及 llm-retry
+    // 在最后一条候选上自己的 5 次重试也被挡住。
+    // 位置依据：`agent/request-error` 用 prepend 注册在最外层，先 await next() 看到
+    // 内层决定再处置——预算尽了就否决。注册在 llm-retry 内层时它看不见这些重试，
+    // 同一场景实测打 7 次（上限 2）。
+    router: {
+      enabled: true,
+      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)], { maxTotalAttempts: 2 })],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
+    },
+    script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT'] }, 'stub-backup': { outcomes: ['fail:RATE_LIMIT'] } },
+    check(events) {
+      // 每候选一枪，一枪不多：两条各打一次就终态。
+      eq('real calls equal the configured cap', failedAttempts(events).length, 2)
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('turn end', turnEnd(events), 'error')
+    },
+  },
+  {
     name: 'invalid-config-rejected',
     note: '结构错误（重复 ID）在加载时响亮失败，不静默跳过',
     router: { enabled: true, profiles: [profile([C('stub-primary', 1)], { id: 'dup' }), profile([C('stub-backup', 1)], { id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },

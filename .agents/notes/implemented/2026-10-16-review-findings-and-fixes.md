@@ -27,7 +27,7 @@ discover 定时器语义、以及 `src/routes.ts` 共用模块。未落地项见
 |---|---|---|
 | 投影注册 disposer 被丢弃 → fiber 重启泄漏 | **假** | `register()` 内部 `this.ctx.effect(...)`（session-projection/src/index.ts:273）；Cordis 的 traceable 代理把 `this.ctx` 绑定回**调用方** context（utils.ts:176 `if (prop === tracker.property) return ctx`、reflect.ts:234 `getTraceable(this.ctx, ...)`），注册表自带 HMR 测试证明 disposer 随调用方 fiber（registry.spec.ts:511-526）。插件裸调 `register()` 与树内消费者一致，正确 |
 | 单测 119 个（39+80） | **假** | 同一累加器先打印 39 后打印 80，总数是 80（已计入 memory/tools） |
-| 「Router 在外层永远等不到放弃信号」因此只能内层注册 | **待裁决** | 机制上外层 `await next()` 会把内层放弃（undefined）带回，评审员论证成立；但项目 spike 7.4 有相反实测记录。不做实验不裁决，见第六节 |
+| 「Router 在外层永远等不到放弃信号」因此只能内层注册 | **已证伪并改位置** | 实验证明外层 `await next()` 能拿到内层放弃信号（undefined），且能否决 llm-retry 的重试：同一场景内层注册打 7 次、外层打 2 次（上限 2）。见"预算位置"节 |
 
 ### 二、Critical（必修）
 
@@ -208,20 +208,41 @@ client 两侧同步）。补 `enabled:false` 组合场景（现有两场景都�
 - remote 9/9（新增：卸载后定时探测停止——DSH 包规则"注册贡献须证明可 Dispose"的宿主侧断言）。
 - `tsc --noEmit` 0 错误；`npm run bundle` 通过；DSH checkout 0 改动。
 
+## 预算位置（原「待裁决」，已由实验裁决并落地）
+
+**问题**：`maxTotalAttempts` 号称"硬上限"，实测配 2 打 7 次。根因：同路由重试归 DSH 的
+`llm-retry`，插件的失败监听注册在它**内层**，llm-retry 自己的 5 次重试发生在插件看不见的
+地方，插件只在它放弃后才被问到。
+
+**实验**（2026-10-16，`tests/run.mjs` 的 `budget-cap-when-the-whole-chain-dies`）：
+两候选各 1 枪、总上限 2、两条都一直 429。内层注册实测 **7 次**真实调用；改成最外层后
+**2 次**，正好等于上限。
+
+**裁决**：`agent/request-error` 改用 `prepend: true` 注册在 root ctx（一次，agent 从
+payload 取——按 agent/created 逐个注册会每个 agent 漏一条 root listener）。监听先
+`await next()` 让内层（llm-retry / compaction）各自决定，再处置：
+- 内层返回 `retry` 且预算已尽 → 返回 `undefined`（终态），否决该重试；
+- 内层返回 `retry` 且预算还有 → 原样放行（与内层注册时行为一致）；
+- 内层返回 `undefined`（全部放弃）→ 才由插件做跨候选 failover。
+
+**为何外层拿得到放弃信号**（边界文档 §G2 旧结论"外层永远等不到放弃信号"不成立）：
+waterfall 里 `await next()` 的解析值就是内层结果；llm-retry 放弃时 `return next()` 一路到
+默认 thunk 返回 `undefined`，外层因此看到 `undefined`。旧结论错在把"next() 只往里走"当成
+"信号到不了外层"。
+
+**为何不担心误伤 compaction 的恢复**：预算未耗尽时原样放行，只有预算已尽才否决，而预算已尽
+时请求本就该终态。`CONTEXT_WINDOW_EXCEEDED` 不在 llm-retry 默认可重试集、也不在 switchOn
+六码里，压缩恢复走"内层 retry"路径，未超预算时照常放行。
+
+**代价**：预算耗尽时会连 compaction 的恢复一起否决（见上，可接受）；llm-retry 可能已写下
+`llm/retry` 排程记录而被否决，durable 日志会留一条未兑现的重试排程——如实反映"排过，但
+回合已结束"。
+
 ## 仍未处理（下批）
 
-1. **预算位置待裁决**（见下节）——裁决前只改了文案，没动监听位置。
-2. fork/resume 投影一致性测试（open-questions §三.3）——需要真实 checkpoint 重放 harness。
-3. 渲染层布局类结论（断点、间距、魔法数）未经浏览器量测，本轮未动。
-
-## 待裁决（不阻塞已落地部分）
-
-**预算位置：`agent/request-error` 内层注册是否让"硬上限"不可执行。**
-现状：Router 注册在 llm-retry 内层（index.ts:303），对 llm-retry 已决定的重试无否决权，
-因此 `maxTotalAttempts` 在 normal 策略下也能被超出（README 已披露两层口径，但 UI 字段文案
-承诺"硬上限含同渠道重试"）。
-评审员论证：外层 `await next()` 会把内层放弃信号（undefined）带回外层，故外层可"采纳内层
-重试、仅预算耗尽时否决"——dsh-capability-boundary.md:73 的"外层永远等不到放弃信号"不成立。
-反证：spike 7.4 有实测记录支持内层结论。
-裁决方式：用一个最小 spike（真 Loader 组合，两位置各跑一次同失败序列，看 request/header 与
-attempt 计数）判定，再补决策笔记；在裁决前，本次修复只改文案不改位置。
+1. fork/resume 投影一致性测试（open-questions §三.3）——需要真实 checkpoint 重放 harness。
+2. 渲染层布局类结论（断点、间距、魔法数、新 token 在浅色主题的实际对比度）未经浏览器量测，
+   本轮未动。
+3. AUTH 是否该进 switchOn：open-questions 一.5 定性"AUTH 不切换"，但密钥失效恰恰是换渠道
+   最能救的场景（另一条渠道有自己的密钥）；当前只能靠熔断让**下一个**请求跳过。属产品决策，
+   未动。

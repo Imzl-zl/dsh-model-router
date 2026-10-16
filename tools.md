@@ -41,7 +41,9 @@ DSH 侧规范入口：[根 `AGENTS.md`](file:///D:/sudy/github/deepseek-harness/
 - **`--patch` 是 launcher 旗标，必须放在第一个 app 旗标之前**：`dsh --profile web --patch <file> --no-open --port <p>`；放在 `--no-open` 之后会被 web app 的解析器当成未知选项拒绝。
 - **rolldown 会重印 AST，bundle 不是源码的逐字节副本**（2026-10-15 实测）：单引号字符串变双引号、`function (current)` 丢空格、三元条件行被合并进一行。任何"读产物文本"的回归测试都会因定位串失配而假红——结构/文本守卫要读源码模块，行为断言才读 bundle。
 - Agent `prepareCall()` 固定 adapter registration；Agent route 不能靠后续 `llm/stream` 改 provider。
-- waterfall 数组首个 listener 是最外层、其返回值即最终值；`await next()` 之后改写会覆盖内层。Router 必须 `prepend: true` 才能位于 `installModelSelection` 与三个 `agent/request-error` 消费者（`llm-retry`、`compaction-image-offload`、`compaction-basic`）之外层。cordis.yml 书写顺序不决定 listener 次序。
+- waterfall 数组首个 listener 是最外层、其返回值即最终值；`await next()` 之后改写会覆盖内层。Router 的 `agent/request` 必须 `prepend: true`（压过 `installModelSelection` 写回）；**`agent/request-error` 也必须 `prepend: true`**（2026-10-16 起）：先 `await next()` 拿到内层（llm-retry / compaction）的决定再处置——预算已尽返回 `undefined` 否决重试、预算还有原样放行、内层全放弃（`undefined`）才自己做 failover。注册在 root ctx 一次，agent 从 payload 取（按 `agent/created` 逐个注册会每个 agent 漏一条 root listener）。cordis.yml 书写顺序不决定 listener 次序。
+- **两个 waterfall 都用 prepend 的实测依据**：同一"整条链都死"场景（两候选各 1 枪、总上限 2、都一直 429），`agent/request-error` 注册在 llm-retry **内层**时实测打 **7** 次真实调用；改成最外层后打 **2** 次，正好等于上限。边界文档 §G2 旧结论"外层永远等不到放弃信号"因此证伪——`await next()` 的解析值就是内层结果，llm-retry 放弃时一路 `next()` 到默认 thunk 返回 `undefined`，外层看得见。场景固化为 `tests/run.mjs` 的 `budget-cap-when-the-whole-chain-dies`。
+- llm-retry 自己重试常见失败码，从不委派：normal 策略对 RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE 自己重试到 maxRetries（默认 5）才 `next()`；要测熔断/恢复，stub 策略必须显式 `policy: { maxRetries: 0 }`（`tests/run.mjs` 的 `breaker-channel-scope-skips-sibling-models` 就这么干）。
 - Agent step 循环 `while (true)` 没有 attempt 上限；总上限只能由 Router 拥有，且必须计入 `llm-retry` 代跑的重试。
 - 仓库外插件新增 durable 事件类型实际封闭：核心拒读非 `ignorable` 的未知类型，而 `ignorable` 即 plugin record 信封，`appendPluginRecord()` 被 README 明确禁止仓库外调用。durable lineage 走插件自有 session projection 折叠核心事件。
 - 透明故障转移必然产生：一条 durable "model changed" notice、UI `next` 停留未兑现 pending、`request/header` 记 `reason: 'change'`。

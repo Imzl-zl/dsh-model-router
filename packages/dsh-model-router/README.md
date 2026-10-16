@@ -106,10 +106,13 @@ step.
   runtime with `INVALID_REQUEST` (deepseek) or `PI_AI_ERROR` (pi-ai); enable
   `invalidRequest` in `switchOn` to let the chain continue past it. The
   classification is provider-dependent and not guaranteed.
-- **The attempt budget has two layers.** `maxTotalAttempts` caps the attempts
-  this plugin initiates. `llm-retry` keeps its own per-provider budget
-  (default 5, reset when the route changes), so a retryable failure can add
-  same-route attempts beyond the configured cap before the chain terminates.
+- **The attempt budget has two layers, one owner each.** `maxTotalAttempts` is a hard
+  cap on real calls for one request: same-route retries (with backoff) belong to
+  DSH's `llm-retry`, cross-candidate failover belongs to this plugin, and the cap
+  bounds both — the plugin listens on `agent/request-error` with `prepend: true`, so
+  it sees `llm-retry`'s decision and terminates once the budget is spent instead of
+  letting another same-route retry through. A provider whose retry policy is
+  `always` (unbounded retries) is rejected at load.
 - **The candidate cursor is process memory.** It resets on restart; the
   durable attempt lineage is rebuilt from the session log, not from the
   cursor. Cross-restart continuation is deferred.

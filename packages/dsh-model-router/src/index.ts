@@ -310,32 +310,54 @@ export default class ModelRouter extends TypertRemoteService {
         },
         { prepend: true },
       )
-
-      // Innermost on agent/request-error: llm-retry owns same-route retries and
-      // delegates here only when it gives up, which is the hand-off that makes
-      // cross-candidate failover reachable at all.
-      agent.ctx.on('agent/request-error', async (payload, next) => {
-        const { turn, step, failure, signal } = payload
-        const state = states.current(agent, turn, step)
-        if (state === undefined) return next()
-        states.noteFailure(agent.session, turn, step, failure.code)
-        const current = state.chain.candidates[state.index]!
-        // A failure the user said should disqualify the channel takes it out of
-        // rotation; the block always expires, so this is a cooldown, not a ban.
-        // 总闸关着就不记：`enabled` 是用户的显式选择。规则留着（再开时不用重填），
-        // 但关着的时候一条都不能生效——此前只读 rules 不读 enabled，开关是个摆设。
-        const breakerConfig = (config.health?.get() as HealthConfig | undefined)?.breaker
-        if (breakerConfig?.enabled === true) {
-          breaker.note(current.provider, current.model, failure.code, failure.message ?? '', breakerConfig.rules, Date.now())
-        }
-        if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return next()
-        ctx.logger.warn(
-          `model-router: ${failure.code} on ${current.provider}/${current.model} `
-          + `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); continuing the chain`,
-        )
-        return { kind: 'retry' as const }
-      })
     })
+
+    // 最外层 on agent/request-error（`prepend: true`，注册在 root ctx 一次，agent 从
+    // payload 取——按 agent/created 逐个注册会让每个 agent 漏一条 root listener）。
+    // 位置是"硬上限"能否成立的关键：注册在 llm-retry 内层时，它自己的 5 次同路由重试
+    // 发生在插件看不到的地方，用户配的 maxTotalAttempts 会被越过（实测：配 2 打 7 次）。
+    // 所以这里先 `await next()` 让内层（llm-retry / compaction）各自决定，再处置：
+    //   内层决定重试 + 预算已尽 → 否决（返回 undefined 即终态）；
+    //   内层决定重试 + 预算还有 → 原样放行（与注册在内层时行为一致）；
+    //   内层全部放弃（undefined）→ 才轮到插件做跨候选 failover。
+    ctx.on('agent/request-error', async (payload, next) => {
+      const { agent, turn, step, failure, signal } = payload
+      const state = states.current(agent, turn, step)
+      // 不是本插件接管的 step：纯透传，不改变任何既有恢复行为。
+      if (state === undefined) return next()
+      states.noteFailure(agent.session, turn, step, failure.code)
+      const current = state.chain.candidates[state.index]!
+
+      const inner = await next()
+
+      if (inner?.kind === 'retry') {
+        // 预算耗尽就否决内层的重试决定：用户配的"最多真实调用多少次"是硬承诺，
+        // llm-retry 的同路由重试也不能越过它。返回 undefined 即终态。
+        if (state.exhausted || state.totalAttempts >= state.chain.maxTotalAttempts) {
+          ctx.logger.warn(
+            `model-router: attempt budget spent (${state.totalAttempts}/${state.chain.maxTotalAttempts}) on ${current.provider}/${current.model}; terminating instead of retrying`,
+          )
+          return undefined
+        }
+        return inner
+      }
+
+      // 内层全部放弃：记录熔断，并决定是否跨候选继续。
+      // A failure the user said should disqualify the channel takes it out of
+      // rotation; the block always expires, so this is a cooldown, not a ban.
+      // 总闸关着就不记：`enabled` 是用户的显式选择。规则留着（再开时不用重填），
+      // 但关着的时候一条都不能生效——此前只读 rules 不读 enabled，开关是个摆设。
+      const breakerConfig = (config.health?.get() as HealthConfig | undefined)?.breaker
+      if (breakerConfig?.enabled === true) {
+        breaker.note(current.provider, current.model, failure.code, failure.message ?? '', breakerConfig.rules, Date.now())
+      }
+      if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return undefined
+      ctx.logger.warn(
+        `model-router: ${failure.code} on ${current.provider}/${current.model} `
+        + `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); continuing the chain`,
+      )
+      return { kind: 'retry' as const }
+    }, { prepend: true })
   }
 
   // ---- the plugin's own Remote ----

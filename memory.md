@@ -7,8 +7,8 @@
 - 完整插件项目（`packages/dsh-model-router/`：宿主 + UI 半包 + 条件路由 + lineage 投影 + 遥测抽屉 + 双引擎渠道健康监控 + 识图路由 + 渠道级熔断），GitHub 仓库 `Imzl-zl/dsh-model-router`（公开）。
 - DSH 参考 checkout：`D:\sudy\github\deepseek-harness`（严格只读）；项目根：`D:\sudy\myproject\dsh-model-router`。
 - **构建管线已落地（2026-10-15）**：`npm run bundle --prefix packages/dsh-model-router` 产出 `lib/index.js`（宿主，类形态 + 自有 Remote）、`lib/client.js`（浏览器半包，CJS 工厂，内含联的 remote-client）、`lib/typert.host.js`（Typert host face，含 `Profile` schema 与两个 invocation）、`lib/typert.remote-client.js`（客户端 Remote 贡献，`./remote` 导出）、`lib/types/*.d.ts`；`exports` 指向 lib/。构建依赖装在包内 node_modules（`--legacy-peer-deps`，peer 一律外解析）；typescript 包内 v6（classic）/ 根 v7（native）并存。**改源码后必须重建，组合测试与 remote 测试都跑构建产物**（装饰器只有构建后才降级）。
-- 最后更新：2026-10-16（评审修复批次：熔断开关、always 拒绝、sticky 时序、探测重入、通知去重、账本归属、时间线合并、弹窗草稿、快捷键原生化）。
-- 验证状态（2026-10-16 修复后复跑）：单测 85/85 + 组合测试 16/16（改插 `lib/index.js`）+ client-controller 28/28 + `tests/remote.mjs` 9/9（含卸载后定时探测停止的 HMR 断言）+ `node --check lib/client.js` + `tsc --noEmit` 0 错误；DSH checkout `status --porcelain` 0 行。
+- 最后更新：2026-10-16（评审修复批次 + 预算位置实验裁决：`agent/request-error` 改最外层，上限从"配 2 打 7"变成真硬上限）。
+- 验证状态（2026-10-16 修复后复跑）：单测 86/86 + 组合测试 17/17（改插 `lib/index.js`，含 `budget-cap-when-the-whole-chain-dies` 钉住硬上限）+ client-controller 28/28 + `tests/remote.mjs` 9/9（含卸载后定时探测停止的 HMR 断言）+ `node --check lib/client.js` + `tsc --noEmit` 0 错误；DSH checkout `status --porcelain` 0 行。
 - **侧栏 footer 行几何不是自己拍的**（2026-10-15 实测）：`sidebar.footer.action` 的 ownerProps 只有 `wide`（`ui-sidebar/src/client/contract/slots.ts:108`），DSH 明确「Each occupant owns its button geometry」（`SidebarRoot.module.css:572-589`）。要与上方 DSH 自己的设置行对齐，必须照抄 `.trigger`（`ui-settings-general/src/client/SettingsRoot.module.css:16-36`）：`height:42 / fontSize:14 / lineHeight:22 / padding:0 10px 0 8px`，外层 `margin:4px -2px; width:calc(100% + 4px)`（悬浮底色与导航行对齐），rail 态 `margin:8px 0 10px`。
 - **图标与字典文案不要各写一份**（2026-10-15 二次踩坑）：`addCandidateBtn` 字典值带 `'+ '` 前缀、渲染又前置 `ICON_PLUS`，出现双加号。与「需求按钮标签双齿轮」同类。约定：字典只放文字，图标归渲染侧。
 - **React 受控状态必须用更新器形式**（2026-10-15 实测）：`setRules(rules.concat(...))` 读渲染期闭包，同 tick 多次点击互相覆盖——同步连点 8 次只进 1 条规则，用户看得见却存不上。四个写入点已全部改 `setRules(current => ...)`，并有源级回归测试守着。
