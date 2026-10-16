@@ -233,7 +233,7 @@ export function GlobalHealthWorkspace(props) {
 
     // Channel Cards List — the workspace's only scrolling region, so the header
     // and the filter bar above stay where they are.
-    h('div', { style: S.channelList },
+    h('div', { style: S.workspaceScroll },
       filteredChannels.length === 0
         ? h('div', { style: S.telemetryEmptyBox }, allChannels.length === 0 ? t('noChannelsConfigured') : t('noChannelsFound'))
         : filteredChannels.map(function (ch) {
@@ -289,7 +289,10 @@ export function GlobalHealthWorkspace(props) {
                 h('button', {
                   type: 'button',
                   className: 'dsh-router-btn-action',
-                  style: Object.assign({}, S.btnActionSmall, isCheckingThis ? { opacity: 0.6, cursor: 'wait' } : null),
+                  // While it runs the button says so: a real check takes
+                  // seconds, and a spinning 11px icon alone reads as nothing
+                  // happening.
+                  style: Object.assign({}, S.btnActionSmall, isCheckingThis ? { opacity: 0.75, cursor: 'wait' } : null),
                   disabled: isCheckingThis || props.disabled,
                   title: disc
                     ? (disc.kind === 'reachable' ? t('connectivityReachable')
@@ -300,7 +303,7 @@ export function GlobalHealthWorkspace(props) {
                   onClick: function () { props.onCheckRoute(ch.provider, ch.model) },
                 },
                   h(Icon, { d: isCheckingThis ? ICON_SPINNER : ICON_BOLT, size: 11, spin: isCheckingThis }),
-                  t('checkRouteBtn') + ' (' + t('checkRouteCost') + ')'),
+                  isCheckingThis ? t('checkingText') : t('checkRouteBtn') + ' (' + t('checkRouteCost') + ')'),
 
                 // Inline Action 2: the 1-token end-to-end probe. It answers what
                 // the connectivity check cannot: whether a completion can
@@ -310,13 +313,13 @@ export function GlobalHealthWorkspace(props) {
                 h('button', {
                   type: 'button',
                   className: 'dsh-router-btn-action',
-                  style: Object.assign({}, S.btnActionSmall, isProbingThis ? { opacity: 0.6, cursor: 'wait' } : null),
+                  style: Object.assign({}, S.btnActionSmall, isProbingThis ? { opacity: 0.75, cursor: 'wait' } : null),
                   disabled: isProbingThis || props.disabled,
                   title: probeVerdictTitle(t, probeVerdict),
                   onClick: function () { props.onProbeRoute(ch.provider, ch.model) },
                 },
                   h(Icon, { d: isProbingThis ? ICON_SPINNER : ICON_BOLT, size: 11, spin: isProbingThis }),
-                  t('probeBtn') + ' (' + t('probeCost') + ')'))),
+                  isProbingThis ? t('probingText') : t('probeBtn') + ' (' + t('probeCost') + ')'))),
 
             // Metrics & 24-point Sparkline
             h(ChannelMetricsDashboard, { t: t, record: record }))

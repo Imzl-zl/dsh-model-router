@@ -599,12 +599,16 @@ export var S = {
     // Bounded by the viewport, not by its content: the router dialog does not
     // own an inner scroll container, so an unbounded workspace pushes 1500px of
     // channel cards into the page and the whole window scrolls. With the cap,
-    // the header and the filter bar stay put and the channel list scrolls
-    // inside itself — which is the only part that should.
-    maxHeight: 'calc(100vh - 168px)',
+    // the header and the filter bar stay put and the panel scrolls inside
+    // itself — which is the only part that should. The cap leaves room for the
+    // settings form's own footer row under the workspace; without that room the
+    // dialog's body scrolls instead.
+    maxHeight: 'calc(100vh - 292px)',
   },
-  // The one scrolling region of the health workspace.
-  channelList: {
+  // The one scrolling region of either workspace. The chain view and the health
+  // view share it: the router dialog owns no inner scroll container, so without
+  // this every tall region pushed the whole window into scrolling.
+  workspaceScroll: {
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',

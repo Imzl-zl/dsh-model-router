@@ -78,7 +78,11 @@ export function ChainView(props) {
         h('h3', { style: S.introTitle }, t('defaultProfileIntroTitle')),
         h('p', { style: S.introDesc }, t('defaultProfileIntroDesc')))) : null,
 
-    !isDefault || chain.enabled ? h('div', null,
+    // One wrapper around everything the page contributes below the subnav. It
+    // is the workspace's scrolling region, so the rule editor's height never
+    // pushes the dialog's body into scrolling — the same containment the health
+    // workspace gets from S.workspaceScroll.
+    !isDefault || chain.enabled ? h('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 12 } },
       h('div', { className: 'dsh-router-subnav-bar', style: S.subNavBar },
         h(SegmentedTabs, {
           items: subTabs,
@@ -87,36 +91,37 @@ export function ChainView(props) {
           label: t('subTabsLabel'),
         })),
 
-      subTab === 'pipeline' ? h('section', {
-        id: panelId('pipeline'),
-        role: 'tabpanel',
-        'aria-labelledby': tabId('pipeline'),
-        style: S.card,
-      },
-        h('div', { style: S.sectionHeader },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-            h(isDefault ? 'h3' : 'h2', { style: Object.assign({}, S.sectionTitle, isDefault ? { fontSize: 13.5 } : null) },
-              isDefault ? t('defaultPoolTitle') : t('pipelineTitle')),
-            h('p', { style: S.sectionSubtitle }, isDefault ? t('defaultPoolSubtitle') : t('pipelineSubtitle')))),
-        h(PipelineEditor, {
-          t: t,
-          candidates: chain.candidates,
-          strategy: chain.strategy,
-          isDefault: isDefault,
-          disabled: props.disabled,
-          catalog: props.catalog,
-          passive: props.passive,
-          discover: props.discover,
-          onStrategy: function (val) { props.onStrategy(chainId, val, isDefault) },
-          onJumpHealth: props.onJumpHealth,
-          onMaxAttempts: function (index, value) { props.onMaxAttempts(chainId, index, value, isDefault) },
-          onMove: function (index, direction) { props.onMove(chainId, index, direction, isDefault) },
-          onRemove: function (index) { props.onRemove(chainId, index, isDefault) },
-          onNeeds: function (index, patch) { props.onNeeds(chainId, index, patch, isDefault) },
-          onWeight: function (index, value) { props.onWeight(chainId, index, value, isDefault) },
-        }),
-        isDefault ? null : h('div', { style: S.guideBox },
-          h('div', { style: S.guideHeader },
+      h('div', { style: S.workspaceScroll },
+        subTab === 'pipeline' ? h('section', {
+          id: panelId('pipeline'),
+          role: 'tabpanel',
+          'aria-labelledby': tabId('pipeline'),
+          style: S.card,
+        },
+          h('div', { style: S.sectionHeader },
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+              h(isDefault ? 'h3' : 'h2', { style: Object.assign({}, S.sectionTitle, isDefault ? { fontSize: 13.5 } : null) },
+                isDefault ? t('defaultPoolTitle') : t('pipelineTitle')),
+              h('p', { style: S.sectionSubtitle }, isDefault ? t('defaultPoolSubtitle') : t('pipelineSubtitle')))),
+          h(PipelineEditor, {
+            t: t,
+            candidates: chain.candidates,
+            strategy: chain.strategy,
+            isDefault: isDefault,
+            disabled: props.disabled,
+            catalog: props.catalog,
+            passive: props.passive,
+            discover: props.discover,
+            onStrategy: function (val) { props.onStrategy(chainId, val, isDefault) },
+            onJumpHealth: props.onJumpHealth,
+            onMaxAttempts: function (index, value) { props.onMaxAttempts(chainId, index, value, isDefault) },
+            onMove: function (index, direction) { props.onMove(chainId, index, direction, isDefault) },
+            onRemove: function (index) { props.onRemove(chainId, index, isDefault) },
+            onNeeds: function (index, patch) { props.onNeeds(chainId, index, patch, isDefault) },
+            onWeight: function (index, value) { props.onWeight(chainId, index, value, isDefault) },
+          }),
+          isDefault ? null : h('div', { style: S.guideBox },
+            h('div', { style: S.guideHeader },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h(Icon, { d: ICON_WARN, size: 16 }),
               h('strong', null, t('visionWorkflowTitle'))),
@@ -165,5 +170,6 @@ export function ChainView(props) {
             disabled: props.disabled,
             onMaxTotal: function (value) { props.onMaxTotal(chainId, value, isDefault) },
             onStickyTurns: function (value) { props.onStickyTurns(chainId, value, isDefault) },
-          }))) : null) : null)
+          }))) : null),
+      ) : null)
 }
