@@ -1,6 +1,5 @@
 /** Pure value helpers and the one route-status derivation every health surface shares. */
 
-import { S } from './styles.ts'
 import { routeKeyOf } from '../routes.ts'
 
 export function clone(value) {
@@ -62,11 +61,49 @@ export function formatTime(ts) {
 }
 
 
+/**
+ * The one mapping from a health tone to its colour. The colour itself lives in
+ * CSS (`--dsh-router-tone-*`, resolved per theme in ROUTER_CSS) because DSH has
+ * no alias pair that reads in both themes; this function is what keeps every
+ * surface — dots, timeline bars, status pills, probe badges — on the same three
+ * values instead of each re-deriving them.
+ *
+ * Note: 语义色单源与 AA 取舍（为何文字永远不是色调色）—— 见
+ * .agents/notes/implemented/2026-10-16-single-surface-dialog-and-tone-system.md
+ *
+ * @param tone - `healthy` | `degraded` | `unhealthy`, anything else reads idle.
+ * @returns the CSS colour for that tone.
+ */
+export function healthToneColor(tone) {
+  if (tone === 'healthy') return 'var(--dsh-router-tone-ok)'
+  if (tone === 'degraded') return 'var(--dsh-router-tone-warn)'
+  if (tone === 'unhealthy') return 'var(--dsh-router-tone-bad)'
+  return 'var(--dsw-alias-label-tertiary)'
+}
+
+/** Dots and timeline bars: colour only, no text to keep readable. */
 export function healthToneStyle(tone) {
-  if (tone === 'healthy') return S.dotHealthy
-  if (tone === 'degraded') return S.dotDegraded
-  if (tone === 'unhealthy') return S.dotUnhealthy
-  return S.dotUnknown
+  return { background: healthToneColor(tone) }
+}
+
+/**
+ * A semantic badge: tinted surface, hairline tone border, and text in
+ * `label-primary`. The text is deliberately NOT the tone colour — DSH's
+ * `state-*` tokens are mid-tone in one theme or the other, so tone-coloured
+ * text measured 1.00:1 (dark, error) and 1.37:1 (light, error) and 2.09:1
+ * (light, success) against AA's 4.5:1. `label-primary` on the tone's own 12%
+ * tint is a matched pair in both themes, and the dot plus border still carry
+ * the colour at a glance.
+ *
+ * @param tone - the health tone the badge reports.
+ */
+export function healthToneBadge(tone) {
+  var color = healthToneColor(tone)
+  return {
+    background: 'color-mix(in srgb, ' + color + ' 12%, var(--dsw-alias-bg-layer-2))',
+    color: 'var(--dsw-alias-label-primary)',
+    border: '0.5px solid color-mix(in srgb, ' + color + ' 40%, transparent)',
+  }
 }
 
 

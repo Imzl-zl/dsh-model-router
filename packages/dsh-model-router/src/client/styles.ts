@@ -13,6 +13,25 @@ export var ROUTER_CSS = [
   ':root {',
   '  --dsh-router-accent: #4A65E8;',
   '}',
+  '/* Semantic tone colours, resolved per theme in exactly one place.',
+  '     No DSH *alias* pair is readable in both themes: `state-success-primary`',
+  '     is mid-tone green-500 on light (2.1:1 on white) and',
+  '     `state-error-secondary` IS `state-error-primary` on dark (1:1 — the text',
+  '     disappears). So the tone colour comes from DSH\'s static palette, dark',
+  '     enough for light theme and light enough for dark theme, and it paints',
+  '     the dot and the border only: badge text stays `label-primary`, which is',
+  '     a matched pair with the surface by construction rather than by luck.',
+  '     Anchors: design-platform.css (static palette, body[data-ds-dark-theme]). */',
+  'body {',
+  '  --dsh-router-tone-ok: var(--dsw-static-green-900);',
+  '  --dsh-router-tone-warn: var(--dsw-static-amber-900);',
+  '  --dsh-router-tone-bad: var(--dsw-static-red-900);',
+  '}',
+  'body[data-ds-dark-theme] {',
+  '  --dsh-router-tone-ok: var(--dsw-static-green-400);',
+  '  --dsh-router-tone-warn: var(--dsw-static-amber-400);',
+  '  --dsh-router-tone-bad: var(--dsw-static-red-400);',
+  '}',
   '/* dsh-model-router: sidebar footer entry geometry.',
   '   The host container (ui-sidebar css.footerActions) is SHARED by every registrant',
   '   of sidebar.footer.action — ui-cordis occupies the same slot — so this plugin',
@@ -63,6 +82,28 @@ export var ROUTER_CSS = [
   '   upstream rename fails loudly (two saves visible) instead of silently. */',
   '.dsh-router-page .dsh-router-form-body + div:has(button) {',
   '  display: none !important;',
+  '}',
+  '/* Keep the height chain unbroken from the dialog down to the scroll region.',
+  '     DSH\'s SettingsForm frame and this plugin\'s own children wrapper are',
+  '     plain block boxes, so a `flex: 1` workbench inside them has no definite',
+  '     height to fill: the workbench then sizes to its content, the sidebar',
+  '     stretches to the tallest column, and a long rule list grows the dialog',
+  '     instead of scrolling inside the panel (measured: 24 extra rows pushed the',
+  '     sidebar to 1722px, 1027px past the dialog\'s bottom edge). Promoting just',
+  '     these two wrappers to flex columns restores the chain. Selected',
+  '     structurally, like the suppression rule above, so an upstream rename',
+  '     fails loudly. */',
+  '.dsh-router-page div:has(> .dsh-router-form-body) {',
+  '  display: flex;',
+  '  flex-direction: column;',
+  '  flex: 1;',
+  '  min-height: 0;',
+  '}',
+  '.dsh-router-form-body {',
+  '  display: flex;',
+  '  flex-direction: column;',
+  '  flex: 1;',
+  '  min-height: 0;',
   '}',
   '/* Interactive micro-interactions */',
   '.dsh-router-save-btn:not(:disabled):hover {',
@@ -212,6 +253,9 @@ export var ROUTER_CSS = [
   '  background: var(--dsw-alias-border-l3);',
   '  border-radius: 4px;',
   '}',
+  // Narrow viewport: the dialog is 96vw wide, so below 768px the two columns
+  // stack. The caps are the *sidebar's* own, in its flex column — there is no
+  // viewport maths left here, which is what used to nest two scrollbars.
   '@media (max-width: 768px) {',
   '  .dsh-router-workbench {',
   '    flex-direction: column !important;',
@@ -282,19 +326,44 @@ export function ensureStyles() {
 
 
 export var S = {
-  page: { maxWidth: 1200, margin: '0 auto', padding: '12px 16px 80px', boxSizing: 'border-box' },
-  pageModal: { maxWidth: '100%', margin: '0', padding: '0 0 40px', boxSizing: 'border-box' },
+  // The workbench's own root inside the dialog. The settings-page carrier
+  // (`maxWidth: 1200`, 80px bottom padding for a form footer row) is gone —
+  // the sidebar dialog is the only surface, and its content area is a flex
+  // column, so this root fills it and hands the rest of the height down.
+  modalRoot: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    boxSizing: 'border-box',
+  },
   workbench: {
     display: 'flex',
     gap: 16,
+    // Content-height columns, each capped by its own `maxHeight: 100%`: the
+    // sidebar ends where its content ends (so the health entry stays next to the
+    // rules instead of at the bottom of a stretched panel), and the workspace
+    // column fills the row so its scroll region owns the leftover height.
+    // `flex: 1` on the sidebar's list was the original bug — it filled the panel
+    // with empty space and pushed the health entry 468px below the content.
     alignItems: 'flex-start',
-    minHeight: 560,
+    flex: 1,
+    minHeight: 0,
     boxSizing: 'border-box',
   },
   masterSidebar: {
     width: 260,
     minWidth: 240,
     flexShrink: 0,
+    // Content-height, capped at the workbench row: a short rule list must not
+    // stretch the panel and leave a hole in it, and a long one must scroll
+    // inside the panel instead of growing the dialog. Both need `minHeight: 0`
+    // (a flex item's automatic minimum is its content height, which would
+    // otherwise beat the cap) and the percentage needs the height chain above
+    // to be unbroken — see the form-body rules in ROUTER_CSS.
+    minHeight: 0,
+    maxHeight: '100%',
     background: 'var(--dsw-alias-bg-layer-1)',
     border: '0.5px solid var(--dsw-alias-border-l3)',
     borderRadius: 'var(--dsw-radius-xl, 16px)',
@@ -356,8 +425,13 @@ export var S = {
     display: 'flex',
     flexDirection: 'column',
     gap: 4,
-    maxHeight: 'calc(100vh - 280px)',
-    minHeight: 380,
+    // Content height: the list takes only what its rows need, so the health
+    // entry below it stays next to the content instead of being pushed to the
+    // bottom of a stretched panel. It still shrinks (and then scrolls) when the
+    // panel hits its `maxHeight: 100%` cap, which is what a long rule list
+    // needs. `flex: 1` here was the bug — it filled the panel with empty space.
+    flex: '0 1 auto',
+    minHeight: 0,
     overflowY: 'auto',
     boxSizing: 'border-box',
   },
@@ -449,8 +523,6 @@ export var S = {
     fontSize: 10,
     padding: '1px 5px',
     borderRadius: 8,
-    background: 'rgba(16,185,129,0.12)',
-    color: 'var(--dsw-alias-state-success-primary)',
     fontWeight: 600,
     flexShrink: 0,
   },
@@ -467,8 +539,6 @@ export var S = {
     fontSize: 10,
     padding: '1px 5px',
     borderRadius: 8,
-    background: 'rgba(239,68,68,0.12)',
-    color: 'var(--dsw-alias-state-error-primary, #EF4444)',
     fontWeight: 600,
     flexShrink: 0,
   },
@@ -476,8 +546,6 @@ export var S = {
     fontSize: 10,
     padding: '1px 5px',
     borderRadius: 8,
-    background: 'rgba(245,158,11,0.12)',
-    color: 'var(--dsw-alias-state-warn-primary, #F59E0B)',
     fontWeight: 600,
     flexShrink: 0,
   },
@@ -593,14 +661,15 @@ export var S = {
     display: 'flex',
     flexDirection: 'column',
     gap: 16,
-    // Bounded by the viewport, not by its content: the router dialog does not
-    // own an inner scroll container, so an unbounded workspace pushes 1500px of
-    // channel cards into the page and the whole window scrolls. With the cap,
-    // the header and the filter bar stay put and the panel scrolls inside
-    // itself — which is the only part that should. The cap leaves room for the
-    // settings form's own footer row under the workspace; without that room the
-    // dialog's body scrolls instead.
-    maxHeight: 'calc(100vh - 292px)',
+    // Fill the workbench row even though the row is `flex-start` (that is what
+    // keeps the sidebar content-height): this column owns the leftover height
+    // and hands it to its scroll region, so the dialog body never has to scroll.
+    // Bounded by the dialog, not by the viewport: the height this column gets is
+    // whatever the flex chain above it has left. A `100vh` constant here
+    // described the settings page's chrome and was simply wrong for the dialog,
+    // which is why the dialog used to nest two scrollbars.
+    alignSelf: 'stretch',
+    minHeight: 0,
   },
   // The one scrolling region of either workspace. The chain view and the health
   // view share it: the router dialog owns no inner scroll container, so without
@@ -672,9 +741,6 @@ export var S = {
     fontWeight: 600,
     padding: '1px 7px',
     borderRadius: 10,
-    background: 'rgba(16,185,129,0.12)',
-    color: 'var(--dsw-alias-state-success-primary)',
-    border: '0.5px solid rgba(16,185,129,0.3)',
     display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
@@ -686,31 +752,19 @@ export var S = {
     color: 'var(--dsw-alias-label-tertiary)',
     margin: 0,
   },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 20, flexWrap: 'wrap' },
-  stickyHeader: {
-    position: 'sticky',
-    top: 0,
-    zIndex: 40,
-    background: 'var(--dsw-alias-bg-layer-2)',
-    backdropFilter: 'blur(16px)',
-    WebkitBackdropFilter: 'blur(16px)',
-    borderBottom: '0.5px solid var(--dsw-alias-border-l3)',
-    padding: '12px 20px',
-    margin: '0 -20px 24px',
-    borderRadius: '0 0 var(--dsw-radius-lg, 14px) var(--dsw-radius-lg, 14px)',
+  // The dialog's content area is a flex column: the workbench fills it and its
+  // own scroll region absorbs the height, so the body scrolls only when the
+  // dialog is shorter than the workbench's minimum. The 60px bottom padding was
+  // room for the settings form's footer row, which this dialog does not show.
+  modalContentArea: {
+    flex: 1,
+    minHeight: 0,
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 16,
-    flexWrap: 'nowrap',
+    flexDirection: 'column',
+    overflowY: 'auto',
+    padding: '20px 24px',
+    boxSizing: 'border-box',
   },
-  headerLeft: { display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 },
-  headerTitles: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
-  titleRow: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 17, fontWeight: 700, color: 'var(--dsw-alias-label-primary)', margin: 0, whiteSpace: 'nowrap' },
-  desc: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12.5, margin: 0, maxWidth: 460, lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  headerActions: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'nowrap' },
-  switchWrap: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, background: 'var(--dsw-alias-bg-layer-2)', padding: '4px 10px', borderRadius: 'var(--dsw-radius-md, 8px)', border: '0.5px solid var(--dsw-alias-border-l2)', whiteSpace: 'nowrap' },
-  switchLabel: { fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap' },
   saveBtn: {
     boxSizing: 'border-box',
     background: 'var(--dsh-router-accent, #4A65E8)',
@@ -744,7 +798,12 @@ export var S = {
     opacity: 0.6,
   },
   saveBtnSuccess: {
-    background: 'var(--dsw-alias-state-success-primary)',
+    // Solid tone fill with white text: green-500 under white measures 2.09:1, so
+    // the fill is the light-theme dark variant and the dark theme keeps the
+    // bright one. This is the one place white text sits ON the tone, which is
+    // why it reads the theme-resolved variable directly instead of the badge
+    // treatment.
+    background: 'var(--dsh-router-tone-ok)',
     color: '#ffffff',
     boxShadow: '0 2px 10px rgba(16,185,129,0.4)',
   },
@@ -787,9 +846,6 @@ export var S = {
     fontWeight: 600,
     padding: '2px 8px',
     borderRadius: 20,
-    background: 'rgba(16,185,129,0.12)',
-    color: 'var(--dsw-alias-state-success-primary)',
-    border: '0.5px solid rgba(16,185,129,0.3)',
     display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
@@ -814,9 +870,6 @@ export var S = {
     fontWeight: 600,
     padding: '2px 8px',
     borderRadius: 20,
-    background: 'rgba(245,158,11,0.15)',
-    color: 'var(--dsw-alias-state-warn-primary)',
-    border: '0.5px solid rgba(245,158,11,0.4)',
     display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
@@ -828,9 +881,6 @@ export var S = {
     fontWeight: 600,
     padding: '2px 8px',
     borderRadius: 20,
-    background: 'rgba(239,68,68,0.15)',
-    color: 'var(--dsw-alias-state-error-primary)',
-    border: '0.5px solid rgba(239,68,68,0.4)',
     display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
@@ -852,7 +902,11 @@ export var S = {
     boxSizing: 'border-box',
     background: 'transparent',
     border: '0.5px solid var(--dsw-alias-border-l3)',
-    color: 'var(--dsw-alias-state-error-primary)',
+    // Red text on a transparent button is the one place the tone colour must be
+    // the text: there is no badge surface to tint. It reads through the same
+    // theme-resolved variable as every other tone, so it is at least consistent
+    // — and its own contrast is measured, not assumed (see the decision note).
+    color: 'var(--dsh-router-tone-bad)',
     borderRadius: 'var(--dsw-radius-md, 8px)',
     padding: '0 12px',
     height: 28,
@@ -908,10 +962,10 @@ export var S = {
   modelNameRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'min(260px, 36vw)' },
   providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
-  primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'rgba(16,185,129,0.12)', color: 'var(--dsw-alias-state-success-primary)', border: '0.5px solid rgba(16,185,129,0.3)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
-  dotHealthy: { background: 'var(--dsw-alias-state-success-primary)' },
-  dotDegraded: { background: 'var(--dsw-alias-state-warn-primary)' },
-  dotUnhealthy: { background: 'var(--dsw-alias-state-error-primary)' },
+  primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
+  dotHealthy: { background: 'var(--dsh-router-tone-ok)' },
+  dotDegraded: { background: 'var(--dsh-router-tone-warn)' },
+  dotUnhealthy: { background: 'var(--dsh-router-tone-bad)' },
   dotUnknown: { background: 'var(--dsw-alias-bg-layer-3)', border: '0.5px solid var(--dsw-alias-border-l3)' },
   modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--ds-font-family-code, monospace)' },
   nodeControls: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' },
@@ -1097,7 +1151,7 @@ export var S = {
   },
   sidebarLabel: { fontSize: 14, fontWeight: 400, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   sidebarCountBadge: { fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
-  railDirtyDot: { position: 'absolute', top: 5, right: 5, width: 7, height: 7, borderRadius: '50%', background: 'var(--dsw-alias-state-warn-primary)', boxShadow: '0 0 4px rgba(245, 158, 11, 0.8)' },
+  railDirtyDot: { position: 'absolute', top: 5, right: 5, width: 7, height: 7, borderRadius: '50%', background: 'var(--dsh-router-tone-warn)', boxShadow: '0 0 4px rgba(245, 158, 11, 0.8)' },
 
   // Modal window styles
   modalTopBar: {
@@ -1124,13 +1178,6 @@ export var S = {
     transition: 'background 0.15s, color 0.15s',
     flexShrink: 0,
   },
-  modalContentArea: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: '20px 24px 60px',
-    boxSizing: 'border-box',
-  },
-
   // Channel metrics & sparkline timeline styles
   channelMetricsCard: {
     display: 'flex',
@@ -1366,8 +1413,21 @@ export var S = {
     gap: 4,
     flexShrink: 0,
   },
-  // The probe verdict on the card, so a click has a visible result without a
-  // hover. DSH's own state tokens keep it readable in both themes.
+  // The tone dot every semantic badge carries: the colour lives here and in the
+  // border, never in the text (see the tone variables at the top of ROUTER_CSS).
+  // The background comes from the caller's tone via healthToneColor, because a
+  // style object is static — it cannot know which tone it was handed.
+  toneDot: {
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    display: 'inline-block',
+    flexShrink: 0,
+  },
+  // 探针判定徽标的形状。配色走 format.ts 的 healthToneBadge 单源——曾经这里
+  // 有 Ok/Bad/Busy/Unknown 四套颜色，其中 Bad 用 error-secondary 做底、
+  // error-primary 做字，而 DSH 暗色主题下这两个令牌同值，文字与底色一模一样
+  // （实测对比度 1.00:1，徽标看起来是一条没有字的红条）。
   probeVerdictBadge: {
     fontSize: 10.5,
     fontWeight: 600,
@@ -1377,32 +1437,7 @@ export var S = {
     alignItems: 'center',
     gap: 4,
     flexShrink: 0,
-    border: '0.5px solid var(--dsw-alias-border-l3)',
-    background: 'var(--dsw-alias-bg-layer-2)',
-    color: 'var(--dsw-alias-label-secondary)',
-  },
-  // 探针判定徽标。配色走 DSH 真实存在的 state-* 令牌（design-platform.css:250-259），
-  // 写法对齐 ui-primitives 的 ConnectionIndicator.module.css:64-66：
-  //  tertiary 做底、primary 做字、border 用 color-mix 兑淡。
-  // 曾经用过 --dsw-alias-success-bg/-border/-label 与 danger-* —— 这些令牌在 DSH 全量
-  // CSS 里不存在，fallback 恒生效，浅色主题下变成浅底浅字（对比度不合格）。
-  probeVerdictOk: {
-    background: 'var(--dsw-alias-state-success-tertiary)',
-    border: '0.5px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 20%, transparent)',
-    color: 'var(--dsw-alias-state-success-primary)',
-  },
-  probeVerdictBad: {
-    background: 'var(--dsw-alias-state-error-secondary)',
-    border: '0.5px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 20%, transparent)',
-    color: 'var(--dsw-alias-state-error-primary)',
-  },
-  probeVerdictBusy: {
-    background: 'var(--dsw-alias-bg-layer-3)',
-    color: 'var(--dsw-alias-label-tertiary)',
-  },
-  probeVerdictUnknown: {
-    background: 'var(--dsw-alias-bg-layer-2)',
-    color: 'var(--dsw-alias-label-tertiary)',
+    boxSizing: 'border-box',
   },
   channelUsageBadge: {
     fontSize: 10.5,

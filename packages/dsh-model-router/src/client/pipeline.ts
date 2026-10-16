@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, routeOf } from './format.ts'
+import { fill, healthToneBadge, routeOf } from './format.ts'
 import { HealthSignalDot, reasoningLabelOf } from './health-ui.ts'
 import { Icon, ICON_ARROW_DOWN, ICON_CLOSE, ICON_DOWN, ICON_MINUS, ICON_PLUS, ICON_TRASH, ICON_UP, ICON_WARN } from './icons.ts'
 import { SegmentedTabs, Tag, useModalLayer } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -33,7 +33,7 @@ export function CandidateNode(props) {
             h('div', { style: S.modelNameRow },
               h('span', { style: S.modelName, title: candidate.model }, candidate.model || '—'),
               h('span', { style: S.providerBadge }, candidate.provider),
-              isPrimary ? h('span', { style: S.primaryBadge }, '👑 ' + t('primaryModelBadge')) : null,
+              isPrimary ? h('span', { style: Object.assign({}, S.primaryBadge, healthToneBadge('healthy')) }, '👑 ' + t('primaryModelBadge')) : null,
               h(HealthSignalDot, {
                 t: t,
                 route: routeOf(candidate),

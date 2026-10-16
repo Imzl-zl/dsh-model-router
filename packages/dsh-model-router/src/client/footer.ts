@@ -3,6 +3,7 @@
 import { Fragment, useState, useEffect } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
+import { healthToneBadge } from './format.ts'
 import { RouterPage } from './page.ts'
 import { Icon, ModelRouterIcon, ICON_CHECK, ICON_CLOSE, ICON_SAVE, ICON_SPINNER, ICON_UNDO } from './icons.ts'
 import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -55,10 +56,10 @@ export function ModelRouterFooterAction(props) {
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
             h('span', { style: S.modalTopTitle }, t('quickModalTitle')),
             h('span', {
-              style: enabled ? S.badgeRunning : S.badgePaused,
+              style: enabled ? Object.assign({}, S.badgeRunning, healthToneBadge('healthy')) : S.badgePaused,
             }, enabled ? '● ' + t('statusRunningBadge') : '○ ' + t('statusDisabledBadge')),
-            dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null,
-            state.failed ? h('span', { style: S.saveFailedBadge }, t('formSaveFailed')) : null))),
+            dirty ? h('span', { style: Object.assign({}, S.badgeDirty, healthToneBadge('degraded')) }, '● ' + t('unsavedChangesBadge')) : null,
+            state.failed ? h('span', { style: Object.assign({}, S.saveFailedBadge, healthToneBadge('unhealthy')) }, t('formSaveFailed')) : null))),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 } },
         dirty ? h('button', {
           type: 'button',
@@ -86,7 +87,7 @@ export function ModelRouterFooterAction(props) {
           onClick: function () { setOpen(false) },
         }, h(Icon, { d: ICON_CLOSE, size: 16 })))),
     h('div', { style: S.modalContentArea },
-      h(RouterPage, Object.assign({}, props, { isModalView: true })))
+      h(RouterPage, props))
   ) : null
 
   return h(Fragment, null,

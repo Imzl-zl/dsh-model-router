@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill } from './format.ts'
+import { fill, healthToneBadge } from './format.ts'
 import { Icon, ICON_CLOSE, ICON_GLOBE, ICON_PLUS, ICON_ROUTE, ICON_SHIELD, ICON_WARN } from './icons.ts'
 import { BudgetRow, PipelineEditor, SwitchOnGrid } from './pipeline.ts'
 import { SegmentedTabs, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -50,9 +50,9 @@ export function ChainView(props) {
             h('h2', { style: S.workspaceModelName }, isDefault ? t('defaultProfileTab') : chain.when.model),
             isDefault
               ? h('span', {
-                  style: chain.enabled ? S.workspaceActivePill : S.navStatusInactive,
+                  style: chain.enabled ? Object.assign({}, S.workspaceActivePill, healthToneBadge('healthy')) : S.navStatusInactive,
                 }, chain.enabled ? '● ' + t('defaultPoolActiveBadge') : '○ ' + t('defaultPoolInactiveBadge'))
-              : h('span', { style: S.workspaceActivePill }, '● ' + t('activeBadge')),
+              : h('span', { style: Object.assign({}, S.workspaceActivePill, healthToneBadge('healthy')) }, '● ' + t('activeBadge')),
             !isDefault && chain.when?.provider ? h('span', { style: S.providerBadge }, chain.when.provider) : null,
             h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: chain.candidates.length }))),
           h('p', { style: S.workspaceDesc }, isDefault ? t('workspaceDefaultHint') : t('workspacePrimaryHint')))),

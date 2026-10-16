@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, formatLatency, healthToneStyle, routeStatus } from './format.ts'
+import { fill, formatLatency, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
 import { ChannelMetricsDashboard } from './health-ui.ts'
 import { Icon, ICON_BOLT, ICON_CHART, ICON_CLOCK, ICON_GEAR, ICON_SEARCH, ICON_SPINNER } from './icons.ts'
 
@@ -264,19 +264,27 @@ export function GlobalHealthWorkspace(props) {
                 h('span', { style: Object.assign({}, S.channelStatusDot, healthToneStyle(status)) }),
                 h('span', { style: S.providerBadge }, ch.provider),
                 h('span', { style: S.channelModelName }, ch.model),
-                h('span', { style: Object.assign({}, S.channelStatusPill, healthToneStyle(status)) },
+                h('span', { style: Object.assign({}, S.channelStatusPill, healthToneBadge(status)) },
                   status === 'healthy' ? t('healthStatusHealthy') : status === 'degraded' ? t('healthStatusDegraded') : status === 'unhealthy' ? t('healthStatusUnhealthy') : t('compactHealthIdle'),
                   availRate !== '—' ? ' · ' + t('availabilityRate') + ' ' + availRate : ''),
                 // The probe verdict, on the card. It used to live only in the
                 // button's tooltip, so a user who clicked 测速 and did not hover
-                // saw nothing change — which reads as a dead button.
+                // saw nothing change — which reads as a dead button. The dot
+                // carries the colour and the text stays `label-primary`: a
+                // tone-coloured badge measured 1.00:1 on dark (text invisible,
+                // the badge read as a blank red bar) and 1.37:1 on light.
                 isProbingThis
-                  ? h('span', { style: Object.assign({}, S.probeVerdictBadge, S.probeVerdictBusy) }, t('probingText'))
+                  ? h('span', { style: Object.assign({}, S.probeVerdictBadge, healthToneBadge('degraded')) },
+                      h('span', { style: Object.assign({}, S.toneDot, healthToneStyle('degraded')) }), t('probingText'))
                   : probeVerdict
                     ? h('span', {
-                        style: Object.assign({}, S.probeVerdictBadge, probeVerdict.kind === 'reachable' ? S.probeVerdictOk : probeVerdict.kind === 'unreachable' ? S.probeVerdictBad : S.probeVerdictUnknown),
+                        style: Object.assign({}, S.probeVerdictBadge, healthToneBadge(
+                          probeVerdict.kind === 'reachable' ? 'healthy' : probeVerdict.kind === 'unreachable' ? 'unhealthy' : 'unknown')),
                         title: probeVerdictTitle(t, probeVerdict),
-                      }, probeVerdictText(t, probeVerdict))
+                      },
+                        h('span', { style: Object.assign({}, S.toneDot, healthToneStyle(
+                          probeVerdict.kind === 'reachable' ? 'healthy' : probeVerdict.kind === 'unreachable' ? 'unhealthy' : 'unknown')) }),
+                        probeVerdictText(t, probeVerdict))
                     : null,
                 ch.usages.length === 0
                   ? h('span', { style: S.channelUsageBadge }, t('channelNotUsed'))

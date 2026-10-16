@@ -1,16 +1,16 @@
-/** The whole config page (master-detail workbench) served on DSH's Plugins page. */
+/** The router workbench, served by the sidebar dialog (the plugin's only surface). */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, healthToneStyle, routeOf, routeStatus } from './format.ts'
+import { fill, healthToneBadge, healthToneStyle, routeOf, routeStatus } from './format.ts'
 import { configuredRoutes } from '../routes.ts'
 import { ChainView } from './chain.ts'
 import { AddCandidateModal, HealthSettingsModal, NewProfileModal } from './modals.ts'
 import { FailoverDrawer } from './pipeline.ts'
 import { GlobalHealthWorkspace } from './workspace.ts'
-import { Icon, ModelRouterIcon, ICON_BOLT, ICON_CHART, ICON_CHECK, ICON_GLOBE, ICON_PLUS, ICON_SAVE, ICON_SEARCH, ICON_SPINNER, ICON_UNDO } from './icons.ts'
-import { RiskConfirmation, SettingsForm, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Icon, ICON_BOLT, ICON_CHART, ICON_GLOBE, ICON_PLUS, ICON_SEARCH } from './icons.ts'
+import { RiskConfirmation, SettingsForm } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /** Every physical route the config names, deduplicated: profiles and the default pool alike. */
 function configuredRouteList(draft) {
@@ -20,7 +20,6 @@ function configuredRouteList(draft) {
 export function RouterPage(props) {
   var t = props.t
   var state = props.useRouterPage(function (snapshot) { return snapshot })
-  if (props.view === 'summary') return t('pluginDesc')
   var draft = state.draft
   var disabled = !state.writable || state.saving
   var isHealthMode = state.ui.activeId === '__health__'
@@ -31,7 +30,6 @@ export function RouterPage(props) {
   }
   var modal = state.ui.modal
   var routableProviders = state.ui.catalog?.routableProviders ?? []
-  var isModalView = Boolean(props.isModalView)
 
   var searchQueryState = useState('')
   var searchQuery = searchQueryState[0]
@@ -97,48 +95,44 @@ export function RouterPage(props) {
   // 监听——自建版在插件弹窗打开时也会触发保存，且用户改不了键位。
   // 注册见 apply.ts 的 `router: save command`。
 
-  return h('div', { className: 'dsh-router-page', style: isModalView ? S.pageModal : S.page },
-    // Enhanced Sticky Action Header (Decoupled: Only configuration lifecycle actions)
-    !isModalView ? h('header', { style: S.stickyHeader },
-      h('div', { style: S.headerLeft },
-        h(ModelRouterIcon, { size: 30, color: 'var(--dsw-alias-brand-primary, #4A65E8)' }),
-        h('div', { style: S.headerTitles },
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            h('h1', { style: S.titleRow }, t('pluginTitle')),
-            h('span', { style: draft.enabled ? S.badgeRunning : S.badgePaused },
-              draft.enabled ? '● ' + t('statusRunningBadge') : '○ ' + t('statusDisabledBadge')),
-            state.dirty ? h('span', { style: S.badgeDirty }, '● ' + t('unsavedChangesBadge')) : null),
-          h('p', { style: S.desc }, t('pluginDesc')))),
-      h('div', { style: S.headerActions },
-        h('div', { style: S.switchWrap },
-          h('span', { style: S.switchLabel }, t('globalSwitchLabel')),
-          h(Switch, {
-            checked: draft.enabled,
-            label: t('globalSwitchLabel'),
-            disabled: disabled,
-            title: t('globalSwitchDesc'),
-            onChange: function (next) { props.onEnabled(next) },
-          })),
-        state.dirty ? h('button', {
-          type: 'button',
-          className: 'dsh-router-discard-btn',
-          style: S.discardBtnHeader,
-          disabled: disabled,
-          onClick: props.onDiscard,
-        }, h(Icon, { d: ICON_UNDO, size: 13 }), t('formDiscard')) : null,
-        h('button', {
-          type: 'button',
-          className: 'dsh-router-save-btn',
-          style: Object.assign({}, S.saveBtn,
-            (state.dirty && state.writable && !state.saving && !state.invalid ? S.saveBtnHighlight : S.saveBtnDisabled)),
-          disabled: !state.dirty || disabled || state.invalid,
-          title: state.dirty ? t('saveShortcutHint') : t('savedStateTip'),
-          onClick: props.onSave,
-        },
-          state.saving ? h(Icon, { d: ICON_SPINNER, size: 14, spin: true }) : (state.dirty ? h(Icon, { d: ICON_SAVE, size: 14 }) : h(Icon, { d: ICON_CHECK, size: 14 })),
-          state.saving ? t('formSaving') : t('formSave'),
-          state.dirty ? h('kbd', { style: S.kbdTag }, t('saveShortcutKey')) : null))) : null,
+  // The dialog's own top bar (footer.ts) carries the title, the enable switch,
+  // save, discard and close. There used to be a second copy of all of that here
+  // as a sticky header, for when this workbench was served as a page on DSH's
+  // Plugins page — that carrier is gone, and with it the `margin: 0 -20px`
+  // bleed and the 768px media query that only ever applied to it.
 
+  // DSH's SettingsForm always renders a footer with its own save button. This
+  // dialog anchors save/discard in its top bar, so the footer is suppressed —
+  // and it has to be suppressed with `hidden`/`inert`, not only with
+  // `display: none`: DSH's modal layer derives its Tab trap from
+  // `button:not(:disabled)` minus `[inert], [hidden]`
+  // (ui-primitives useModalLayer.ts:73-81), so a footer that is merely
+  // display:none still counts as the dialog's LAST focusable element. Tab from
+  // the real last control then misses the `atEdge` branch, DSH does not
+  // preventDefault, and focus walks out of the dialog (measured: focus lands on
+  // <body> for one Tab press). The structural seam is the same one the CSS
+  // suppression already relies on: the footer is the sibling right after this
+  // wrapper, so an upstream rename fails loudly here instead of silently
+  // restoring a second save button.
+  //
+  // Note: Tab 圈禁根因与修法 —— 见
+  // .agents/notes/implemented/2026-10-16-single-surface-dialog-and-tone-system.md
+  var formBodyRef = useRef(null)
+  useEffect(function () {
+    var wrap = formBodyRef.current
+    var footer = wrap ? wrap.nextElementSibling : null
+    if (!footer) {
+      throw new Error('router: the SettingsForm footer is no longer the sibling after .dsh-router-form-body — the suppression seam moved')
+    }
+    footer.setAttribute('hidden', '')
+    footer.setAttribute('inert', '')
+    return function () {
+      footer.removeAttribute('hidden')
+      footer.removeAttribute('inert')
+    }
+  }, [])
+
+  return h('div', { className: 'dsh-router-page', style: S.modalRoot },
     // Top validation problems alert (if any)
     state.problems.length > 0 ? h('div', { style: S.problemsBox, role: 'alert' },
       h('strong', null, t('problemsTitle')),
@@ -154,8 +148,8 @@ export function RouterPage(props) {
     // （ui-primitives 的 settings-form/SettingsForm.tsx:54：离开页面就丢草稿）。
     // 侧栏弹窗与插件页共用同一个 controller，弹窗关掉 = 它这一侧卸载 = 会把另一面
     // 未保存的编辑静默丢掉。弹窗里这个回调换成 no-op：弹窗的"离开"由顶栏的放弃按钮
-    // 显式表达，不该继承页面的隐式契约。底栏照旧被 .dsh-router-form-body +
-    // div:has(button) 压掉（弹窗顶栏自己接了保存/放弃/失败徽标）。
+    // 显式表达，不该继承页面的隐式契约。底栏照旧被压掉（弹窗顶栏自己接了
+    // 保存/放弃/失败徽标），压制方式见上面的 formBodyRef 副作用。
     h(SettingsForm, {
       labels: {
         unavailable: t('formUnavailable'),
@@ -173,12 +167,12 @@ export function RouterPage(props) {
         failed: state.failed,
       },
       onSave: props.onSave,
-      onDiscard: isModalView ? function () {} : props.onDiscard,
+      onDiscard: function () {},
     },
       // One wrapper around everything the page contributes: the SettingsForm
       // footer is the element right after it, so the suppression rule needs no
       // DSH class name.
-      h('div', { className: 'dsh-router-form-body' },
+      h('div', { className: 'dsh-router-form-body', ref: formBodyRef },
         h('div', { className: 'dsh-router-workbench', style: S.workbench },
           h('aside', { className: 'dsh-router-master-sidebar', style: S.masterSidebar },
             h('div', { style: S.sidebarHeader },
@@ -218,7 +212,7 @@ export function RouterPage(props) {
                     h('div', { style: S.navItemTitleRow },
                       h('span', { style: S.navItemTitle }, t('defaultProfileTab')),
                       h('span', {
-                        style: draft.default.enabled ? S.navStatusActive : S.navStatusInactive,
+                        style: draft.default.enabled ? Object.assign({}, S.navStatusActive, healthToneBadge('healthy')) : S.navStatusInactive,
                       }, draft.default.enabled ? t('defaultPoolActiveBadge') : t('defaultPoolInactiveBadge'))),
                     h('div', { style: S.navItemSubText },
                       draft.default.enabled ? fill(t('candidateCountTag'), { n: draft.default.candidates.length }) : t('defaultProfileNotActive'))))),
@@ -289,17 +283,24 @@ export function RouterPage(props) {
                     h('div', { style: S.navItemTitleRow },
                       h('span', { style: S.navItemTitle }, t('navHealthTitle')),
                       faultedCount > 0
-                        ? h('span', { style: S.navStatusFaulted }, fill(t('navHealthUnhealthy'), { n: faultedCount }))
+                        ? h('span', { style: Object.assign({}, S.navStatusFaulted, healthToneBadge('unhealthy')) }, fill(t('navHealthUnhealthy'), { n: faultedCount }))
                         : degradedCount > 0
-                          ? h('span', { style: S.navStatusDegraded }, fill(t('navHealthDegraded'), { n: degradedCount }))
-                          : h('span', { style: S.navStatusActive }, t('navHealthAllHealthy'))),
+                          ? h('span', { style: Object.assign({}, S.navStatusDegraded, healthToneBadge('degraded')) }, fill(t('navHealthDegraded'), { n: degradedCount }))
+                          : h('span', { style: Object.assign({}, S.navStatusActive, healthToneBadge('healthy')) }, t('navHealthAllHealthy'))),
                     h('div', { style: S.navItemSubText },
                        fill(t('navHealthCount'), { n: allPhysicalRoutes.length }) + ' · ' + t('navHealthFooterSub'))))))),
 
           // Right Workspace: Switch between GlobalHealthWorkspace and ChainView
           isHealthMode
             ? h('div', {
-                style: { flex: 1, minWidth: 0 },
+                // A flex column, not a plain block: this wrapper sits between the
+                // workbench row and the view's own root, and a block box here
+                // breaks the height chain — `flex: 1` on a child of a block has no
+                // definite height to fill, so the column sizes to its content and
+                // tall content grows the dialog body instead of scrolling inside
+                // the workspace's own region (measured: at a 720px viewport the
+                // dialog body scrolled while the workspace region sat idle).
+                style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, alignSelf: 'stretch' },
                 id: 'panel-global-health',
               },
                 h(GlobalHealthWorkspace, {
@@ -324,7 +325,10 @@ export function RouterPage(props) {
                   onProbeRoute: props.onProbeRoute,
                 }))
             : h('div', {
-                style: { flex: 1, minWidth: 0 },
+                // Same containment as the health wrapper above: without it the
+                // chain view's column is content-height and a long candidate
+                // chain pushes the dialog body into scrolling.
+                style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, alignSelf: 'stretch' },
                 id: activeProfile === null ? 'panel-default' : 'panel-' + activeProfile.id,
               },
                 h(ChainView, Object.assign({

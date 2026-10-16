@@ -5,7 +5,7 @@
  * client.js is a Cordis client module in `window.__ModuleLoader__.load` factory
  * form, so these tests load the real file, hand the factory stub modules, run
  * `apply(ctx)` against a stub context, and drive the controller through the
- * exact seam the UI uses: the `plugins.bundle.config` slot registration's
+ * exact seam the UI uses: the `sidebar.footer.action` slot registration's
  * `inject()` actions plus the `routerPage` snapshot store. No component is
  * rendered, so no DOM is needed.
  *
@@ -61,6 +61,20 @@ function test(name, body) {
   console.log(`    ok  ${name}`)
 }
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+/**
+ * Wait out the controller's busy floor (MIN_BUSY_MS) plus slack.
+ *
+ * An instant failure used to settle in the same React batch that published the
+ * busy state, so `await pending` was enough. The floor is deliberate — without
+ * it the spinner is never painted — so "wait for the run to settle" now has to
+ * wait for the floor too. The value is read from the source, not re-typed here,
+ * so raising the floor cannot silently turn these tests into false passes.
+ */
+const settleBusy = () => {
+  const floor = Number(sourceOf('controller.ts').match(/var MIN_BUSY_MS = (\d+)/)[1])
+  return new Promise((resolve) => setTimeout(resolve, floor + 120))
+}
 
 /** Minimal stand-in for the real snapshot store: set/get/subscribe, no freezing. */
 function createSnapshotStore(init) {
@@ -186,7 +200,10 @@ async function mount({ value, writable = true, mutate, remote } = {}) {
     },
   }
   await loadClient().apply(ctx)
-  const registration = registrations.find((entry) => entry.name === 'plugins.bundle.config')
+  // The sidebar entry is this plugin's only surface: it renders the whole
+  // workbench inside the quick dialog. The Plugins-page carrier
+  // (`plugins.bundle.config`) was removed — one editor, one host.
+  const registration = registrations.find((entry) => entry.name === 'sidebar.footer.action')
   const injected = registration.inject()
   const store = injected.hooks.routerPage
   return {
@@ -321,31 +338,36 @@ test('an edit after a value-changing republish keeps the draft dirty', async () 
 
 // ---- single-route connectivity check ----
 
-/** Remote stubs that make one provider discoverable, with a controllable answer. */
-function discoverStubs(answer) {
-  const calls = { discoverModels: 0 }
+/**
+ * The plugin's own Host face, answering however the case asks. The connectivity
+ * check runs on the Host (see ../../src/connectivity.ts), so the browser half is
+ * driven through exactly the seam a real dispatch uses: one `checkConnectivity`
+ * call carrying the routes, answering with already-classified verdicts.
+ */
+function healthStubs(answer) {
+  const calls = { checkConnectivity: 0, routes: [] }
   return {
     calls,
     remote: {
-      llm: {
-        listConfigurableProviders: () => Promise.resolve({
-          ok: true,
-          value: [{ provider: 'deepseek', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'deepseek'] }],
-        }),
-        discoverModels: () => { calls.discoverModels += 1; return answer() },
-      },
-      settings: {
-        describe: () => Promise.resolve({
-          ok: true,
-          value: { namespaces: [{ ns: 'llm-pi-ai', value: { providers: { deepseek: {} } } }] },
-        }),
+      routerHealth: {
+        checkConnectivity: (request) => {
+          calls.checkConnectivity += 1
+          calls.routes.push(request.routes)
+          return answer(request.routes)
+        },
       },
     },
   }
 }
 
+/** The Host's answer shape: one verdict per requested route, in order. */
+const answerWith = (verdictFor) => (routes) => Promise.resolve({
+  ok: true,
+  value: routes.map((route) => verdictFor(route)),
+})
+
 test('a single-route check shows busy on that route only, then lands the verdict', async () => {
-  const stubs = discoverStubs(() => Promise.resolve({ ok: true, value: [{ id: 'm' }] }))
+  const stubs = healthStubs(answerWith(() => ({ provider: 'deepseek', model: 'm', kind: 'reachable' })))
   const h = await mount({ value: config(), remote: stubs.remote })
   const pending = h.actions.onCheckRoute('deepseek', 'm')
   assert.equal(h.state().ui.checkingRoutes['deepseek/m'], true, 'the route shows busy while the check crosses the wire')
@@ -725,6 +747,110 @@ test('a profile saved before candidates existed reads as an empty, reported chai
   const h = await mount({ value: config({ profiles: [legacy] }) })
   assert.deepEqual(h.state().draft.profiles[0].candidates, [])
   assert.ok(h.state().problems.some((entry) => entry.key === 'problemEmptyChain'))
+})
+
+// ---- one surface, one height source, one tone source ----
+
+// 回归：插件曾在 DSH 插件管理页里再注册一份 `plugins.bundle.config` 页面，与侧栏
+// 弹窗渲染同一个 workbench。两个载体 = 两套布局常数：页面的吸顶头（`margin:0 -20px`
+// 相对 16px padding 外溢 4px）、只对页面生效的 768px 断点、以及按页面 chrome 高度拍的
+// `calc(100vh - 292px)` 上限。浏览器实测：768px 视口下页面比设置列宽 222px（min-content
+// 来自吸顶头的 nowrap 行），弹窗里则出现"弹窗体 + 工作区"两条滚动条。现在只有一个
+// 载体，这些常数连带消失。
+test('the browser half registers exactly one surface: the sidebar dialog', async () => {
+  const apply = sourceOf('apply.ts')
+  assert.ok(apply.includes("ctx.slots.inject('sidebar.footer.action'"),
+    'the sidebar entry must still be registered')
+  // Assert on the registration itself, not on the word: the decision note and
+  // the comments legitimately name the removed carrier.
+  assert.ok(!/ctx\.slots\.inject\('plugins\.bundle\.config'/.test(apply),
+    'the Plugins-page carrier must stay removed — one editor, one host')
+  assert.ok(!apply.includes("name: 'plugins.bundle.config'"),
+    'no registration may claim that slot name either')
+  // 页面形状的分支一并死掉：RouterPage 不再有"页面/弹窗"两种形态。
+  const page = sourceOf('page.ts')
+  assert.ok(!page.includes('isModalView'),
+    'the page/modal branch is dead now that the dialog is the only surface')
+  assert.ok(page.includes("className: 'dsh-router-page', style: S.modalRoot"),
+    'the workbench root is the dialog\'s flex column')
+  // 两个视图的外包装必须是 flex 列且 alignSelf: stretch：行向容器里 flex:1 管宽，
+  // 高度归 align-self 管；少任何一样，该列就按内容高度算并把弹窗体顶滚。
+  for (const id of ['panel-global-health', 'panel-\' + activeProfile.id']) {
+    const at = page.indexOf(id)
+    assert.ok(at > 0, `fixture: ${id} wrapper exists`)
+    const block = page.slice(page.lastIndexOf('style: {', at), at)
+    assert.ok(/display: 'flex'/.test(block) && /flexDirection: 'column'/.test(block),
+      `${id} wrapper must be a flex column`)
+    assert.ok(/alignSelf: 'stretch'/.test(block),
+      `${id} wrapper must stretch to the row height, or its column is content-height`)
+    assert.ok(/minHeight: 0/.test(block),
+      `${id} wrapper must be shrinkable`)
+  }
+})
+
+// 高度只能来自容器链：任何 `100vh` 常数都是把某个载体的 chrome 高度写死，换一个
+// 载体就错（实测弹窗内两条滚动条）。滚动区由 flex + min-height:0 串起来。
+test('no viewport arithmetic sizes the workbench; the flex chain does', async () => {
+  const styles = sourceOf('styles.ts')
+  const vhConstants = styles.match(/calc\(100vh[^)]*\)/g) ?? []
+  assert.deepEqual(vhConstants, [],
+    `layout must come from the flex chain, not the viewport: found ${vhConstants.join(', ')}`)
+  // 取出 S 对象里某个键的整块（按缩进配平到块尾），别用固定字数窗口——注释一长就漏。
+  const blockOf = (key) => {
+    const at = styles.indexOf(`  ${key}: {`)
+    assert.ok(at > 0, `fixture: S.${key} exists`)
+    const end = styles.indexOf('\n  },', at)
+    return styles.slice(at, end === -1 ? undefined : end)
+  }
+  for (const key of ['workbench', 'masterList', 'detailWorkspace', 'modalContentArea', 'modalRoot']) {
+    const block = blockOf(key)
+    assert.ok(/minHeight:\s*0/.test(block), `${key} must be shrinkable (minHeight: 0) so the chain can hand it a height`)
+  }
+  // 断链的两处也必须都在：DSH 的 SettingsForm 外框（结构性提升）与两个视图包装。
+  assert.ok(/\.dsh-router-page div:has\(> \.dsh-router-form-body\)\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;/.test(styles),
+    'the SettingsForm frame must be promoted to a shrinkable flex column, or the chain breaks there')
+  assert.ok(/\.dsh-router-form-body\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;/.test(styles),
+    'the children wrapper must be a shrinkable flex column')
+  // 侧栏按内容高度走（健康入口紧跟内容），但必须能收缩+自滚（长列表不撑破弹窗）。
+  const sidebar = blockOf('masterSidebar')
+  assert.ok(/minHeight:\s*0/.test(sidebar), 'masterSidebar must be shrinkable')
+  assert.ok(/maxHeight:\s*'100%'/.test(sidebar), 'masterSidebar must cap at the row so a long list scrolls inside it')
+  const list = blockOf('masterList')
+  assert.ok(/flex:\s*'0 1 auto'/.test(list), 'masterList must be content-height — flex:1 here pushed the health entry 468px down')
+})
+
+// 语义色只有一个来源：`healthToneBadge`/`healthToneStyle` 读同一批
+// `--dsh-router-tone-*` 变量，文字永远是 label-primary。曾有四套徽标配色各写一份，
+// 其中 Bad 用 error-secondary 做底 + error-primary 做字——DSH 暗色下这两个令牌同值，
+// 实测对比度 1.00:1（徽标是一条没有字的红条）。
+test('semantic tone colour has one source and never paints badge text', async () => {
+  const format = sourceOf('format.ts')
+  assert.ok(format.includes('export function healthToneBadge'),
+    'the badge treatment must be exported from format.ts')
+  assert.ok(/healthToneColor\('healthy'\)[^}]*--dsh-router-tone-ok/.test(format.replace(/\s+/g, ' ')) || format.includes("'var(--dsh-router-tone-ok)'"),
+    'healthy must read the shared tone variable')
+  assert.ok(format.includes("color: 'var(--dsw-alias-label-primary)'"),
+    'badge text stays label-primary — never the tone colour')
+  // 样式对象里不允许再出现"语义令牌当文字色"的写法。
+  const styles = sourceOf('styles.ts')
+  const toneAsText = styles.match(/color:\s*'var\(--dsw-alias-state-(success|error|warn)-primary[^)]*\)'/g) ?? []
+  assert.deepEqual(toneAsText, [],
+    `state-*-primary must not be used as text colour (mid-tone in one theme or the other): ${toneAsText.join(', ')}`)
+  // 被压掉的 DSH SettingsForm 底栏必须对 DSH 的焦点圈禁过滤器可见（[hidden]/[inert]），
+  // 只靠 display:none 会让它成为弹窗"最后一个可聚焦元素"，Tab 从真正的最后一个控件
+  // 走出去（实测 focus 落到 <body>）。
+  const page = sourceOf('page.ts')
+  assert.ok(page.includes("footer.setAttribute('hidden', '')"),
+    'the suppressed footer must carry hidden so DSH\'s Tab trap ignores it')
+  assert.ok(page.includes("footer.setAttribute('inert', '')"),
+    'the suppressed footer must carry inert for the same reason')
+  // 色点必须真的上色：徽标的颜色只剩点和边，点忘了给 background 就是一条
+  // 只有边和文字的徽标（实测第一版就漏了，色点是透明的）。
+  const workspace = sourceOf('workspace.ts')
+  const dots = workspace.match(/S\.toneDot/g) ?? []
+  const colored = workspace.match(/Object\.assign\(\{\}, S\.toneDot, healthToneStyle\(/g) ?? []
+  assert.equal(dots.length, colored.length,
+    `every toneDot must be handed its colour by healthToneStyle: ${dots.length} dot(s), ${colored.length} coloured`)
 })
 
 await Promise.all(pending)

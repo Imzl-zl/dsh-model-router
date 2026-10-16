@@ -127,6 +127,10 @@ export function createController(ctx, scope, t) {
    */
   var discoverTimer = null
   var armedSeconds = -1
+  // 忙态的最短可见时长：长到看得清、短到不觉慢。见 controller.holdBusy 的注释——
+  // 预检即失败的路由（NO_ADAPTER / MISSING_CREDENTIAL）会在微任务里 resolve，
+  // 不设下限的话"忙"和"完成"被 React 批进同一帧，用户看不到任何反馈。
+  var MIN_BUSY_MS = 450
   function armDiscoverTimer() {
     var health = host.health || {}
     var seconds = health.discover && health.discover.enabled ? (health.discover.intervalSeconds || 0) : 0
@@ -581,6 +585,7 @@ export function createController(ctx, scope, t) {
       ui.checking = true
       ui.checkSummary = null
       publish()
+      var started = Date.now()
       var keys = configuredRouteList(draft)
       var verdicts = {}
       Promise.all(keys.map(function (key) {
@@ -600,10 +605,15 @@ export function createController(ctx, scope, t) {
         // 连通性检查跑完顺带重取被动快照：定时轮次开着的时候，健康工作台要跟着
         // 真实发生的事走，而不是停在页面挂载那一刻。
         loadPassive()
-        publish()
+        controller.holdBusy(started, function () {
+          ui.checking = false
+          publish()
+        })
       }).catch(function () {
-        ui.checking = false
-        publish()
+        controller.holdBusy(started, function () {
+          ui.checking = false
+          publish()
+        })
       })
     },
     /** Run a connectivity check on a single route (0 Token discovery check). */
@@ -613,21 +623,48 @@ export function createController(ctx, scope, t) {
       ui.checkingRoutes = Object.assign({}, ui.checkingRoutes)
       ui.checkingRoutes[key] = true
       publish()
+      var started = Date.now()
       return checkRoute(provider, model).then(function (verdict) {
         ui.discover = Object.assign({}, ui.discover)
         ui.discover[key] = verdict
-        ui.checkingRoutes = Object.assign({}, ui.checkingRoutes)
-        delete ui.checkingRoutes[key]
-        publish()
+        controller.holdBusy(started, function () {
+          ui.checkingRoutes = Object.assign({}, ui.checkingRoutes)
+          delete ui.checkingRoutes[key]
+          publish()
+        })
       }).catch(function () {
-        ui.checkingRoutes = Object.assign({}, ui.checkingRoutes)
-        delete ui.checkingRoutes[key]
-        publish()
+        controller.holdBusy(started, function () {
+          ui.checkingRoutes = Object.assign({}, ui.checkingRoutes)
+          delete ui.checkingRoutes[key]
+          publish()
+        })
       })
     },
     updateHealth: function (patch) {
       draft.health = Object.assign({}, draft.health, patch)
       publish()
+    },
+    /**
+     * Hold the busy state on screen long enough to be perceived, then `settle`.
+     *
+     * A route the Host cannot even assemble fails before any I/O —
+     * `NO_ADAPTER` when the provider is not registered here,
+     * `MISSING_CREDENTIAL` when it has no key — so the promise resolves in a
+     * microtask. React then batches the "busy" and "done" publishes into one
+     * render and the user sees nothing at all: measured on such a route, the two
+     * DOM commits land 2ms and 7ms after the click, i.e. the spinner exists for
+     * five milliseconds and is never painted. A click that looks ignored reads
+     * as a frozen app, which is worse than a slow one, so the busy state is held
+     * for a floor. The real duration still wins whenever it is longer — this
+     * only ever adds visible time to a failure that was instantaneous.
+     *
+     * @param started - `Date.now()` taken when the busy state was published.
+     * @param settle - clears the busy state and publishes the result.
+     */
+    holdBusy: function (started, settle) {
+      var left = MIN_BUSY_MS - (Date.now() - started)
+      if (left <= 0) { settle(); return }
+      setTimeout(settle, left)
     },
     /**
      * Read the Host's last probe report — what the scheduled run measured. The
@@ -657,6 +694,7 @@ export function createController(ctx, scope, t) {
       ui.probingRoutes = Object.assign({}, ui.probingRoutes)
       ui.probingRoutes[key] = true
       publish()
+      var started = Date.now()
       health.probeAll({ routes: [{ provider: provider, model: model }] }).then(function (result) {
         if (result && result.ok === true) {
           var next = Object.assign({}, ui.probe)
@@ -665,13 +703,17 @@ export function createController(ctx, scope, t) {
           })
           ui.probe = next
         }
-        ui.probingRoutes = Object.assign({}, ui.probingRoutes)
-        delete ui.probingRoutes[key]
-        publish()
+        controller.holdBusy(started, function () {
+          ui.probingRoutes = Object.assign({}, ui.probingRoutes)
+          delete ui.probingRoutes[key]
+          publish()
+        })
       }).catch(function () {
-        ui.probingRoutes = Object.assign({}, ui.probingRoutes)
-        delete ui.probingRoutes[key]
-        publish()
+        controller.holdBusy(started, function () {
+          ui.probingRoutes = Object.assign({}, ui.probingRoutes)
+          delete ui.probingRoutes[key]
+          publish()
+        })
       })
     },
     /** Probe every configured route: profiles and the default pool alike. */
@@ -686,6 +728,7 @@ export function createController(ctx, scope, t) {
       ui.probing = true
       ui.probeSummary = null
       publish()
+      var started = Date.now()
       health.probeAll({ routes: routes }).then(function (result) {
         if (result && result.ok === true) {
           var next = Object.assign({}, ui.probe)
@@ -695,12 +738,16 @@ export function createController(ctx, scope, t) {
           ui.probe = next
           ui.probeSummary = summarizeProbes(result.value.routes ?? [])
         }
-        ui.probing = false
         loadProbeReport()
-        publish()
+        controller.holdBusy(started, function () {
+          ui.probing = false
+          publish()
+        })
       }).catch(function () {
-        ui.probing = false
-        publish()
+        controller.holdBusy(started, function () {
+          ui.probing = false
+          publish()
+        })
       })
     },
     openHealthModal: function () {
