@@ -70,6 +70,27 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'weight-strategy-starts-at-the-weighted-candidate',
+    note: '权重策略：首个请求直接落在唯一有权重的候选上，不等首选失败',
+    router: { enabled: true, profiles: [profile([
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 1 },
+    ], { strategy: 'weight' })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    script: {
+      // The zero-weight candidate must not be reached at all: if the draw ever
+      // lands on it the turn still succeeds, so assert the headers instead.
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-backup/stub-model'])
+      eq('failed attempts', failedAttempts(events), [])
+      eq('notices', notices(events), [], 'a weighted start is not a failover, so no notice')
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'failover-rate-limit',
     note: '主渠道限流到达单渠道上限，切换到备用并留一条中文通知',
     router: { enabled: true, profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
@@ -335,7 +356,10 @@ function candidateYaml(c, indent) {
   if (needs.images === false) parts.push('images: false')
   if (needs.minContextTokens !== undefined && needs.minContextTokens > 0) parts.push(`minContextTokens: ${needs.minContextTokens}`)
   const extra = parts.length > 0 ? `, needs: { ${parts.join(', ')} }` : ''
-  return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxAttempts: ${c.maxAttempts}${extra} }`
+  // weight must cross the overlay: an unset field reads as 0, which silently
+  // turns a weight strategy into an order one.
+  const weight = c.weight === undefined ? '' : `, weight: ${c.weight}`
+  return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxAttempts: ${c.maxAttempts}${weight}${extra} }`
 }
 
 function overlayYaml(router, selection) {
@@ -369,7 +393,8 @@ ${router.profiles.map(p => `          - id: ${p.id}
 ${p.candidates.map(c => candidateYaml(c, '              ')).join('\n')}
             switchOn: { rateLimit: ${p.switchOn.rateLimit}, server: ${p.switchOn.server}, timeout: ${p.switchOn.timeout}, transport: ${p.switchOn.transport}, emptyResponse: ${p.switchOn.emptyResponse}, invalidRequest: ${p.switchOn.invalidRequest} }
             maxTotalAttempts: ${p.maxTotalAttempts}${p.stickyTurns === undefined ? '' : `
-            stickyTurns: ${p.stickyTurns}`}`).join('\n')}
+            stickyTurns: ${p.stickyTurns}`}${p.strategy === undefined ? '' : `
+            strategy: ${p.strategy}`}`).join('\n')}
         default:
           enabled: ${router.default.enabled}
           candidates:

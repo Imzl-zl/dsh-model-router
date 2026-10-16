@@ -17,6 +17,15 @@ function probeVerdictTitle(t, verdict) {
   return t('probeUnavailable') + (verdict.error ? '（' + verdict.error + '）' : '')
 }
 
+/** The same verdict as the card's short badge text. */
+function probeVerdictText(t, verdict) {
+  if (verdict.kind === 'reachable') {
+    return t('probeBadgeOk') + (typeof verdict.latencyMs === 'number' ? ' ' + formatLatency(verdict.latencyMs) : '')
+  }
+  if (verdict.kind === 'unreachable') return t('probeBadgeBad') + (verdict.error ? ' · ' + verdict.error : '')
+  return t('probeBadgeUnknown')
+}
+
 export function GlobalHealthWorkspace(props) {
   var t = props.t
   var draft = props.draft
@@ -222,11 +231,13 @@ export function GlobalHealthWorkspace(props) {
           style: Object.assign({}, S.searchInput, { height: 28, fontSize: 11.5 }),
         }))),
 
-    // Channel Cards List
-    filteredChannels.length === 0
-      ? h('div', { style: S.telemetryEmptyBox }, allChannels.length === 0 ? t('noChannelsConfigured') : t('noChannelsFound'))
-      : filteredChannels.map(function (ch) {
-          var record = passive[ch.route] || null
+    // Channel Cards List — the workspace's only scrolling region, so the header
+    // and the filter bar above stay where they are.
+    h('div', { style: S.channelList },
+      filteredChannels.length === 0
+        ? h('div', { style: S.telemetryEmptyBox }, allChannels.length === 0 ? t('noChannelsConfigured') : t('noChannelsFound'))
+        : filteredChannels.map(function (ch) {
+            var record = passive[ch.route] || null
           var disc = discover[ch.route] || null
           var probeVerdict = probe[ch.route] || null
           var isFocused = focusRouteKey === ch.route
@@ -256,6 +267,17 @@ export function GlobalHealthWorkspace(props) {
                 h('span', { style: Object.assign({}, S.channelStatusPill, healthToneStyle(status)) },
                   status === 'healthy' ? t('healthStatusHealthy') : status === 'degraded' ? t('healthStatusDegraded') : status === 'unhealthy' ? t('healthStatusUnhealthy') : t('compactHealthIdle'),
                   availRate !== '—' ? ' · ' + t('availabilityRate') + ' ' + availRate : ''),
+                // The probe verdict, on the card. It used to live only in the
+                // button's tooltip, so a user who clicked 测速 and did not hover
+                // saw nothing change — which reads as a dead button.
+                isProbingThis
+                  ? h('span', { style: Object.assign({}, S.probeVerdictBadge, S.probeVerdictBusy) }, t('probingText'))
+                  : probeVerdict
+                    ? h('span', {
+                        style: Object.assign({}, S.probeVerdictBadge, probeVerdict.kind === 'reachable' ? S.probeVerdictOk : probeVerdict.kind === 'unreachable' ? S.probeVerdictBad : S.probeVerdictUnknown),
+                        title: probeVerdictTitle(t, probeVerdict),
+                      }, probeVerdictText(t, probeVerdict))
+                    : null,
                 ch.usages.length === 0
                   ? h('span', { style: S.channelUsageBadge }, t('channelNotUsed'))
                   : ch.usages.map(function (u, i) {
@@ -298,5 +320,5 @@ export function GlobalHealthWorkspace(props) {
 
             // Metrics & 24-point Sparkline
             h(ChannelMetricsDashboard, { t: t, record: record }))
-        }))
+          })))
 }

@@ -596,6 +596,23 @@ export var S = {
     display: 'flex',
     flexDirection: 'column',
     gap: 16,
+    // Bounded by the viewport, not by its content: the router dialog does not
+    // own an inner scroll container, so an unbounded workspace pushes 1500px of
+    // channel cards into the page and the whole window scrolls. With the cap,
+    // the header and the filter bar stay put and the channel list scrolls
+    // inside itself — which is the only part that should.
+    maxHeight: 'calc(100vh - 168px)',
+  },
+  // The one scrolling region of the health workspace.
+  channelList: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    paddingRight: 4,
+    boxSizing: 'border-box',
   },
   workspaceHeaderCard: {
     background: 'var(--dsw-alias-settings-card-fill, var(--dsw-alias-bg-layer-1))',
@@ -1249,8 +1266,7 @@ export var S = {
     color: 'var(--dsw-alias-label-tertiary)',
     whiteSpace: 'nowrap',
   },
-  probeOverrideHead: {
-    display: 'flex',
+  probeOverrideHead: {    display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
@@ -1345,6 +1361,39 @@ export var S = {
     alignItems: 'center',
     gap: 4,
     flexShrink: 0,
+  },
+  // The probe verdict on the card, so a click has a visible result without a
+  // hover. DSH's own state tokens keep it readable in both themes.
+  probeVerdictBadge: {
+    fontSize: 10.5,
+    fontWeight: 600,
+    padding: '2px 8px',
+    borderRadius: 10,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 0,
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    background: 'var(--dsw-alias-bg-layer-2)',
+    color: 'var(--dsw-alias-label-secondary)',
+  },
+  probeVerdictOk: {
+    background: 'var(--dsw-alias-success-bg, rgba(34,197,94,0.14))',
+    border: '0.5px solid var(--dsw-alias-success-border, rgba(34,197,94,0.4))',
+    color: 'var(--dsw-alias-success-label, #4ade80)',
+  },
+  probeVerdictBad: {
+    background: 'var(--dsw-alias-danger-bg, rgba(239,68,68,0.14))',
+    border: '0.5px solid var(--dsw-alias-danger-border, rgba(239,68,68,0.4))',
+    color: 'var(--dsw-alias-danger-label, #f87171)',
+  },
+  probeVerdictBusy: {
+    background: 'var(--dsw-alias-bg-layer-3)',
+    color: 'var(--dsw-alias-label-tertiary)',
+  },
+  probeVerdictUnknown: {
+    background: 'var(--dsw-alias-bg-layer-2)',
+    color: 'var(--dsw-alias-label-tertiary)',
   },
   channelUsageBadge: {
     fontSize: 10.5,
