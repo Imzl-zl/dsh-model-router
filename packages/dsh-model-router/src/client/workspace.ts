@@ -168,6 +168,21 @@ export function GlobalHealthWorkspace(props) {
           title: t('failoverHistoryButton'),
           onClick: props.onOpenDrawer,
         }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory')))),
+      // What the last run found. Kept on screen until the next run: a run whose
+      // results match what was already there changes nothing visible, so the
+      // counts are what tell the user the click did something.
+      (checking || probing || (props.checkSummary && props.checkSummary.total > 0) || (props.probeSummary && props.probeSummary.total > 0))
+        ? h('div', { style: S.healthRunSummary },
+            checking ? h('span', { style: S.healthRunSummaryItem }, t('checkingText')) : null,
+            props.checkSummary && props.checkSummary.total > 0 && !checking
+              ? h('span', { style: S.healthRunSummaryItem }, fill(t('checkSummaryLine'), { text: props.checkSummary.text }))
+              : null,
+            probing ? h('span', { style: S.healthRunSummaryItem }, t('probingText')) : null,
+            props.probeSummary && props.probeSummary.total > 0 && !probing
+              ? h('span', { style: S.healthRunSummaryItem }, fill(t('probeSummaryLine'), { text: props.probeSummary.text }))
+              : null,
+            h('span', { style: S.healthRunSummaryHint }, t('perRouteProbeHint')))
+        : null,
 
     // Filter and Search Bar
     h('div', { style: S.healthFilterBar },

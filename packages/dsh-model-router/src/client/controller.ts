@@ -9,7 +9,7 @@
  */
 
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { clone, deepEqual, routeOf } from './format.ts'
+import { clone, deepEqual, routeOf, summarize } from './format.ts'
 import { defaultSwitchOn, normalizeDefault, normalizeHealth, normalizeProfiles, validate } from './validate.ts'
 
 export function createController(ctx, scope, t) {
@@ -53,6 +53,11 @@ export function createController(ctx, scope, t) {
     probe: {},
     probing: false,
     probingRoutes: {},
+    // What the last manual run found, kept on screen until the next run. A
+    // check that changes nothing visible reads as "nothing happened" — the
+    // counts are the feedback, not the dots.
+    checkSummary: null,
+    probeSummary: null,
   }
   var saving = false
   var failed = false
@@ -89,6 +94,8 @@ export function createController(ctx, scope, t) {
         probe: ui.probe,
         probing: ui.probing,
         probingRoutes: ui.probingRoutes,
+        checkSummary: ui.checkSummary,
+        probeSummary: ui.probeSummary,
       },
     }
   }
@@ -534,6 +541,7 @@ export function createController(ctx, scope, t) {
     checkAll: function () {
       if (ui.checking) return
       ui.checking = true
+      ui.checkSummary = null
       publish()
       var routes = {}
       var collect = function (candidate) {
@@ -546,6 +554,7 @@ export function createController(ctx, scope, t) {
       })
       draft.default.candidates.forEach(collect)
       var keys = Object.keys(routes)
+      var verdicts = {}
       Promise.all(keys.map(function (key) {
         var route = routes[key]
         return checkRoute(route.provider, route.model).then(function (verdict) {
@@ -553,9 +562,11 @@ export function createController(ctx, scope, t) {
           // 上赋值在 dev 构建里会静默失败。
           ui.discover = Object.assign({}, ui.discover)
           ui.discover[key] = verdict
+          verdicts[key] = verdict
         })
       })).then(function () {
         ui.checking = false
+        ui.checkSummary = summarizeChecks(keys.map(function (key) { return verdicts[key] }))
         // 连通性检查跑完顺带重取被动快照：定时轮次开着的时候，健康工作台要跟着
         // 真实发生的事走，而不是停在页面挂载那一刻。
         loadPassive()
@@ -649,6 +660,7 @@ export function createController(ctx, scope, t) {
       })
       draft.default.candidates.forEach(collect)
       ui.probing = true
+      ui.probeSummary = null
       publish()
       health.probeAll({ routes: Object.keys(routes).map(function (key) { return routes[key] }) }).then(function (result) {
         if (result && result.ok === true) {
@@ -657,6 +669,7 @@ export function createController(ctx, scope, t) {
             next[entry.provider + '/' + entry.model] = entry
           })
           ui.probe = next
+          ui.probeSummary = summarizeProbes(result.value.routes ?? [])
         }
         ui.probing = false
         loadProbeReport()
@@ -677,4 +690,36 @@ export function createController(ctx, scope, t) {
     },
   }
   return controller
+}
+
+/**
+ * What a connectivity run found: reachable, advertised-but-not-this-model,
+ * refused, and could-not-check are four different answers and are counted
+ * separately — the last one says nothing about the channel.
+ */
+function summarizeChecks(verdicts) {
+  return summarize(verdicts, function (verdict) {
+    if (verdict.kind === 'reachable') return 'ok'
+    if (verdict.kind === 'notAdvertised') return 'partial'
+    if (verdict.kind === 'unreachable') return 'bad'
+    return 'unknown'
+  }, [
+    { key: 'ok', label: '可达' },
+    { key: 'partial', label: '在清单但非此模型' },
+    { key: 'bad', label: '不可达' },
+    { key: 'unknown', label: '没能检查' },
+  ])
+}
+
+/** What a probe run found: passed, refused, and could-not-run. */
+function summarizeProbes(routes) {
+  return summarize(routes, function (entry) {
+    if (entry.kind === 'reachable') return 'ok'
+    if (entry.kind === 'unreachable') return 'bad'
+    return 'unknown'
+  }, [
+    { key: 'ok', label: '通过' },
+    { key: 'bad', label: '未通过' },
+    { key: 'unknown', label: '没能测' },
+  ])
 }

@@ -3,13 +3,30 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, healthToneStyle, routeStatus } from './format.ts'
+import { fill, healthToneStyle, routeOf, routeStatus } from './format.ts'
 import { ChainView } from './chain.ts'
 import { AddCandidateModal, HealthSettingsModal, NewProfileModal } from './modals.ts'
 import { FailoverDrawer } from './pipeline.ts'
 import { GlobalHealthWorkspace } from './workspace.ts'
 import { Icon, ModelRouterIcon, ICON_BOLT, ICON_CHART, ICON_CHECK, ICON_GLOBE, ICON_PLUS, ICON_SAVE, ICON_SEARCH, ICON_SPINNER, ICON_UNDO } from './icons.ts'
 import { RiskConfirmation, SettingsForm, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+
+/** Every physical route the config names, deduplicated: profiles and the default pool alike. */
+function configuredRouteList(draft) {
+  var seen = {}
+  var routes = []
+  var collect = function (candidate) {
+    var key = routeOf(candidate)
+    if (seen[key]) return
+    seen[key] = true
+    routes.push(key)
+  }
+  ;(draft.profiles ?? []).forEach(function (profile) {
+    ;(profile.candidates ?? []).forEach(collect)
+  })
+  ;((draft.default ?? {}).candidates ?? []).forEach(collect)
+  return routes
+}
 
 export function RouterPage(props) {
   var t = props.t
@@ -304,6 +321,8 @@ export function RouterPage(props) {
                   probe: state.ui.probe,
                   probing: state.ui.probing,
                   probingRoutes: state.ui.probingRoutes,
+                  checkSummary: state.ui.checkSummary,
+                  probeSummary: state.ui.probeSummary,
                   focusRoute: focusRoute,
                   disabled: disabled,
                   onCheckAll: props.onCheckAll,
@@ -346,6 +365,9 @@ export function RouterPage(props) {
     modal !== null && modal.kind === 'health' ? h(HealthSettingsModal, {
       t: t,
       health: draft.health,
+      // The configured routes, so the per-route probe prompt editor can offer
+      // them instead of asking the user to type provider/model by hand.
+      routes: configuredRouteList(draft),
       onClose: props.onCloseModal,
       onUpdateHealth: props.onUpdateHealth,
     }) : null,

@@ -31,6 +31,8 @@ function readScript() {
 
 const script = readScript()
 const callsByRoute = new Map()
+/** The last request each route received, so tests can assert what was actually sent. */
+export const lastRequestByRoute = new Map()
 
 const DEFAULT_RETRYABLE = ['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'EMPTY_RESPONSE']
 const policy = resolveRetryPolicy(
@@ -63,6 +65,12 @@ class StubAdapter extends LlmAdapter {
 
   async *stream(options) {
     const route = options.provider
+    const promptText = (options.messages ?? [])
+      .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text)
+      .join('')
+    lastRequestByRoute.set(route, { text: promptText, maxTokens: options.maxTokens })
     if (options.purpose !== undefined) {
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text: 'STUB_AUX_OK' }

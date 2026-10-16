@@ -1229,6 +1229,38 @@ export var S = {
   },
 
   // Global health workspace styles
+  healthRunSummary: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+    fontSize: 11.5,
+    color: 'var(--dsw-alias-label-secondary)',
+  },
+  healthRunSummaryItem: {
+    padding: '2px 8px',
+    borderRadius: 999,
+    background: 'var(--dsw-alias-bg-layer-2)',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    whiteSpace: 'nowrap',
+  },
+  healthRunSummaryHint: {
+    color: 'var(--dsw-alias-label-tertiary)',
+    whiteSpace: 'nowrap',
+  },
+  probeOverrideHead: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  probeOverrideRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
   healthFilterBar: {
     display: 'flex',
     alignItems: 'center',

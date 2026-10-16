@@ -24,6 +24,27 @@ export function formatLatency(latencyMs) {
   return Math.round(latencyMs) + 'ms'
 }
 
+/**
+ * What a finished run found, as counts. A run whose results match what was
+ * already on screen changes nothing visible, so the counts — not the dots —
+ * are the feedback that the click did something.
+ *
+ * @param verdicts - one verdict per route the run covered.
+ * @param kindOf - maps a verdict to the bucket it belongs in.
+ * @param buckets - the bucket order, with the label each count is printed under.
+ */
+export function summarize(verdicts, kindOf, buckets) {
+  const counts = {}
+  for (const verdict of verdicts) {
+    const bucket = kindOf(verdict)
+    counts[bucket] = (counts[bucket] ?? 0) + 1
+  }
+  const parts = buckets
+    .filter(bucket => (counts[bucket.key] ?? 0) > 0)
+    .map(bucket => `${bucket.label} ${counts[bucket.key]}`)
+  return { total: verdicts.length, counts, text: parts.join(' · ') }
+}
+
 export function formatThroughput(tps) {
   if (typeof tps !== 'number' || isNaN(tps) || tps <= 0) return '—'
   return tps.toFixed(1) + 't/s'

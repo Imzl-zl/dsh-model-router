@@ -96,8 +96,9 @@ const overlay = `- insert:
             enabled: true
             intervalSeconds: 1
             timeoutSeconds: 8
-            prompt: 'ping'
-            prompts: []
+            prompt: 'shared prompt'
+            prompts:
+              - { route: 'stub-primary/stub-model', prompt: 'override prompt' }
 - id: '@deepseek-ai/dsh-typert-loader'
   # Explicit artifact registration for a package whose entry the overlay mounts
   # by file path: the loader's entry name is then a file:// URL, which resolves
@@ -257,6 +258,21 @@ test('a manual run leaves its report readable through probeReport', async () => 
   const report = await invoke('probeReport', {})
   assert.equal(report.routes.length, 1)
   assert.equal(report.routes[0].kind, 'reachable')
+})
+
+test('a per-route probe prompt override reaches the wire, and the shared prompt covers the rest', async () => {
+  // The overlay configures one override; this asserts the Host actually used it
+  // — a config field nobody reads is the same as a field that does not exist.
+  await invoke('probeAll', { request: { routes: [
+    { provider: 'stub-primary', model: 'stub-model' },
+    { provider: 'stub-third', model: 'stub-model' },
+  ] } })
+  const stub = await import(pathToFileURL(`${HERE}stub-adapter.mjs`).href)
+  const overridden = stub.lastRequestByRoute.get('stub-primary')
+  const shared = stub.lastRequestByRoute.get('stub-third')
+  assert.equal(overridden?.text, 'override prompt', 'the override prompt was sent for its route')
+  assert.equal(shared?.text, 'shared prompt', 'the route without an override got the shared prompt')
+  assert.equal(overridden?.maxTokens, 1, 'the probe asks for one token, so the cost stays bounded')
 })
 
 await Promise.all(pending)

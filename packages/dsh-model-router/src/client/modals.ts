@@ -1,10 +1,10 @@
 /** The plugin's dialogs: health settings, new profile and add-candidate. */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { Icon, ICON_TRASH } from './icons.ts'
-import { Button, Modal, SegmentedTabs, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal, SegmentedControl, SegmentedTabs, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { BREAKER_CODE_PRESETS } from './validate.ts'
 
 export function HealthSettingsModal(props) {
@@ -19,6 +19,34 @@ export function HealthSettingsModal(props) {
   var [probeInterval, setProbeInterval] = useState(String(probe.intervalSeconds ?? 0))
   var [probePrompt, setProbePrompt] = useState(typeof probe.prompt === 'string' ? probe.prompt : '1')
   var [probeTimeout, setProbeTimeout] = useState(String(probe.timeoutSeconds ?? 8))
+  // Per-route probe content, seeded from what the Host already holds.
+  var [promptOverrides, setPromptOverrides] = useState((probe.prompts ?? []).map(function (entry) {
+    return { route: entry.route ?? '', prompt: entry.prompt ?? '' }
+  }))
+  // The routes the config names, minus the ones already overridden — offered
+  // instead of asking the user to type provider/model by hand.
+  var routeChoices = (props.routes ?? []).filter(function (route) {
+    return !promptOverrides.some(function (entry) { return entry.route === route })
+  })
+
+  function patchPromptOverride(index, patch) {
+    setPromptOverrides(function (current) {
+      var next = current.slice()
+      next[index] = Object.assign({}, next[index], patch)
+      return next
+    })
+  }
+
+  // A newly added override row lands below the fold (the modal body is capped by
+  // the shell), so bring it into view — otherwise the user clicks add, sees
+  // nothing change, and concludes the control is dead.
+  useEffect(function () {
+    if (promptOverrides.length === 0) return
+    var body = document.getElementById('dsh-router-health-modal-body')
+    if (body && typeof body.scrollTo === 'function') {
+      body.scrollTo({ top: body.scrollHeight, behavior: 'smooth' })
+    }
+  }, [promptOverrides.length])
   var breaker = health.breaker || {}
   var [breakerOn, setBreakerOn] = useState(breaker.enabled === true)
   var [rules, setRules] = useState((breaker.rules || []).map(function (rule) {
@@ -72,8 +100,11 @@ export function HealthSettingsModal(props) {
               intervalSeconds: intervalOf(probeInterval),
               prompt: probePrompt.trim().length > 0 ? probePrompt.trim() : '1',
               timeoutSeconds: Math.max(1, Math.round(Number(probeTimeout)) || 8),
-              // 逐路由覆盖不是这个弹窗编辑的东西，但保存不该顺手删掉它。
-              prompts: Array.isArray(probe.prompts) ? probe.prompts.slice() : [],
+              // 逐路由覆盖：路由与内容都填满才算一条——空路由是用户还没选完，
+              // 空内容是用户刚删了字，两种情况都不该落一条进配置。
+              prompts: promptOverrides
+                .filter(function (entry) { return entry.route.length > 0 && entry.prompt.trim().length > 0 })
+                .map(function (entry) { return { route: entry.route, prompt: entry.prompt.trim() } }),
             },
             breaker: {
               enabled: breakerOn,
@@ -84,7 +115,10 @@ export function HealthSettingsModal(props) {
         },
       }, t('applyChanges'))),
   },
-    h('div', { style: { width: 'min(570px, 86vw)', maxHeight: 'min(500px, 70vh)', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingRight: 4, boxSizing: 'border-box' } },
+    // Tall enough that the probe tier's own fields sit above the fold: with a
+    // 500px cap the global prompt and the per-route editor were below the
+    // scroll, which read as "the setting does not exist".
+    h('div', { id: 'dsh-router-health-modal-body', style: { width: 'min(640px, 92vw)', maxHeight: 'min(720px, 88vh)', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingRight: 4, boxSizing: 'border-box' } },
       // --- Tier 1: runtime observation ---
       h('div', { style: S.healthTierCard },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
@@ -157,6 +191,63 @@ export function HealthSettingsModal(props) {
             value: probePrompt,
             onChange: function (event) { setProbePrompt(event.target.value) },
           })),
+        // Per-route probe content sits directly under the shared prompt: a
+        // gateway filters content by its own rules, so a route that rejects the
+        // shared prompt needs its own — the host has always honored this, the
+        // editor was the missing half. The add button shares the label's row so
+        // the control is reachable without scrolling.
+        h('div', { style: S.formGroup },
+          h('div', { style: S.probeOverrideHead },
+            h('span', { style: S.formLabel }, t('healthProbePromptsLabel')),
+            h('button', {
+              type: 'button',
+              style: Object.assign({}, S.manualBtn, { marginTop: 0 }),
+              disabled: routeChoices.length === 0,
+              onClick: function () {
+                setPromptOverrides(function (current) {
+                  var free = routeChoices.filter(function (route) {
+                    return !current.some(function (entry) { return entry.route === route })
+                  })
+                  return current.concat([{ route: free[0] ?? '', prompt: '' }])
+                })
+              },
+            }, t('healthProbeOverrideAdd'))),
+          h('span', { style: S.formHint }, t('healthProbePromptsHint')),
+          promptOverrides.map(function (entry, index) {
+            return h('div', { key: entry.route + '#' + index, style: S.probeOverrideRow },
+              h('select', {
+                style: Object.assign({}, S.formInput, { width: 200, flex: 'none' }),
+                'aria-label': t('healthProbeRouteLabel'),
+                value: entry.route,
+                onChange: function (event) { patchPromptOverride(index, { route: event.target.value }) },
+              },
+                h('option', { value: entry.route }, entry.route || t('healthProbeRoutePlaceholder')),
+                routeChoices.map(function (route) {
+                  return h('option', { key: route, value: route }, route)
+                })),
+              h('input', {
+                style: Object.assign({}, S.formInput, { flex: 1, minWidth: 120 }),
+                type: 'text',
+                placeholder: probePrompt || '1',
+                'aria-label': t('healthProbePromptLabel'),
+                value: entry.prompt,
+                onChange: function (event) { patchPromptOverride(index, { prompt: event.target.value }) },
+              }),
+              h('button', {
+                type: 'button',
+                className: 'dsh-router-action-btn dsh-router-action-btn-danger',
+                style: Object.assign({}, S.actionBtn, S.actionBtnDanger, { flex: 'none' }),
+                title: t('healthProbeOverrideRemove'),
+                'aria-label': t('healthProbeOverrideRemove'),
+                onClick: function () {
+                  setPromptOverrides(function (current) {
+                    var next = current.slice()
+                    next.splice(index, 1)
+                    return next
+                  })
+                },
+              }, h(Icon, { d: ICON_TRASH, size: 13 })))
+          })),
         h('div', { style: S.formGroup },
           h('span', { style: S.formLabel }, t('healthProbeTimeoutLabel')),
           h('span', { style: S.formHint }, t('healthProbeTimeoutHint')),
@@ -228,15 +319,22 @@ export function HealthSettingsModal(props) {
                 onChange: function (event) { patchRule(index, { cooldownSeconds: event.target.value }) },
               }),
               h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('breakerSecondsUnit')),
-              h('select', {
-                style: Object.assign({}, S.formInput, { width: 96, flex: 'none' }),
-                'aria-label': t('breakerScopeLabel'),
-                title: t('breakerScopeHint'),
-                value: rule.scope,
-                onChange: function (event) { patchRule(index, { scope: event.target.value }) },
-              },
-                h('option', { value: 'route' }, t('breakerScopeRoute')),
-                h('option', { value: 'channel' }, t('breakerScopeChannel'))),
+              // A segmented control, not a native select: the modal body scrolls,
+              // and a native popup gets clipped by the scroll container — the user
+              // saw the scope options cut off. Two exclusive choices are exactly
+              // what a tablist is for, and it needs no popup at all.
+              h('div', { style: { flex: 'none' } },
+                h(SegmentedControl, {
+                  id: 'router-breaker-scope-' + index,
+                  label: t('breakerScopeLabel'),
+                  value: rule.scope,
+                  disabled: props.disabled,
+                  options: [
+                    { value: 'route', label: t('breakerScopeRoute'), title: t('breakerScopeRouteHint') },
+                    { value: 'channel', label: t('breakerScopeChannel'), title: t('breakerScopeChannelHint') },
+                  ],
+                  onChange: function (next) { patchRule(index, { scope: next }) },
+                })),
               h('button', {
                 type: 'button',
                 className: 'dsh-router-action-btn dsh-router-action-btn-danger',
