@@ -246,11 +246,6 @@ export class RouterState {
   }
 }
 
-/** The route label DSH's own notices use: bare model within one provider. */
-export function routeLabel(provider: string, model: string, otherProvider: string): string {
-  return provider === otherProvider ? model : `${provider}/${model}`
-}
-
 /** The candidate config for one attempt: the resolved controls on a swapped route. */
 export function candidateConfig(resolved: LlmCallConfig, candidate: Candidate): LlmCallConfig {
   return { ...resolved, provider: candidate.provider, model: candidate.model }

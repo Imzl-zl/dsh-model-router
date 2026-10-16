@@ -1381,15 +1381,20 @@ export var S = {
     background: 'var(--dsw-alias-bg-layer-2)',
     color: 'var(--dsw-alias-label-secondary)',
   },
+  // 探针判定徽标。配色走 DSH 真实存在的 state-* 令牌（design-platform.css:250-259），
+  // 写法对齐 ui-primitives 的 ConnectionIndicator.module.css:64-66：
+  //  tertiary 做底、primary 做字、border 用 color-mix 兑淡。
+  // 曾经用过 --dsw-alias-success-bg/-border/-label 与 danger-* —— 这些令牌在 DSH 全量
+  // CSS 里不存在，fallback 恒生效，浅色主题下变成浅底浅字（对比度不合格）。
   probeVerdictOk: {
-    background: 'var(--dsw-alias-success-bg, rgba(34,197,94,0.14))',
-    border: '0.5px solid var(--dsw-alias-success-border, rgba(34,197,94,0.4))',
-    color: 'var(--dsw-alias-success-label, #4ade80)',
+    background: 'var(--dsw-alias-state-success-tertiary)',
+    border: '0.5px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 20%, transparent)',
+    color: 'var(--dsw-alias-state-success-primary)',
   },
   probeVerdictBad: {
-    background: 'var(--dsw-alias-danger-bg, rgba(239,68,68,0.14))',
-    border: '0.5px solid var(--dsw-alias-danger-border, rgba(239,68,68,0.4))',
-    color: 'var(--dsw-alias-danger-label, #f87171)',
+    background: 'var(--dsw-alias-state-error-secondary)',
+    border: '0.5px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 20%, transparent)',
+    color: 'var(--dsw-alias-state-error-primary)',
   },
   probeVerdictBusy: {
     background: 'var(--dsw-alias-bg-layer-3)',

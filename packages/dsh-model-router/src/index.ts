@@ -41,6 +41,7 @@ import {
   type RouterOptions,
 } from './config.ts'
 import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
+import { configuredRoutes } from './routes.ts'
 import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
 import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice } from './notice.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
@@ -62,21 +63,16 @@ import type { ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
  * generated `./remote` artifact, not through a Context key.
  */
 
-/** Every physical route the config names, deduplicated: profiles and the default pool alike. */
-function configuredRoutes(config: { profiles: readonly Profile[]; default: DefaultProfile }): ProbeRoute[] {
-  const seen = new Set<string>()
-  const routes: ProbeRoute[] = []
-  const collect = (candidates: readonly Candidate[]): void => {
-    for (const candidate of candidates) {
-      const key = `${candidate.provider}/${candidate.model}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      routes.push({ provider: candidate.provider, model: candidate.model })
-    }
-  }
-  for (const profile of config.profiles) collect(profile.candidates)
-  collect(config.default.candidates)
-  return routes
+/**
+ * Every physical route the config names, deduplicated, as probe targets:
+ * profiles and the default pool alike. The rule lives in ./routes.ts because the
+ * browser half lists the same set for its checks — one definition, both halves.
+ */
+function configuredProbeRoutes(config: { profiles: readonly Profile[]; default: DefaultProfile }): ProbeRoute[] {
+  return configuredRoutes(config.profiles, config.default).map((key) => {
+    const slash = key.indexOf('/')
+    return { provider: key.slice(0, slash), model: key.slice(slash + 1) }
+  })
 }
 
 export default class ModelRouter extends TypertRemoteService {
@@ -358,7 +354,7 @@ export default class ModelRouter extends TypertRemoteService {
     const timeoutSeconds = health?.timeoutSeconds ?? 8
     const wanted = request.routes.length > 0
       ? request.routes
-      : configuredRoutes(readConfig(this.config))
+      : configuredProbeRoutes(readConfig(this.config))
     const at = Date.now()
     const routes: ProbeReport['routes'] = []
     this.probeInFlight += 1

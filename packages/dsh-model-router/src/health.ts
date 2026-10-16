@@ -26,6 +26,11 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { z } from 'zod'
 import { failureCodeOfStream } from './lineage.ts'
 import { capTimeline, MAX_TIMELINE_POINTS } from './timeline.ts'
+import { routeKeyOf } from './routes.ts'
+
+// The route-key rule lives in ./routes.ts because the browser half builds the
+// same key; re-exported here so existing importers keep one path.
+export { routeKeyOf }
 
 // The window constant lives in ./timeline.ts because the browser half reads the
 // same rule; re-exported here so existing importers keep one path.
@@ -58,11 +63,6 @@ export interface ChannelHealthRecord {
   lastError?: string
   lastCheckedAt: number
   timeline: ChannelTimelinePoint[]
-}
-
-/** Route string formatted as `provider/model`. */
-export function routeKeyOf(provider: string, model: string): string {
-  return `${provider}/${model}`
 }
 
 /**

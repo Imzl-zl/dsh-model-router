@@ -162,8 +162,14 @@ export function CandidateNode(props) {
 }
 
 
+/**
+ * 历史抽屉里的失败码文案。字典只覆盖 switchOn 能配的六码 + 终态三码；缺键时 DSH 的
+ * locale 会回退成键本身（"codeABORTED"），所以这里显式回退成原始码——用户看到码
+ * 比看到内部键名好。宿主 notice.ts 另有一份中文标签，两边各管各的显示面。
+ */
 export function codeLabel(t, code) {
-  return t('code' + code)
+  var label = t('code' + code)
+  return label === 'code' + code ? code : label
 }
 
 

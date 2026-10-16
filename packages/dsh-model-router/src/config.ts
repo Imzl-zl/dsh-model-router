@@ -15,6 +15,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { routeKeyOf } from './routes.ts'
 
 /**
  * One physical candidate. Credentials stay owned by the provider adapter.
@@ -329,6 +330,18 @@ export function switchOnKeyOf(code: string): (typeof SWITCH_ON_KEYS)[number] | u
   }
 }
 
+/** Reject one chain naming the same physical route twice. */
+function assertNoDuplicateRoutes(candidates: readonly Candidate[], where: string): void {
+  const seen = new Set<string>()
+  for (const candidate of candidates) {
+    const key = routeKeyOf(candidate.provider, candidate.model)
+    if (seen.has(key)) {
+      throw new Error(`model-router: ${where} names ${key} more than once — a repeated candidate is attempted twice and burns the budget twice`)
+    }
+    seen.add(key)
+  }
+}
+
 /**
  * Structural cross-field validation, run before a config update restarts the
  * plugin fiber. Deliberately narrow: only errors that are wrong in every
@@ -363,6 +376,10 @@ export function assertStructural(config: {
         throw new Error(`model-router: profile "${profile.id}" candidate maxAttempts must be >= 1`)
       }
     }
+    // 同一条链上重复的 provider/model 没有意义：它会被各打一遍（各含一次退避等待），
+    // 白吃 attempt 预算，而用户看到的是"我配了两条备用"。目录选择和多条目手录都可能
+    // 录出重复，所以在结构校验就挡住，和 ID 重复同级。
+    assertNoDuplicateRoutes(profile.candidates, `profile "${profile.id}"`)
     if (profile.maxTotalAttempts < 1) {
       throw new Error(`model-router: profile "${profile.id}" maxTotalAttempts must be >= 1`)
     }
@@ -376,6 +393,7 @@ export function assertStructural(config: {
   if (config.default.stickyTurns < 0) {
     throw new Error('model-router: default.stickyTurns must be >= 0')
   }
+  assertNoDuplicateRoutes(config.default.candidates, 'default pool')
   // A weight strategy with no positive weight has nothing to draw from, and the
   // failure would surface as every request silently starting at candidate 0.
   for (const [where, chain] of [['profile', config.profiles], ['default', [config.default]]] as const) {

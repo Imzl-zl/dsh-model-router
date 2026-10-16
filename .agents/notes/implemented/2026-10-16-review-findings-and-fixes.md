@@ -11,7 +11,8 @@ DSH 原生能力挖掘）+ 主代理逐条复核，共提出 2 Critical、12 Imp
 本批次已落地：两个 Critical，以及 Important 中的 breaker 开关、always 拒绝、sticky
 时序、定时探测、通知去重、账本归属、快照过滤、时间线合并、弹窗草稿、快捷键原生化、
 footerActions 收窄、文档刷新；Minor 中的探测取消分类、文案归位、timeoutMs 命名、
-signal dot 单源、HMR 卸载断言。未落地项见文末"仍未处理"。
+signal dot 单源、HMR 卸载断言、假 design token、错误码字典、候选重复校验、
+discover 定时器语义、以及 `src/routes.ts` 共用模块。未落地项见文末"仍未处理"。
 
 修复总原则：能用 DSH 原生能力的就不自建。深读确认并使用的原生设施——
 `Modal.shortcutModal` + `ctx.shortcuts.register()`（client/shortcuts）、
@@ -198,8 +199,8 @@ client 两侧同步）。补 `enabled:false` 组合场景（现有两场景都�
 
 ## 验收（已实跑，2026-10-16）
 
-- 单测 85/85（新增：sticky 首图时序、lineage 同 turn/step 入账、跨轮 settled、用户切换不算
-  failover、恢复后不武装、通知去重一门三用、空规则无条件校验）。
+- 单测 86/86（新增：sticky 首图时序、lineage 同 turn/step 入账、跨轮 settled、用户切换不算
+  failover、恢复后不武装、通知去重一门三用、空规则无条件校验、同链重复渠道拒绝）。
 - 组合 16/16（新增：`breaker-disabled-still-fails-over`、`always-retry-policy-rejected`；
   渠道块通知计数钉为 1）。
 - client-controller 28/28（新增：同记录重读时间线不变、手录 maxAttempts 保留、弹窗开关不丢
@@ -210,17 +211,8 @@ client 两侧同步）。补 `enabled:false` 组合场景（现有两场景都�
 ## 仍未处理（下批）
 
 1. **预算位置待裁决**（见下节）——裁决前只改了文案，没动监听位置。
-2. `src/routes.ts` 抽取（host/client 共用一份"配置里有哪些路由"与 `provider/model` 键规则）：
-   当前四处重复实现（index.ts configuredRoutes、controller checkAll/probeAll、page
-   configuredRouteList）+ 键拼装/解析散落。属跨半包重构，单独一批做，配回归。
-3. 6 个不存在的 design token（styles.ts 的 `--dsw-alias-success-*/danger-*`）改真实
-   `state-*` 系列——需要浏览器量测浅色主题对比度后再改，不做盲改。
-4. 字典重复键 `clickToJumpHealth`（locales.ts 两处）+ 死键死样式清扫；错误码字典补齐
-   AUTH/ABORTED/QUOTA/NO_ADAPTER（缺键时回落原始码）。
-5. 候选重复添加校验（host assertStructural 与 client validate 同步拒绝同链重复渠道）。
-6. `armDiscoverTimer` 改读 host 值（与宿主定时器"保存才重武装"语义一致）。
-7. fork/resume 投影一致性测试（open-questions §三.3）——需要真实 checkpoint 重放 harness。
-8. 渲染层布局类结论（断点、间距、魔法数）未经浏览器量测，本轮未动。
+2. fork/resume 投影一致性测试（open-questions §三.3）——需要真实 checkpoint 重放 harness。
+3. 渲染层布局类结论（断点、间距、魔法数）未经浏览器量测，本轮未动。
 
 ## 待裁决（不阻塞已落地部分）
 

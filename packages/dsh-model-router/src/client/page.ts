@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { fill, healthToneStyle, routeOf, routeStatus } from './format.ts'
+import { configuredRoutes } from '../routes.ts'
 import { ChainView } from './chain.ts'
 import { AddCandidateModal, HealthSettingsModal, NewProfileModal } from './modals.ts'
 import { FailoverDrawer } from './pipeline.ts'
@@ -13,19 +14,7 @@ import { RiskConfirmation, SettingsForm, Switch } from '@deepseek-ai/dsh-client-
 
 /** Every physical route the config names, deduplicated: profiles and the default pool alike. */
 function configuredRouteList(draft) {
-  var seen = {}
-  var routes = []
-  var collect = function (candidate) {
-    var key = routeOf(candidate)
-    if (seen[key]) return
-    seen[key] = true
-    routes.push(key)
-  }
-  ;(draft.profiles ?? []).forEach(function (profile) {
-    ;(profile.candidates ?? []).forEach(collect)
-  })
-  ;((draft.default ?? {}).candidates ?? []).forEach(collect)
-  return routes
+  return configuredRoutes(draft.profiles ?? [], draft.default ?? { candidates: [] })
 }
 
 export function RouterPage(props) {

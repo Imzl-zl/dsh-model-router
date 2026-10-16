@@ -16,6 +16,7 @@
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { BreakerScope } from './config.ts'
+import { routeKeyOf, routeLabel } from './routes.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -61,15 +62,15 @@ export function failoverNotice(
 ): UserMessage {
   const reason = code === undefined ? '连续失败' : `失败（${codeLabel(code)}）`
   return notice(
-    `[路由切换] 主模型 ${label(from.provider, from.model, to.provider)} ${reason}，`
-    + `已切换至 ${label(to.provider, to.model, from.provider)}（候选 ${position}/${total}）`,
+    `[路由切换] 主模型 ${routeLabel(from.provider, from.model, to.provider)} ${reason}，`
+    + `已切换至 ${routeLabel(to.provider, to.model, from.provider)}（候选 ${position}/${total}）`,
   )
 }
 
 /** A candidate was skipped before any call: it cannot serve this request. */
 export function skipNotice(candidate: { provider: string; model: string }): UserMessage {
   return notice(
-    `[路由切换] 候选 ${candidate.provider}/${candidate.model} 不支持当前请求参数，已跳过`,
+    `[路由切换] 候选 ${routeKeyOf(candidate.provider, candidate.model)} 不支持当前请求参数，已跳过`,
   )
 }
 
@@ -83,7 +84,7 @@ export function conditionSkipNotice(
   reason: string,
 ): UserMessage {
   return notice(
-    `[路由切换] 候选 ${candidate.provider}/${candidate.model} 的使用条件不满足（${reason}），已跳过`,
+    `[路由切换] 候选 ${routeKeyOf(candidate.provider, candidate.model)} 的使用条件不满足（${reason}），已跳过`,
   )
 }
 
@@ -102,6 +103,6 @@ export function breakerNotice(
   const seconds = Math.max(1, Math.ceil((block.until - now) / 1000))
   const subject = block.scope === 'channel'
     ? `渠道 ${candidate.provider} 已整体自动禁用（该渠道下所有模型）`
-    : `候选 ${candidate.provider}/${candidate.model} 已被自动禁用`
+    : `候选 ${routeKeyOf(candidate.provider, candidate.model)} 已被自动禁用`
   return notice(`${subject}，约 ${seconds} 秒后自动重试，本次跳过`)
 }

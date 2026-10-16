@@ -1,6 +1,7 @@
 /** Pure value helpers and the one route-status derivation every health surface shares. */
 
 import { S } from './styles.ts'
+import { routeKeyOf } from '../routes.ts'
 
 export function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -10,8 +11,9 @@ export function deepEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+/** The route key for one candidate — the shared rule in ../routes.ts. */
 export function routeOf(candidate) {
-  return candidate.provider + '/' + candidate.model
+  return routeKeyOf(candidate.provider, candidate.model)
 }
 
 export function fill(template, vars) {

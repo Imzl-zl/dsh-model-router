@@ -464,6 +464,33 @@ test('assertStructural rejects a breaker rule that matches nothing', () => {
   }))
 })
 
+test('assertStructural rejects a chain that names the same route twice', () => {
+  const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+  const base = { enabled: false, candidates: [], switchOn: so, maxTotalAttempts: 3, strategy: 'order' }
+  const twice = [
+    { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+    { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+  ]
+  // 同链重复的渠道会被各打一遍（各含一次退避等待），白吃 attempt 预算——和 ID 重复同级，
+  // 结构校验就挡住。目录多选与多行手录都可能录出重复。
+  assert.throws(() => assertStructural({
+    profiles: [{ id: 'p', when: { provider: 'stub-primary', model: 'stub-model' }, candidates: twice, switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' }],
+    default: base,
+  }), /names stub-primary\/stub-model more than once/)
+  assert.throws(() => assertStructural({
+    profiles: [],
+    default: { ...base, candidates: twice },
+  }), /default pool names stub-primary\/stub-model more than once/)
+  // 同一个模型出现在不同规则里没问题：那是两个用户选择，各自成链。
+  assert.doesNotThrow(() => assertStructural({
+    profiles: [
+      { id: 'p1', when: { provider: 'stub-primary', model: 'stub-model' }, candidates: [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
+      { id: 'p2', when: { provider: 'stub-backup', model: 'stub-model' }, candidates: [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 0 }, { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
+    ],
+    default: base,
+  }))
+})
+
 test('classifyHealth uses DSH own codes, not invented ones', () => {
   // DSH 的码是 AUTH / QUOTA（llm/src/error.ts 的 QUOTA_EXCEEDED_CODE），
   // 全树没有 AUTH_FAILED。写成不存在的码会让密钥失效永远不标记渠道异常。

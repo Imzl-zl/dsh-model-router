@@ -12,6 +12,15 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, routeOf, summarize } from './format.ts'
 import { defaultSwitchOn, normalizeDefault, normalizeHealth, normalizeProfiles, validate } from './validate.ts'
 import { capTimeline, MAX_TIMELINE_POINTS } from '../timeline.ts'
+import { configuredRoutes } from '../routes.ts'
+
+/**
+ * 配置里点名的全部物理渠道（去重、按链顺序）：巡检与探测都用这一份。规则在
+ * ../routes.ts，宿主侧共用同一函数——两边各自收集就会漂移。
+ */
+function configuredRouteList(draft) {
+  return configuredRoutes(draft.profiles ?? [], draft.default ?? { candidates: [] })
+}
 
 export function createController(ctx, scope, t) {
   var seed = function () {
@@ -111,11 +120,15 @@ export function createController(ctx, scope, t) {
    * 定时连通性检查。跑在浏览器/桌面壳里，所以只在整个 DSH 界面开着的时候有效——
    * 这一点在设置里写明了，不假装是后台常驻。周期由用户按自己渠道的限流承受
    * 能力定，插件不设下限：限流是每个渠道各自的，不是几个渠道加起来算的。
+   *
+   * 周期读 **host**（已保存的配置）而不是 draft：未保存的编辑不该改变正在跑的
+   * 巡检节奏，保存成功才重新武装——与宿主侧探针定时器"保存即 fiber 重启按新周期
+   * 重武装"是同一套语义。
    */
   var discoverTimer = null
   var armedSeconds = -1
   function armDiscoverTimer() {
-    var health = draft.health || {}
+    var health = host.health || {}
     var seconds = health.discover && health.discover.enabled ? (health.discover.intervalSeconds || 0) : 0
     if (seconds === armedSeconds) return
     armedSeconds = seconds
@@ -568,17 +581,7 @@ export function createController(ctx, scope, t) {
       ui.checking = true
       ui.checkSummary = null
       publish()
-      var routes = {}
-      var collect = function (candidate) {
-        var key = routeOf(candidate)
-        if (routes[key]) return
-        routes[key] = { provider: candidate.provider, model: candidate.model }
-      }
-      draft.profiles.forEach(function (profile) {
-        profile.candidates.forEach(collect)
-      })
-      draft.default.candidates.forEach(collect)
-      var keys = Object.keys(routes)
+      var keys = configuredRouteList(draft)
       var verdicts = {}
       Promise.all(keys.map(function (key) {
         var route = routes[key]
@@ -674,20 +677,14 @@ export function createController(ctx, scope, t) {
       if (ui.probing) return
       var health = ctx.remote && ctx.remote.routerHealth
       if (!health || typeof health.probeAll !== 'function') return
-      var routes = {}
-      var collect = function (candidate) {
-        var key = routeOf(candidate)
-        if (routes[key]) return
-        routes[key] = { provider: candidate.provider, model: candidate.model }
-      }
-      draft.profiles.forEach(function (profile) {
-        profile.candidates.forEach(collect)
+      var routes = configuredRouteList(draft).map(function (key) {
+        var slash = key.indexOf('/')
+        return { provider: key.slice(0, slash), model: key.slice(slash + 1) }
       })
-      draft.default.candidates.forEach(collect)
       ui.probing = true
       ui.probeSummary = null
       publish()
-      health.probeAll({ routes: Object.keys(routes).map(function (key) { return routes[key] }) }).then(function (result) {
+      health.probeAll({ routes: routes }).then(function (result) {
         if (result && result.ok === true) {
           var next = Object.assign({}, ui.probe)
           ;(result.value.routes ?? []).forEach(function (entry) {

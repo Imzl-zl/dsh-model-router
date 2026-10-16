@@ -67,6 +67,14 @@ export function validate(draft) {
       if (!candidate.provider || !candidate.model) problems.push({ key: 'problemEmptyRoute', vars: { id: profile.id, index: index + 1 } })
       if (!(candidate.maxAttempts >= 1 && candidate.maxAttempts <= 5)) problems.push({ key: 'problemBadMaxAttempts', vars: { id: profile.id, index: index + 1 } })
     })
+    // 与 host 的 assertStructural 同步：同链重复的 provider/model 会被各打一遍，
+    // 白吃 attempt 预算。这里漏一条，用户就会存一个被 Host 拒绝、且看不到原因的配置。
+    var seenRoutes = {}
+    profile.candidates.forEach(function (candidate, index) {
+      var key = candidate.provider + '/' + candidate.model
+      if (seenRoutes[key]) problems.push({ key: 'problemDuplicateRoute', vars: { id: profile.id, route: key, index: index + 1 } })
+      seenRoutes[key] = true
+    })
     if (!(profile.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: { id: profile.id } })
     if (!(profile.stickyTurns >= 0)) problems.push({ key: 'problemBadSticky', vars: { id: profile.id } })
     // 空链已经报了 problemEmptyChain，别再叠加一条权重提示；默认兜底池没有
