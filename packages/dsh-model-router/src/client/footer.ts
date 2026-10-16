@@ -27,7 +27,7 @@ export function ModelRouterFooterAction(props) {
 
   var buttonProps = {
     type: 'button',
-    className: 'dsh-router-footer-action' + (isWide ? '' : ' rail'),
+    className: 'dsh-router-footer-action' + (isWide ? ' wide' : ' rail'),
     style: isWide ? S.sidebarActionWide : S.sidebarActionRail,
     title: t('sidebarActionTooltip'),
     'aria-label': t('sidebarActionLabel'),

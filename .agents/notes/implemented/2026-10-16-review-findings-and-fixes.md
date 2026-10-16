@@ -241,8 +241,30 @@ waterfall 里 `await next()` 的解析值就是内层结果；llm-retry 放弃�
 ## 仍未处理（下批）
 
 1. fork/resume 投影一致性测试（open-questions §三.3）——需要真实 checkpoint 重放 harness。
-2. 渲染层布局类结论（断点、间距、魔法数、新 token 在浅色主题的实际对比度）未经浏览器量测，
-   本轮未动。
-3. AUTH 是否该进 switchOn：open-questions 一.5 定性"AUTH 不切换"，但密钥失效恰恰是换渠道
-   最能救的场景（另一条渠道有自己的密钥）；当前只能靠熔断让**下一个**请求跳过。属产品决策，
-   未动。
+2. 渲染层其余结论（断点、间距、魔法数）未经浏览器量测，本轮未动。
+
+## 浏览器实测（2026-10-16，隔离 `.dshhome-view` + 端口 3391 + Chrome MCP）
+
+真 boot 下抓到并修掉两个**只有浏览器才会暴露**的缺陷，两者都曾让整个插件 web boot
+激活失败（`web boot: 1 entry did not activate`，UI 显示 "Failed to load plugins"）：
+
+1. **`routes is not defined`**：`src/routes.ts` 重构时 `checkAll` 的内层回调还在用已删除的
+   `routes[key]`。客户端控制器测试没覆盖 `checkAll`（discover stub 全返回 `ok:false`，map
+   体不执行），所以测试全绿而浏览器一跑就崩。修为按 `provider/model` 拆键，并补
+   `checkAll walks every configured route` 回归。
+2. **`Unsupported Web shortcut: model-router.save`**：快捷键默认绑定写了 Web 下的裸
+   `primary+S`，而 DSH 的 `isWebBindingAllowed`（client/shortcuts/src/binding.ts:96-111）
+   **不放行**——Windows/macOS 的 Web 只放行两键含 primary+alt/shift，Linux 的 Web 只认
+   Slash / Comma+shift / Period+shift 三组（浏览器自己占用 Ctrl+S）。修为桌面裸
+   primary+S、Web 统一 Comma+primary+shift（DSH 自己的 settings.open 在 Web 也是两键形态）。
+   顺带：UI 上的 "Ctrl+S" 提示改成不写死组合（真实键位以 DSH 快捷键设置页为准）。
+
+另确认两件事：① `ctx.inject` 的 child inject 是**显式清单、不从父继承**，`shortcuts` 必须
+列在 child 里（漏列即在激活时抛 `cannot get required service shortcuts in inactive
+context`）；② `dsh.client.inject` 按 DSH 源码只是加载/预取元数据、**从不决定 apply 顺序**
+（ui-workspace 的 apply 注释明说），顺序靠 fiber inject 表达。
+
+**侧栏 footer 覆写收窄已实测**：删掉全局 `div[class*="footerActions"]` 覆写（宿主容器保持
+DSH 自己的 `flex row`，不再波及其他同 slot 注册者），满宽对齐改到自己按钮的
+`.wide:only-child` 规则上；实测按钮 260×42、`margin:4px -2px` 与 DSH 自己的设置行对齐，
+视觉与改前一致。

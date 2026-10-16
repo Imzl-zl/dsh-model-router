@@ -584,8 +584,10 @@ export function createController(ctx, scope, t) {
       var keys = configuredRouteList(draft)
       var verdicts = {}
       Promise.all(keys.map(function (key) {
-        var route = routes[key]
-        return checkRoute(route.provider, route.model).then(function (verdict) {
+        // keys 是 `provider/model` 字符串（共享规则在 ../routes.ts）；拆回两半交给
+        // 检查器。provider 段永不含 `/`，与 host 的 splitRoute 同口径。
+        var slash = key.indexOf('/')
+        return checkRoute(key.slice(0, slash), key.slice(slash + 1)).then(function (verdict) {
           // 先拷贝后写入——store 的 set 会 dev-freeze 它收到的对象，往原对象
           // 上赋值在 dev 构建里会静默失败。
           ui.discover = Object.assign({}, ui.discover)

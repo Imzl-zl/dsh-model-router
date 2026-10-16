@@ -22,6 +22,10 @@ export const name = NS + '/client'
 // `remote.settings` carries the endpoint facts it needs. `remote` is the Remote
 // namespace this package's own `./remote` contribution mounts into, which is
 // what the 1-token probe endpoint is reached through.
+// `shortcuts` 走 Cordis fiber inject——不是 dsh.client.inject：按 DSH 源码
+// （client/modules/src/client/manifest.ts 与 ui-workspace/src/client/index.ts:88-98 的
+// 注释），dsh.client.inject 只是加载/预取元数据，"never apply sequencing"。顺序由依赖
+// 表达：fiber inject 让本插件等 shortcuts 服务就绪才激活。ui-workspace 同款注入。
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings', 'shortcuts']
 
 /**
@@ -41,6 +45,10 @@ export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.sessi
  * @returns disposer that withdraws the UI and the Remote contribution together.
  */
 export async function apply(ctx: Context): Promise<() => Promise<void>> {
+  return await applyInner(ctx)
+}
+
+async function applyInner(ctx: Context): Promise<() => Promise<void>> {
   // Labels come from this plugin's own dictionaries, bound by namespace —
   // never from the Config schema's `.description()`.
   var t = ctx.locale.bind(NS)
@@ -48,7 +56,11 @@ export async function apply(ctx: Context): Promise<() => Promise<void>> {
   ctx.effect(ensureStyles, 'router: global styles')
 
   var unmountRemote = await ctx.remote.$mount(remote)
-  var ui = ctx.inject(['remote.routerHealth', 'slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings'], function (child) {
+  // child 的 inject 是显式清单、不从父继承（Cordis 语义；ui-workspace 的 apply 注释
+  // 同样声明"要依赖哪个服务就列哪个"）。`shortcuts` 必须出现在这里，因为
+  // registerUi 在这个 child 上注册保存命令——漏列它会在激活时抛
+  // "cannot get required service shortcuts in inactive context"。
+  var ui = ctx.inject(['remote.routerHealth', 'slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings', 'shortcuts'], function (child) {
     registerUi(child, t)
   })
   try {
@@ -80,23 +92,27 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
   var scope = ctx.configForms.get(CONFIG_NS)
   var controller = createController(ctx, scope, t)
 
-  // 保存快捷键走 DSH 原生的 shortcuts 服务（@deepseek-ai/dsh-client-shortcuts，
-  // ui-settings-general/src/client/index.ts:179 同款）：可重绑定、出现在快捷键设置页、
-  // 并按模态归属仲裁。`modals: ['model-router']` 与侧栏弹窗 Modal 的 shortcutModal
-  // 对应——弹窗开着时这个键仍归我们，别的模态开着时原生层挡掉。
-  // resolve 只回答"现在该不该我接"：真正能不能存由 controller.save() 自己判
+  // 保存快捷键走 DSH 原生的 shortcuts 服务（ui-settings-general/src/client/index.ts:179
+  // 同款）：可重绑定、出现在快捷键设置页、并按模态归属仲裁。`modals: ['model-router']`
+  // 与侧栏弹窗 Modal 的 shortcutModal 对应——弹窗开着时这个键仍归我们，别的模态开着时
+  // 原生层挡掉。resolve 只回答"现在该不该我接"：能不能存由 controller.save() 自己判
   // （saving/writable/invalid 与草稿校验都在那里）。
   ctx.effect(() => ctx.shortcuts.register({
     id: 'model-router.save' as ShortcutCommandId,
     label: () => t('saveShortcutLabel'),
     aliases: ['model-router save', '模型路由保存'],
+    // 默认绑定按平台分开，依据是 DSH 的 isWebBindingAllowed（shortcuts/src/binding.ts:
+    // 96-111）：Windows/macOS 的 Web 放行"两键含 primary+alt/shift"，**Linux 的 Web 只
+    // 认 Slash/Comma+shift/Period+shift 三组**。所以 Web 统一用 Comma+primary+shift
+    // （DSH 自己的 settings.open 在 Web 也是 primary+alt+Comma 的两键形态）；桌面用裸
+    // primary+S。写错组合会在注册时抛 Unsupported Web shortcut，整个插件激活失败。
     defaults: {
       'desktop:macos': { code: 'KeyS', modifiers: ['primary'] },
       'desktop:windows': { code: 'KeyS', modifiers: ['primary'] },
       'desktop:linux': { code: 'KeyS', modifiers: ['primary'] },
-      'web:macos': { code: 'KeyS', modifiers: ['primary'] },
-      'web:windows': { code: 'KeyS', modifiers: ['primary'] },
-      'web:linux': { code: 'KeyS', modifiers: ['primary'] },
+      'web:macos': { code: 'Comma', modifiers: ['primary', 'shift'] },
+      'web:windows': { code: 'Comma', modifiers: ['primary', 'shift'] },
+      'web:linux': { code: 'Comma', modifiers: ['primary', 'shift'] },
     },
     regions: ['page', 'editable', 'terminal'],
     modals: ['model-router'],

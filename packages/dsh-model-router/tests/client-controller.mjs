@@ -550,6 +550,54 @@ test('the save command is registered with DSH\'s shortcuts service and gated by 
   assert.equal(h.mutateCalls[0].ops.some((op) => op.path[0] === 'profiles'), true)
 })
 
+// 回归：checkAll 曾在内层回调里引用已被删除的 `routes` 对象（keys 改成字符串数组后
+// 忘了拆回 provider/model），整个巡检一跑就 ReferenceError，客户端半包激活失败。
+// 这条用例让"跑一次全量巡检"成为被覆盖的路径。
+test('checkAll walks every configured route and lands its verdict keyed by route', async () => {
+  const asked = []
+  const h = await mount({
+    value: config({
+      profiles: [
+        profile({ candidates: [
+          { provider: 'deepseek', model: 'm', maxAttempts: 1, weight: 0 },
+          { provider: 'other', model: 'm2', maxAttempts: 1, weight: 0 },
+        ] }),
+      ],
+      default: defaultPool({ enabled: true, candidates: [{ provider: 'third', model: 'm3', maxAttempts: 1, weight: 0 }] }),
+    }),
+    remote: {
+      llm: {
+        listConfigurableProviders: () => Promise.resolve({ ok: true, value: [
+          { provider: 'deepseek', settingsNs: 'ns-a', settingsPath: [] },
+          { provider: 'other', settingsNs: 'ns-b', settingsPath: [] },
+          { provider: 'third', settingsNs: 'ns-c', settingsPath: [] },
+        ] }),
+        discoverModels: (_ns, request) => {
+          asked.push(request.provider)
+          // 每个渠道广告不同的模型 id，让三种判定各出现一次：在清单里 / 不在清单里。
+          var advertised = { deepseek: ['m'], other: ['not-this-one'], third: ['m3'] }
+          return Promise.resolve({ ok: true, value: (advertised[request.provider] ?? []).map((id) => ({ id })) })
+        },
+      },
+      settings: { describe: () => Promise.resolve({ ok: true, value: { namespaces: [
+        { ns: 'ns-a', value: { baseURL: 'https://a.example' } },
+        { ns: 'ns-b', value: { baseURL: 'https://b.example' } },
+        { ns: 'ns-c', value: { baseURL: 'https://c.example' } },
+      ] } }) },
+    },
+  })
+  h.actions.onCheckAll()
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  // 三条渠道各问一次（去重后），verdict 按 `provider/model` 落库。
+  assert.deepEqual(asked.sort(), ['deepseek', 'other', 'third'])
+  const discover = h.state().ui.discover
+  assert.equal(discover['deepseek/m']?.kind, 'reachable')
+  assert.equal(discover['other/m2']?.kind, 'notAdvertised', 'the endpoint answered but does not list this model')
+  assert.equal(discover['third/m3']?.kind, 'reachable')
+  assert.equal(h.state().ui.checking, false, 'the run settles')
+  assert.ok(h.state().ui.checkSummary, 'the summary line is what the user sees after a run')
+})
+
 test('the workbench keeps the sidebar and the workspace pane as siblings', async () => {
   // A missing paren in the deep h() nesting does not break `node --check`:
   // the closes just migrate to the end of the return, and the workspace pane
