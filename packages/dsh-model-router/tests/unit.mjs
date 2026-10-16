@@ -741,8 +741,28 @@ test('channelHealthProjection tolerates a header that names no route', () => {
   assert.equal(next, state)
 })
 
-// ---- turn-accumulated image conditions (RouterState) ----
-// 图片条件按 turn 累积：pre-step 的 messages 只是本步新 claimed 的输入，一个
+// ---- the round-robin cursor ----
+// 轮询游标按请求推进（每个 step 一次 startStep），重试不推进——所以同一步的
+// llm-retry 重试不会把链拧走。组合测试够不到它：一次 headless 只有一个 step，
+// 要第二个请求得让 stub 驱动一次工具循环。
+
+test('the cursor advances one step per request and wraps, per session', () => {
+  const states = new RouterState()
+  const session = { id: {} }
+  assert.equal(states.nextCursor(session, 2), 0, 'the first request of a session starts at the head')
+  assert.equal(states.nextCursor(session, 2), 1, 'the next request advances one step')
+  assert.equal(states.nextCursor(session, 2), 0, 'and wraps at the chain length')
+  assert.equal(states.nextCursor({ id: {} }, 2), 0, 'another session counts from its own head')
+})
+
+test('a single-candidate chain never moves the cursor', () => {
+  const states = new RouterState()
+  const session = { id: {} }
+  assert.equal(states.nextCursor(session, 1), 0)
+  assert.equal(states.nextCursor(session, 1), 0)
+})
+
+// ---- turn-accumulated image conditions (RouterState) ----// 图片条件按 turn 累积：pre-step 的 messages 只是本步新 claimed 的输入，一个
 // 带图 turn 的第二步之后通常是空的——按 step 判会让工具循环的第二步滑回文本
 // 模型，而图片还在请求历史里（read_image 也会再次撞门禁）。
 
