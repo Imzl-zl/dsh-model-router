@@ -22,11 +22,17 @@ export var SWITCH_ON_CODES = [
   { key: 'transport', labelKey: 'transport', code: 'TRANSPORT' },
   { key: 'emptyResponse', labelKey: 'emptyResponse', code: 'EMPTY_RESPONSE' },
   { key: 'invalidRequest', labelKey: 'invalidRequest', code: 'INVALID_REQUEST' },
+  // 渠道自身的凭证/额度问题：另一条渠道有自己的密钥和额度，切换通常立刻能救。
+  // 2026-10-16 修订，依据见 .agents/notes/implemented/2026-10-16-switch-on-auth-and-quota.md。
+  { key: 'auth', labelKey: 'auth', code: 'AUTH' },
+  { key: 'quota', labelKey: 'quota', code: 'QUOTA' },
 ]
 
 
 export function defaultSwitchOn() {
-  return { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+  // 与 host 的 switchOnSchema 默认值逐字一致：两边各写一份就会漂移，而漂移的表现是
+  // "UI 说开着、host 说关着"。
+  return { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true }
 }
 
 export function defaultProfileValue() {

@@ -67,9 +67,14 @@ default:                      # pure fallback pool for unconfigured models
   hop, with one attempt.
 - Backoff is not configurable: it belongs to `llm-retry`. Each switch is
   preceded by one backoff wait (about 0.5–10 s with the default policy).
-- Unchecked `switchOn` codes never move the chain; DSH still retries the same
-  route per its own default policy (up to 5 times for the default retryable
-  codes) before the request terminates.
+- **What counts as a failure is `switchOn`.** Defaults follow DSH's own retryable set
+  (`RATE_LIMIT`, `SERVER`, `TIMEOUT`, `TRANSPORT`, `EMPTY_RESPONSE`) plus `AUTH` and
+  `QUOTA`: a dead key or a spent quota is the channel's own fault, and another channel
+  carries its own credentials, so switching usually rescues the request immediately —
+  and the breaker then skips that channel on later requests. `ABORTED` (you pressed
+  stop) and `NO_ADAPTER` never switch; `INVALID_REQUEST` is opt-in because capability
+  classification is provider-dependent. Classification uses `LlmFailure.code` only,
+  never message text.
 
 ### Routing images to a vision model
 

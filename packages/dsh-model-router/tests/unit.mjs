@@ -25,7 +25,7 @@ import {
 } from '../src/router.ts'
 import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, MAX_ENTRIES } from '../src/lineage.ts'
 import { breakerNotice } from '../src/notice.ts'
-import { assertStructural } from '../src/config.ts'
+import { assertStructural, switchOnKeyOf } from '../src/config.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
 
@@ -394,6 +394,16 @@ test('the skip-notice gate is one gate for all three skip kinds, keyed per turn'
   assert.equal(states.shouldNoteSkip(agent, 1, 'condition:a/b:需图片输入'), false, 'an earlier key stays deduped after others were announced')
   // 新一轮重新武装：新的失败链要重新告知。
   assert.equal(states.shouldNoteSkip(agent, 2, 'breaker:a/b'), true)
+})
+
+test('switchOnKeyOf maps the channel-own faults (AUTH/QUOTA) and never the user-abort', () => {
+  // 2026-10-16 修订：AUTH/QUOTA 是渠道自己的毛病（密钥、额度），另一条渠道有自己的
+  // 密钥和额度，所以切换通常立刻能救；ABORTED 是用户自己按的停止，永远不切换。
+  assert.equal(switchOnKeyOf('AUTH'), 'auth')
+  assert.equal(switchOnKeyOf('QUOTA'), 'quota')
+  assert.equal(switchOnKeyOf('ABORTED'), undefined)
+  assert.equal(switchOnKeyOf('NO_ADAPTER'), undefined)
+  assert.equal(switchOnKeyOf('RATE_LIMIT'), 'rateLimit')
 })
 
 test('the client save shape lands where the host reads it', () => {

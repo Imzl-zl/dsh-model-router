@@ -19,8 +19,7 @@ last_updated: "2026-10-14"
 | 2 | 候选索引跨重启 | **不跨重启**。进程内 `WeakMap<Agent, …>` 按 (agent, turn, step) 键控，重启即重置，README 写明；lineage 经插件自有 projection 可重建是另一件事。跨重启延续列 Phase 3，默认关 | product-plan §五 |
 | 3 | 同渠道重试与 failover 的预算归属 | **两层**：同 route 重试归 `llm-retry`（含退避与 `llm/retry` durable 记录）；跨候选 failover 与硬总上限归 Router。总 worst case = 候选数 × (1 + maxRetries)；声明 `always` policy 的候选 provider 配置加载时拒绝 | product-plan §六 |
 | 4 | 两个 waterfall 的位置 | `agent/request` 用 `prepend: true` 拿最外层（压过 `installModelSelection` 写回）；`agent/request-error` 推迟到 `agent/created` 注册到 `agent.ctx`、**不用** prepend（位于 `llm-retry` 内层接放弃交接）。均已实测 | 能力边界 §三 G2 |
-| 5 | 什么失败切渠道 | `switchOn` 默认 = DSH normal policy 五码（`EMPTY_RESPONSE`/`RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`）；`INVALID_REQUEST` 可勾选（默认不勾）承接工具等能力不兼容；`ABORTED`/`AUTH`/`NO_ADAPTER` 不切换。分类用 `LlmFailure.code`，不解析错误文案 | product-plan §2.2 |
-| 6 | 部分流输出后重试的 UI/日志语义 | Router 直接 retry 不产生 `llm/retry` records；用户可见性由中文 notice + Trajectory 既有 attempt 渲染承担。first-token 保留与 turn-process evidence 不作 MVP 要求 | product-plan §4.1-4.2 |
+| 5 | 什么失败切渠道 | **2026-10-16 修订**：默认开 = DSH normal policy 五码（`EMPTY_RESPONSE`/`RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`）+ `AUTH`/`QUOTA`（渠道自身的密钥/额度问题，换渠道通常立刻能救）；`INVALID_REQUEST` 可勾选（默认不勾）；`ABORTED`/`NO_ADAPTER` 不切换。分类用 `LlmFailure.code`，不解析错误文案 | product-plan §2.2 || 6 | 部分流输出后重试的 UI/日志语义 | Router 直接 retry 不产生 `llm/retry` records；用户可见性由中文 notice + Trajectory 既有 attempt 渲染承担。first-token 保留与 turn-process evidence 不作 MVP 要求 | product-plan §4.1-4.2 |
 | 7 | 辅助模型调用 | **不路由**。compaction 与 session-title 由 DSH 各自插件配置管，本插件只覆盖 Agent 主请求，README 写明 | product-plan §十一 |
 | 8 | attempt lineage 持久化 | 插件自有 session projection 折叠 `request/header` + `assistant/attempt`（+ `llm/retry-started`）：key 带插件命名空间、wire view 守 UI-scale、state plain JSON。零新增事件类型、零 plugin record | 能力边界 §三 G3 |
 | 9 | 跨模型族兼容性 | **不推断等价**。候选资格 = 用户显式配置 + 运行时预校验（推理档位，自动维度）+ 条件路由（图片/上下文）。工具能力不做前置条件 | 见二.1 |

@@ -73,6 +73,12 @@ export const switchOnSchema = z.object({
   transport: z.boolean().default(true).description('网络传输失败（TRANSPORT）'),
   emptyResponse: z.boolean().default(false).description('空回复（EMPTY_RESPONSE）'),
   invalidRequest: z.boolean().default(false).description('请求被拒绝 / 能力不兼容（INVALID_REQUEST）；分类依赖 provider，不保证精确'),
+  // 凭证与额度是"渠道自己的毛病"，换一条渠道往往立刻就能救——另一条渠道有自己的
+  // 密钥和额度。2026-10-16 修订：此前把它们列为"配置坏了，切换只会把问题藏起来"而
+  // 不切换，但熔断本来就会让后续请求跳过死渠道，那条理由只把第一次请求也搭进去；
+  // 而切换从不是静默的（中文 notice 点名失败路由与码 + 熔断冷却），比干失败更响。
+  auth: z.boolean().default(true).description('凭证或权限被拒（AUTH）：换一条渠道通常立刻能救，另一条渠道有自己的密钥'),
+  quota: z.boolean().default(true).description('额度用尽（QUOTA）：同上，换渠道可继续；熔断会让后续请求先跳过这条'),
 })
 
 /** One backup chain for the exact provider/model the user picks. */
@@ -216,6 +222,8 @@ export interface SwitchOn {
   transport: boolean
   emptyResponse: boolean
   invalidRequest: boolean
+  auth: boolean
+  quota: boolean
 }
 
 // The `@typert` tag below marks this interface as the package's host-face
@@ -315,6 +323,8 @@ export const SWITCH_ON_KEYS = [
   'transport',
   'emptyResponse',
   'invalidRequest',
+  'auth',
+  'quota',
 ] as const
 
 /** Map a normalized `LlmFailure.code` to its `switchOn` key; undefined = never a Router concern. */
@@ -326,6 +336,10 @@ export function switchOnKeyOf(code: string): (typeof SWITCH_ON_KEYS)[number] | u
     case 'TRANSPORT': return 'transport'
     case 'EMPTY_RESPONSE': return 'emptyResponse'
     case 'INVALID_REQUEST': return 'invalidRequest'
+    // 渠道自身的凭证/额度问题：另一条渠道有自己的密钥和额度，切换通常立刻能救。
+    // 修订依据见 .agents/notes/implemented/2026-10-16-switch-on-auth-and-quota.md。
+    case 'AUTH': return 'auth'
+    case 'QUOTA': return 'quota'
     default: return undefined
   }
 }

@@ -390,6 +390,31 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'auth-dead-key-fails-over',
+    note: '主渠道密钥失效（AUTH）：切换至备用并留中文通知，熔断顺手记下这条渠道',
+    // 2026-10-16 修订：AUTH 曾因"配置坏了，切换只会把问题藏起来"而不切换。但熔断本来
+    // 就会让后续请求跳过死渠道——那条理由只把第一次请求也搭进去。而切换从不是静默的：
+    // 中文通知点名失败渠道与码。场景同时钉住"切换"与"下一次请求直接跳过死渠道"。
+    router: {
+      enabled: true,
+      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      breaker: { enabled: true, rules: [{ code: 'AUTH', message: '', cooldownSeconds: 3600, scope: 'channel' }] },
+    },
+    script: { policy: { maxRetries: 0 }, 'stub-primary': { outcomes: ['fail:AUTH'] }, 'stub-backup': { outcomes: ['ok'] } },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      const texts = notices(events).map(n => n.text)
+      ok('notice names the credential failure', texts.some(t => t.includes('凭证或权限被拒')))
+      ok('notice says it switched', texts.some(t => t.includes('已切换至')))
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+      // 熔断的"记录"发生在本轮失败上，但"跳过死渠道"要下一个请求才可见——而本
+      // harness 一次 boot 只有一个 step（tools.md 记过这个坑），所以跳过行为由
+      // 单测的 CircuitBreaker 系列覆盖；这里只证明 AUTH 触发了切换与通知。
+    },
+  },
+  {
     name: 'invalid-config-rejected',
     note: '结构错误（重复 ID）在加载时响亮失败，不静默跳过',
     router: { enabled: true, profiles: [profile([C('stub-primary', 1)], { id: 'dup' }), profile([C('stub-backup', 1)], { id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
