@@ -25,6 +25,11 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { z } from 'zod'
 import { failureCodeOfStream } from './lineage.ts'
+import { capTimeline, MAX_TIMELINE_POINTS } from './timeline.ts'
+
+// The window constant lives in ./timeline.ts because the browser half reads the
+// same rule; re-exported here so existing importers keep one path.
+export { MAX_TIMELINE_POINTS } from './timeline.ts'
 
 /**
  * `unknown` is deliberately absent: a channel with no record is simply
@@ -32,8 +37,6 @@ import { failureCodeOfStream } from './lineage.ts'
  * from a status nobody ever writes.
  */
 export type ChannelHealthStatus = 'healthy' | 'degraded' | 'unhealthy'
-
-export const MAX_TIMELINE_POINTS = 24
 
 export interface ChannelTimelinePoint {
   time: number
@@ -106,7 +109,7 @@ export function pushTimelinePoint(
 ): ChannelTimelinePoint[] {
   const current = existingTimeline ? existingTimeline.slice() : []
   current.push(point)
-  return current.length > MAX_TIMELINE_POINTS ? current.slice(-MAX_TIMELINE_POINTS) : current
+  return capTimeline(current)
 }
 
 /** Whole-turn cost from the request header this fold is tracking, when there is one. */

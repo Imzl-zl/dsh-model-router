@@ -34,16 +34,34 @@ const callsByRoute = new Map()
 /** The last request each route received, so tests can assert what was actually sent. */
 export const lastRequestByRoute = new Map()
 
+/**
+ * Real (non-auxiliary) calls each route has served. The HMR test reads it to prove
+ * the host's scheduled probe timer stops when the plugin fiber unloads.
+ * @returns total real calls across every registered stub route.
+ */
+export function realCallCount() {
+  let total = 0
+  for (const count of callsByRoute.values()) total += count
+  return total
+}
+
 const DEFAULT_RETRYABLE = ['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'EMPTY_RESPONSE']
-const policy = resolveRetryPolicy(
-  {
-    mode: 'normal',
-    maxRetries: script.policy?.maxRetries ?? 5,
-    retryableCodes: script.policy?.retryableCodes ?? DEFAULT_RETRYABLE,
-    backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
-  },
-  'stub-adapter.retryPolicy',
-)
+// `mode` comes from the script so scenarios can declare the `always` policy the
+// plugin must reject at load (llm/src/retry-policy.ts: always has no retry cap).
+const policy = script.policy?.mode === 'always'
+  ? resolveRetryPolicy(
+    { mode: 'always', backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } },
+    'stub-adapter.retryPolicy',
+  )
+  : resolveRetryPolicy(
+    {
+      mode: 'normal',
+      maxRetries: script.policy?.maxRetries ?? 5,
+      retryableCodes: script.policy?.retryableCodes ?? DEFAULT_RETRYABLE,
+      backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
+    },
+    'stub-adapter.retryPolicy',
+  )
 
 class StubAdapter extends LlmAdapter {
   providerInfo(provider) {

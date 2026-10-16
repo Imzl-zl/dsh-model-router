@@ -93,6 +93,11 @@ export default class ModelRouter extends TypertRemoteService {
   private readonly agentsBySession = new WeakMap<Session, Agent>()
   /** The last scheduled probe's report, held for the browser's read. */
   private lastProbeReport: ProbeReport = { at: 0, routes: [] }
+  /** Probes currently running (scheduled or manual); a scheduled tick skips while any is in flight. */
+  private probeInFlight = 0
+  /** The scheduled timer's own cancellation, aborted when this fiber unloads. */
+  private probeTimer: AbortController | undefined
+  private probeTimerId: ReturnType<typeof setInterval> | undefined
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'modelRouter', { namespace: 'routerHealth' })
@@ -112,6 +117,9 @@ export default class ModelRouter extends TypertRemoteService {
 
     // Structural validation at load: wrong in every environment, so it fails loud.
     assertStructural(readConfig(config))
+    // Provider audit: same rule at load and at save, so a bad save is rejected by the
+    // waterfall instead of killing the running plugin (see the internal/config listener).
+    assertNoAlwaysPolicy(ctx, readConfig(config))
     // Hot updates are validated before Cordis restarts this fiber, so a bad edit
     // is rejected at save time instead of killing the running plugin.
     ctx.on('internal/config', function (this: Fiber, _raw, next) {
@@ -122,6 +130,10 @@ export default class ModelRouter extends TypertRemoteService {
         profiles: candidate.profiles.get() as readonly Profile[],
         default: candidate.default.get() as DefaultProfile,
         health: candidate.health?.get() as HealthConfig | undefined,
+      })
+      assertNoAlwaysPolicy(ctx, {
+        profiles: candidate.profiles.get() as readonly Profile[],
+        default: candidate.default.get() as DefaultProfile,
       })
       return raw
     })
@@ -135,7 +147,10 @@ export default class ModelRouter extends TypertRemoteService {
     // The durable failover ledger and the channel-health fold, both registered
     // through `ctx.get` (the optional-service rule): a composition without the
     // registry still routes — only the two views degrade.
-    const projections = ctx.get('sessionProjections') as ProjectionRegistryFace | undefined
+    // One face, two uses: registering this plugin's own units, and reading another
+    // package's wire view for the token gate. Both are structurally typed because
+    // the registry is optional (packages/AGENTS.md: the ctx.get rule).
+    const projections = ctx.get('sessionProjections') as (ProjectionRegistryFace & ProjectionReadFace) | undefined
     projections?.register(failoverHistoryProjection)
     projections?.register(channelHealthProjection)
 
@@ -172,7 +187,7 @@ export default class ModelRouter extends TypertRemoteService {
       // listener only observes.
       agent.ctx.on('agent/pre-step', async (payload, next) => {
         const decision = await next()
-        states.noteConditions(agent, payload.turn, payload.step, gatherConditions(ctx, agent.session, payload.messages))
+        states.noteConditions(agent, payload.turn, payload.step, gatherConditions(projections, agent.session, payload.messages))
         return decision
       })
 
@@ -249,18 +264,21 @@ export default class ModelRouter extends TypertRemoteService {
               index += 1
             }
           }
-          // 跳过通知在“落回用户原路由”之前发：那条路径上没有任何切换 Notice，
-          // 而“为什么链上没人能接这一击”恰恰是用户最需要看到的。条件跳过按
-          // (turn, 跳过组) 去重——工具循环轮次每步都重决一遍，同样的跳过发一次就够。
-          if (conditionSkipped.length > 0 && states.shouldNoteConditionSkip(agent, turn, conditionSkipKey(conditionSkipped))) {
+          // 跳过通知在"落回用户原路由"之前发：那条路径上没有任何切换 Notice，
+          // 而"为什么链上没人能接这一击"恰恰是用户最需要看到的。三类跳过都按
+          // (turn, 跳过组) 去重——工具循环轮次每步都重决一遍，同样的跳过发一次就够；
+          // 这些 notice 是 durable 的 user 消息且进模型上下文，重复发就是重复花钱。
+          if (conditionSkipped.length > 0 && states.shouldNoteSkip(agent, turn, `condition:${conditionSkipKey(conditionSkipped)}`)) {
             for (const entry of conditionSkipped) {
               agent.session.append('user/message', conditionSkipNotice(entry.candidate, entry.reason), { surfaceOp: 'append' })
             }
           }
           for (const candidate of skipped) {
+            if (!states.shouldNoteSkip(agent, turn, `capability:${candidate.provider}/${candidate.model}`)) continue
             agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
           }
           for (const entry of blocked) {
+            if (!states.shouldNoteSkip(agent, turn, `breaker:${entry.candidate.provider}/${entry.candidate.model}`)) continue
             agent.session.append('user/message', breakerNotice(entry.candidate, entry.block), { surfaceOp: 'append' })
           }
           if (outgoing === undefined) {
@@ -308,8 +326,12 @@ export default class ModelRouter extends TypertRemoteService {
         const current = state.chain.candidates[state.index]!
         // A failure the user said should disqualify the channel takes it out of
         // rotation; the block always expires, so this is a cooldown, not a ban.
-        const rules = (config.health?.get() as HealthConfig | undefined)?.breaker.rules ?? []
-        breaker.note(current.provider, current.model, failure.code, failure.message ?? '', rules, Date.now())
+        // 总闸关着就不记：`enabled` 是用户的显式选择。规则留着（再开时不用重填），
+        // 但关着的时候一条都不能生效——此前只读 rules 不读 enabled，开关是个摆设。
+        const breakerConfig = (config.health?.get() as HealthConfig | undefined)?.breaker
+        if (breakerConfig?.enabled === true) {
+          breaker.note(current.provider, current.model, failure.code, failure.message ?? '', breakerConfig.rules, Date.now())
+        }
         if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return next()
         ctx.logger.warn(
           `model-router: ${failure.code} on ${current.provider}/${current.model} `
@@ -333,24 +355,30 @@ export default class ModelRouter extends TypertRemoteService {
     const health = (this.config.health?.get() as HealthConfig | undefined)?.probe
     const fallback = health?.prompt ?? '1'
     const overrides = health?.prompts ?? []
-    const timeoutMs = health?.timeoutSeconds ?? 8
+    const timeoutSeconds = health?.timeoutSeconds ?? 8
     const wanted = request.routes.length > 0
       ? request.routes
       : configuredRoutes(readConfig(this.config))
     const at = Date.now()
     const routes: ProbeReport['routes'] = []
-    for (const route of wanted) {
-      if (signal.aborted) break
-      routes.push(await probeRoute(
-        this.ctx.llm,
-        route,
-        probePromptFor(route, fallback, overrides),
-        timeoutMs,
-        signal,
-      ))
+    this.probeInFlight += 1
+    try {
+      for (const route of wanted) {
+        if (signal.aborted) break
+        routes.push(await probeRoute(
+          this.ctx.llm,
+          route,
+          probePromptFor(route, fallback, overrides),
+          timeoutSeconds,
+          signal,
+        ))
+      }
+    } finally {
+      this.probeInFlight -= 1
     }
     const report: ProbeReport = { at, routes }
-    this.lastProbeReport = report
+    // 取消产生的残篇不当最新报告：用户合上面板后，工作台不该显示一次"只测了两条"的结果。
+    if (!signal.aborted) this.lastProbeReport = report
     return report
   }
 
@@ -369,17 +397,28 @@ export default class ModelRouter extends TypertRemoteService {
    * (off): a probe spends a token on every tick, so whether that is acceptable
    * is the user's call. A config save restarts this fiber, which re-arms with
    * the new interval — there is no separate update path to keep in sync.
+   *
+   * 两个不变量：周期到点时若仍有探测在飞（手动或上一轮），本轮直接跳过——不排队、
+   * 不叠加，否则 1s 周期叠 8s 超时会并发出几十轮探测，token 与限流都失控；
+   * fiber 卸载时 clearInterval 之外还必须 abort 掉飞行中的那轮，否则配置一保存，
+   * 上一轮的请求还在花钱。
    */
   private armProbeTimer(): void {
     const health = (this.config.health?.get() as HealthConfig | undefined)?.probe
     const seconds = health?.enabled === true ? (health.intervalSeconds || 0) : 0
     if (seconds <= 0) return
-    const timer = setInterval(() => {
-      void this.probeAll({ routes: [] }, new AbortController().signal).catch((error: unknown) => {
+    const controller = new AbortController()
+    this.probeTimer = controller
+    this.probeTimerId = setInterval(() => {
+      if (this.probeInFlight > 0) return
+      void this.probeAll({ routes: [] }, controller.signal).catch((error: unknown) => {
         this.ctx.logger.warn(`model-router: scheduled probe failed: ${String(error)}`)
       })
     }, seconds * 1000)
-    this.ctx.effect(() => () => { clearInterval(timer) }, 'router: probe timer')
+    this.ctx.effect(() => () => {
+      if (this.probeTimerId !== undefined) clearInterval(this.probeTimerId)
+      controller.abort()
+    }, 'router: probe timer')
   }
 }
 
@@ -413,6 +452,38 @@ function mayAdvance(
   return code !== undefined && isSwitchOnEligible(chain, code)
 }
 
+/**
+ * 拒绝候选 provider 声明 `always` 重试策略。
+ *
+ * 这是已记录的加载时拒绝项（docs/design/dsh-capability-boundary.md §三 G2 与
+ * open-questions 一.3）：always 模式没有重试上限（llm/src/retry-policy.ts），且它先
+ * await 下游——下游说终态它仍会自行退避重试。放着它，`maxTotalAttempts` 就不是硬上限，
+ * 用户没勾选的失败码也会被无限重试，"绝不盲重试"的承诺失效。策略是用户在每个渠道的
+ * Models 设置里自己选的（llm-deepseek/src/config.ts 的 RetryPolicySchema），所以必须在
+ * 这里挡住，而不是在运行时悄悄降级——降级会静默改变用户依赖的重试行为。
+ *
+ * `providerRetryPolicy` 是 llm 服务的原生读口（llm/src/index.ts:656），只对已注册的
+ * provider 调用（未注册的会抛），未注册的漂移由 warnUnregisteredProviders 处理。
+ */
+function assertNoAlwaysPolicy(ctx: Context, config: { profiles: readonly Profile[]; default: DefaultProfile }): void {
+  const registered = new Set(ctx.llm.listProviders().map(provider => provider.id))
+  const check = (candidates: readonly Candidate[], where: string): void => {
+    for (const candidate of candidates) {
+      if (!registered.has(candidate.provider)) continue
+      const policy = ctx.llm.providerRetryPolicy(candidate.provider)
+      if (policy?.mode === 'always') {
+        throw new Error(
+          `model-router: ${where} candidate ${candidate.provider}/${candidate.model} names a provider whose retry policy is "always" — `
+          + 'unbounded same-route retries would make the total attempt cap unenforceable; '
+          + 'set that provider back to the normal policy, or remove it from the chain',
+        )
+      }
+    }
+  }
+  for (const profile of config.profiles) check(profile.candidates, `profile "${profile.id}"`)
+  check(config.default.candidates, 'default pool')
+}
+
 function warnUnregisteredProviders(ctx: Context, config: { profiles: readonly Profile[]; default: DefaultProfile }): void {
   const registered = new Set(ctx.llm.listProviders().map(provider => provider.id))
   const check = (candidates: readonly Candidate[], where: string): void => {
@@ -431,7 +502,8 @@ function warnUnregisteredProviders(ctx: Context, config: { profiles: readonly Pr
 
 /** The projection registry's read face this plugin uses; structurally typed to keep the service optional. */
 interface ProjectionReadFace {
-  snapshot(session: Session): { values: Record<string, unknown> }
+  /** `keys` is the native filter (session-projection/src/index.ts:339): only those units' wire views are produced. */
+  snapshot(session: Session, keys?: readonly string[]): { values: Record<string, unknown> }
 }
 
 /** The projection registry's write face: one namespaced unit, disposed with this fiber. */
@@ -446,11 +518,17 @@ interface ProjectionRegistryFace {
  * answer (present only after the first usage sample). When the registry or the
  * unit is absent the gate reads as unmet rather than guessing.
  */
-function gatherConditions(ctx: Context, session: Session, messages: readonly { content: readonly { type: string }[] }[]): StepConditions {
+function gatherConditions(
+  projections: ProjectionReadFace | undefined,
+  session: Session,
+  messages: readonly { content: readonly { type: string }[] }[],
+): StepConditions {
   let projectedTokens: number | undefined
-  const projections = ctx.get('sessionProjections') as ProjectionReadFace | undefined
   if (projections !== undefined) {
-    const pressure = projections.snapshot(session).values['contextPressure'] as { projectedTokens?: number } | undefined
+    // keys 过滤是原生读口（session-projection/src/index.ts:339-353）：只产出这一个
+    // 单元的 wire view。不传 keys 会把所有客户端可见单元整份过 viewSchema.parse——
+    // 每步一次，含本插件自己的 24 点时间线与账本。
+    const pressure = projections.snapshot(session, ['contextPressure']).values['contextPressure'] as { projectedTokens?: number } | undefined
     projectedTokens = pressure?.projectedTokens
   }
   return { hasImages: hasImageContent(messages), projectedTokens }

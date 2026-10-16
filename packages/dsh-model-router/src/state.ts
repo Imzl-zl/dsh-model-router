@@ -108,8 +108,8 @@ export class RouterState {
   private readonly turns = new WeakMap<Agent, TurnNote>()
   /** The matched chain's `stickyTurns`, recorded when a chain is resolved. */
   private readonly sticky = new WeakMap<Agent, number>()
-  /** Condition-skip notices already emitted for one (agent, turn); the tool loop re-decides every step. */
-  private readonly conditionSkips = new WeakMap<Agent, { turn: number; key: string }>()
+  /** Skip notices already emitted for one (agent, turn); the tool loop re-decides every step. */
+  private readonly conditionSkips = new WeakMap<Agent, { turn: number; keys: Set<string> }>()
   /**
    * 轮询游标，按会话各自计数：同时开几个聊天窗口时互不干扰，也天然随会话结束重置。
    * 进程重启归零——轮询是分配手段，不是需要记住的状态。
@@ -189,9 +189,23 @@ export class RouterState {
     return { hasImages: note.hasImages, projectedTokens: note.step === step ? note.projectedTokens : undefined }
   }
 
-  /** Record the matched chain's `stickyTurns` for this agent. */
+  /**
+   * Record the matched chain's `stickyTurns` for this agent — and finalize the
+   * current turn's window with it.
+   *
+   * The write happens in `agent/request`, which runs AFTER `agent/pre-step`; the
+   * turn note is written by pre-step, so on a session's very first image turn the
+   * window would otherwise be recorded as 0 and the following no-image turn would
+   * not stick. Fixing the note here (same turn, window still 0) closes that gap
+   * without moving chain resolution earlier — resolution needs the resolved route,
+   * which does not exist at pre-step time.
+   */
   setStickyTurns(agent: Agent, turns: number): void {
     this.sticky.set(agent, Math.max(0, turns))
+    const note = this.turns.get(agent)
+    if (note !== undefined && note.stickyRemaining === 0 && turns > 0) {
+      this.turns.set(agent, { ...note, stickyRemaining: Math.max(0, turns) })
+    }
   }
 
   private stickyTurnsOf(agent: Agent): number {
@@ -199,14 +213,24 @@ export class RouterState {
   }
 
   /**
-   * Whether the condition-skip notices for this (agent, turn, key) have not
-   * been emitted yet. A tool-loop turn re-decides every step and would repeat
-   * an identical skip row per step; the first one carries the information.
+   * Whether the skip notices for this (agent, turn, key) have not been emitted
+   * yet. A tool-loop turn re-decides every step and would repeat an identical
+   * row per step; the first one carries the information. One gate for all three
+   * skip kinds (condition / capability / breaker): the key names the group, so
+   * the three paths cannot drift apart again.
+   *
+   * A turn keeps the SET of keys it already announced, not just the last one:
+   * a single fire can skip a condition candidate, a capability candidate and a
+   * cooling candidate at once, and each of those must stay deduped on its own.
    */
-  shouldNoteConditionSkip(agent: Agent, turn: number, key: string): boolean {
+  shouldNoteSkip(agent: Agent, turn: number, key: string): boolean {
     const note = this.conditionSkips.get(agent)
-    if (note !== undefined && note.turn === turn && note.key === key) return false
-    this.conditionSkips.set(agent, { turn, key })
+    if (note === undefined || note.turn !== turn) {
+      this.conditionSkips.set(agent, { turn, keys: new Set([key]) })
+      return true
+    }
+    if (note.keys.has(key)) return false
+    note.keys.add(key)
     return true
   }
 

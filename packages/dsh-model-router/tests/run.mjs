@@ -333,9 +333,39 @@ const SCENARIOS = [
       eq('failed attempt count', failedAttempts(events).length, 1)
       const texts = notices(events).map(n => n.text)
       ok('channel block names the whole provider', texts.some(t => t.includes('渠道 stub-primary 已整体自动禁用') && t.includes('该渠道下所有模型')))
+      eq('the block notice fires once', texts.filter(t => t.includes('已整体自动禁用')).length, 1)
       eq('final route', finalRoute(events), 'stub-backup/stub-model')
       eq('turn end', turnEnd(events), 'completed')
     },
+  },
+  {
+    name: 'breaker-disabled-still-fails-over',
+    note: '熔断总闸关着：规则留在配置里也不生效，故障转移照常',
+    // 回归：host 曾只读 rules 不读 enabled，开关是个摆设；再叠加"关着时允许空规则"，
+    // 一条空白规则会命中每一次失败、把所有候选禁掉。这两条都不允许回来。
+    router: {
+      enabled: true,
+      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      breaker: { enabled: false, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 3600 }] },
+    },
+    script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT'] }, 'stub-backup': { outcomes: ['ok'] } },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('no breaker notice while disabled', notices(events).filter(n => n.text.includes('自动禁用')).length, 0)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
+    name: 'always-retry-policy-rejected',
+    note: '候选渠道声明 always 重试策略：加载即拒绝（无上限重试会让总上限失效）',
+    // 已记录决策：docs/design/dsh-capability-boundary.md §三 G2 与 open-questions 一.3。
+    // 策略是用户在每个渠道的 Models 设置里自己选的，所以必须在加载时挡住。
+    router: { enabled: true, profiles: [profile([C('stub-primary', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    script: { policy: { mode: 'always' }, 'stub-primary': { outcomes: ['ok'] } },
+    expectBootFailure: 'retry policy is "always"',
+    check() {},
   },
   {
     name: 'invalid-config-rejected',

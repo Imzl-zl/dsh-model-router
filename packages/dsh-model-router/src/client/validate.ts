@@ -83,9 +83,12 @@ export function validate(draft) {
   if (draft.default.strategy === 'weight' && draft.default.candidates.every(function (c) { return !(c.weight > 0) })) {
     problems.push({ key: 'problemWeightNoPositive', vars: {} })
   }
+  // 与 host 的 assertStructural 同步：空规则的校验不看 enabled——关着开关存下的空规则，
+  // 在 host 侧会命中每一次失败（breaker.ts 对全空规则不 continue）。这里漏一条，用户
+  // 就会存一个让所有候选被禁的配置。
   var breaker = draft.health && draft.health.breaker
-  if (breaker && breaker.enabled) {
-    breaker.rules.forEach(function (rule) {
+  if (breaker) {
+    ;(breaker.rules ?? []).forEach(function (rule) {
       if (!rule.code && !rule.message) problems.push({ key: 'problemBreakerEmptyRule', vars: {} })
     })
   }

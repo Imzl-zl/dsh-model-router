@@ -1,6 +1,6 @@
 /** The sidebar entry button registered into sidebar.footer.action. */
 
-import { Fragment, useState } from 'react'
+import { Fragment, useState, useEffect } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { RouterPage } from './page.ts'
@@ -18,6 +18,13 @@ export function ModelRouterFooterAction(props) {
   var dirty = state.dirty
   var profileCount = state.draft.profiles.length
 
+  // 原生快捷键的作用域计数：侧栏按钮常驻，弹窗开着时本面仍在位（弹窗从这一面打开）。
+  // 与插件页那一面共同决定"现在该不该由 model-router.save 接键"。
+  useEffect(function () {
+    props.retainSurface()
+    return function () { props.releaseSurface() }
+  }, [])
+
   var buttonProps = {
     type: 'button',
     className: 'dsh-router-footer-action' + (isWide ? '' : ' rail'),
@@ -30,11 +37,15 @@ export function ModelRouterFooterAction(props) {
 
   // The official Modal owns the mask, Escape, focus entry/return and the
   // Tab trap; `headless` keeps the plugin's own top bar and content area.
+  // `shortcutModal` is the native bridge to DSH's shortcuts service: while this
+  // dialog is the top one, commands that list 'model-router' in their `modals`
+  // still run (client/shortcuts resolves context.modal from this attribute).
   var modalElement = open ? h(Modal, {
     open: true,
     headless: true,
     title: t('quickModalTitle'),
     className: 'dsh-router-modal-dialog',
+    shortcutModal: 'model-router',
     onClose: function () { setOpen(false) },
   },
     h('div', { style: S.modalTopBar },

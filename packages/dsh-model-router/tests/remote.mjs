@@ -277,4 +277,21 @@ test('a per-route probe prompt override reaches the wire, and the shared prompt 
 
 await Promise.all(pending)
 console.log(`\n${passed} remote test(s) passed`)
-await ctx.fiber.dispose()
+
+// DSH 包规则的硬要求："注册贡献须证明可 Dispose"（HMR 测试）。放在所有用例 settle
+// 之后：这些用例共享一个 boot 好的 ctx，中途 dispose 会把别人的 gateway 抽掉。
+// 断言宿主侧最可观测的那条——定时探测周期到点会自己跑（上面已验证），fiber 卸载后
+// 必须停：否则配置保存（fiber 整体重启）会叠加定时器，旧周期继续花用户的 token。
+// 判据是 stub 的真实调用计数：卸载前后各跨过一个周期，计数只允许在卸载前增长。
+{
+  const stub = await import(pathToFileURL(`${HERE}stub-adapter.mjs`).href)
+  const before = stub.realCallCount()
+  await new Promise((resolve) => setTimeout(resolve, 2200))
+  assert.ok(stub.realCallCount() > before, 'the scheduled timer keeps probing while the plugin is loaded')
+  await ctx.fiber.dispose()
+  const atDispose = stub.realCallCount()
+  await new Promise((resolve) => setTimeout(resolve, 2200))
+  assert.equal(stub.realCallCount(), atDispose, 'no probe runs after the fiber unloaded')
+  console.log('    ok  unloading the plugin stops its scheduled probe timer')
+  passed += 1
+}

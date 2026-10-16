@@ -400,8 +400,11 @@ export function assertStructural(config: {
     }
   }
   // 一条两个字段都空白的规则永远命中不了任何东西，留着只会让人以为配过了。
-  if (config.health !== undefined && config.health.breaker !== undefined && config.health.breaker.enabled) {
-    config.health.breaker.rules.forEach((rule, index) => {
+  // 空规则在任何状态下都是配置错误：breaker.ts 对 code/message 全空的规则命中每一次
+  // 失败，"关着开关存下一条空规则"会让所有候选被禁。所以这里不看 enabled——规则可以
+  // 留着（再开时不用重填），空白规则不行。
+  if (config.health?.breaker !== undefined) {
+    (config.health.breaker.rules ?? []).forEach((rule, index) => {
       if (rule.code.length === 0 && rule.message.length === 0) {
         throw new Error(`model-router: health.breaker rule ${index + 1} matches nothing — fill in a code or a message`)
       }

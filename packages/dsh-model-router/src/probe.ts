@@ -45,7 +45,7 @@ function unavailable(route: ProbeRoute, now: number, reason: string): ProbeRoute
  * @param llm - the Host llm service (injected so unit tests can supply a fake).
  * @param route - the physical route to measure.
  * @param prompt - the message text; the user owns it because gateways filter content.
- * @param timeoutMs - hard cap per route; the deadline fires even without a first byte.
+ * @param timeoutSeconds - hard cap per route; the deadline fires even without a first byte.
  * @param signal - the caller's cancellation, fused into the deadline.
  * @returns the route's outcome; an adapter error becomes `unreachable` carrying
  *   its provider-neutral code, a timeout becomes `unreachable` with
@@ -56,7 +56,7 @@ export async function probeRoute(
   llm: ProbeLlm,
   route: ProbeRoute,
   prompt: string,
-  timeoutMs: number,
+  timeoutSeconds: number,
   signal?: AbortSignal,
 ): Promise<ProbeRouteResult> {
   const now = Date.now()
@@ -73,7 +73,7 @@ export async function probeRoute(
     if (signal.aborted) abort(signal.reason)
     else signal.addEventListener('abort', onUpstreamAbort, { once: true })
   }
-  const timer = setTimeout(() => { abort(new TimeoutError(PROBE_TIMEOUT_CODE, timeoutMs * 1000)) }, timeoutMs * 1000)
+  const timer = setTimeout(() => { abort(new TimeoutError(PROBE_TIMEOUT_CODE, timeoutSeconds * 1000)) }, timeoutSeconds * 1000)
   try {
     const call = await llm.prepareCall({
       provider: route.provider,
@@ -105,11 +105,15 @@ export async function probeRoute(
     if (controller.signal.aborted && controller.signal.reason instanceof TimeoutError) {
       return { provider: route.provider, model: route.model, kind: 'unreachable', error: 'TIMEOUT', at: now }
     }
+    // 调用方取消不是渠道故障——必须在通用 code 之前判：适配器会把调用方 abort
+    // 规范化成 `ABORTED` 码（llm-deepseek/src/adapter.ts:64、llm-pi-ai 同款），
+    // 走通用分支就会以 unreachable 落进报告，UI 把"没能测"读成"有问题"。
+    if (signal?.aborted === true) return unavailable(route, now, 'cancelled')
     const code = (error as { code?: unknown }).code
+    if (code === 'ABORTED') return unavailable(route, now, 'cancelled')
     if (typeof code === 'string' && code.length > 0) {
       return { provider: route.provider, model: route.model, kind: 'unreachable', error: code, at: now }
     }
-    if (signal?.aborted === true) return unavailable(route, now, 'cancelled')
     return unavailable(route, now, error instanceof Error ? error.message : String(error))
   } finally {
     clearTimeout(timer)

@@ -8,6 +8,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts'
 import remote from 'dsh-model-router/remote'
 import { createController } from './controller.ts'
 import { ModelRouterFooterAction } from './footer.ts'
@@ -21,7 +22,7 @@ export const name = NS + '/client'
 // `remote.settings` carries the endpoint facts it needs. `remote` is the Remote
 // namespace this package's own `./remote` contribution mounts into, which is
 // what the 1-token probe endpoint is reached through.
-export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings']
+export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'remote.llm', 'remote.settings', 'shortcuts']
 
 /**
  * Mount the config page for this bundle.
@@ -79,6 +80,31 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
   var scope = ctx.configForms.get(CONFIG_NS)
   var controller = createController(ctx, scope, t)
 
+  // 保存快捷键走 DSH 原生的 shortcuts 服务（@deepseek-ai/dsh-client-shortcuts，
+  // ui-settings-general/src/client/index.ts:179 同款）：可重绑定、出现在快捷键设置页、
+  // 并按模态归属仲裁。`modals: ['model-router']` 与侧栏弹窗 Modal 的 shortcutModal
+  // 对应——弹窗开着时这个键仍归我们，别的模态开着时原生层挡掉。
+  // resolve 只回答"现在该不该我接"：真正能不能存由 controller.save() 自己判
+  // （saving/writable/invalid 与草稿校验都在那里）。
+  ctx.effect(() => ctx.shortcuts.register({
+    id: 'model-router.save' as ShortcutCommandId,
+    label: () => t('saveShortcutLabel'),
+    aliases: ['model-router save', '模型路由保存'],
+    defaults: {
+      'desktop:macos': { code: 'KeyS', modifiers: ['primary'] },
+      'desktop:windows': { code: 'KeyS', modifiers: ['primary'] },
+      'desktop:linux': { code: 'KeyS', modifiers: ['primary'] },
+      'web:macos': { code: 'KeyS', modifiers: ['primary'] },
+      'web:windows': { code: 'KeyS', modifiers: ['primary'] },
+      'web:linux': { code: 'KeyS', modifiers: ['primary'] },
+    },
+    regions: ['page', 'editable', 'terminal'],
+    modals: ['model-router'],
+    resolve: () => (controller.surfaceActive()
+      ? { status: 'handled' as const, run: () => { controller.save() } }
+      : { status: 'pass' as const }),
+  }), 'router: save command')
+
   var actions = {
     onSave: function () { controller.save() },
     onDiscard: function () { controller.discard() },
@@ -110,6 +136,8 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onProbeAll: function () { controller.probeAll() },
     onOpenHealthModal: function () { controller.openHealthModal() },
     onUpdateHealth: function (patch) { controller.updateHealth(patch) },
+    retainSurface: function () { controller.retainSurface() },
+    releaseSurface: function () { controller.releaseSurface() },
   }
 
   ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({

@@ -2,7 +2,7 @@
 
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { formatLatency, formatThroughput, formatTime, healthToneStyle } from './format.ts'
+import { formatLatency, formatThroughput, formatTime, healthToneStyle, routeStatus } from './format.ts'
 
 export function reasoningLabelOf(catalog, provider, model) {
   var group = (catalog?.groups ?? []).find(function (entry) { return entry.id === provider })
@@ -82,7 +82,9 @@ export function ChannelMetricsDashboard(props) {
 export function HealthSignalDot(props) {
   var t = props.t
   var record = props.record
-  var status = record ? record.status : 'unknown'
+  // 状态走 routeStatus 单源派生（format.ts），和侧栏、健康大盘同一套口径：只看
+  // passive 记录会让"探测刚判失败的渠道"在这里显示成未观测，同屏两个颜色。
+  var status = routeStatus(props.passive, props.discover, props.probe, props.route)
   var latency = record && typeof record.latencyMs === 'number' ? formatLatency(record.latencyMs) : null
   var throughput = record && typeof record.throughputTps === 'number' && record.throughputTps > 0 ? formatThroughput(record.throughputTps) : null
   var statusText = t(status === 'healthy' ? 'healthStatusHealthy' : status === 'degraded' ? 'healthStatusDegraded' : status === 'unhealthy' ? 'healthStatusUnhealthy' : 'compactHealthIdle')

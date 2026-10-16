@@ -11,6 +11,7 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, routeOf, summarize } from './format.ts'
 import { defaultSwitchOn, normalizeDefault, normalizeHealth, normalizeProfiles, validate } from './validate.ts'
+import { capTimeline, MAX_TIMELINE_POINTS } from '../timeline.ts'
 
 export function createController(ctx, scope, t) {
   var seed = function () {
@@ -61,6 +62,10 @@ export function createController(ctx, scope, t) {
   }
   var saving = false
   var failed = false
+  // 本插件的"面"在位计数：插件页与侧栏弹窗可以同时挂着（弹窗从插件页打开），所以是
+  // 计数不是布尔。原生快捷键命令靠它判断"现在该不该由我接这个键"——DSH 的快捷键
+  // 上下文只告诉它有没有模态、是哪個模态，不告诉它哪个设置页在前台。
+  var surfaceCount = 0
 
   function project() {
     var snapshot = scope.getSnapshot()
@@ -138,19 +143,31 @@ export function createController(ctx, scope, t) {
   }
 
   /**
-   * 合并一条渠道在新旧两份记录里的观测。时间线取并集按时间排序——可用率是
-   * 全局事实：同一个渠道这个会话用、那个会话也用，并发三个会话更是同时在用，
-   * 统计必须合在一起算，没有"属于哪个会话"这一说。标量（状态/延迟/吞吐/
-   * 最后错误）取较新那份：最近一次观测说什么就是什么。调用方保证 older 来自
-   * 较旧的会话。
+   * 合并一条渠道在新旧两份记录里的观测。时间线取**去重后的并集**并按时间排序——
+   * 可用率是全局事实：同一个渠道这个会话用、那个会话也用，并发三个会话更是同时在用，
+   * 统计必须合在一起算，没有"属于哪个会话"这一说。标量（状态/延迟/吞吐/最后错误）
+   * 取较新那份：最近一次观测说什么就是什么。调用方保证 older 来自较旧的会话。
+   *
+   * 去重是必须的：`loadPassive()` 会在挂载、打开健康页、每轮巡检后重读同样 20 个
+   * 会话，同一批观测点会被反复并进来。不按 time 去重，数组随页面停留时间无界增长，
+   * 工作台的可用率与"观测点数"也跟着漂移。窗口与 host 的 `pushTimelinePoint` 同口径
+   * （MAX_TIMELINE_POINTS），不立第二套标准。
    *
    * Note: 为何不是"整记录覆盖 + 最新会话赢"、为何不合并时间线窗口 —— 见
    * .agents/notes/implemented/2026-10-15-health-monitoring-cross-session-merge.md
    */
   function mergeHealthRecord(older, newer) {
     if (older === undefined || older === null) return newer
+    var seen = {}
     var points = (older.timeline ?? []).concat(newer.timeline ?? [])
+      .filter(function (point) {
+        var key = point.time + ':' + point.status
+        if (seen[key]) return false
+        seen[key] = true
+        return true
+      })
       .sort(function (a, b) { return a.time - b.time })
+    if (points.length > MAX_TIMELINE_POINTS) points = capTimeline(points)
     return Object.assign({}, newer, { timeline: points })
   }
 
@@ -332,6 +349,12 @@ export function createController(ctx, scope, t) {
 
   var controller = {
     store: store,
+    /** One of this plugin's surfaces (settings page or quick modal) mounted. */
+    retainSurface: function () { surfaceCount += 1 },
+    /** That surface unmounted. */
+    releaseSurface: function () { if (surfaceCount > 0) surfaceCount -= 1 },
+    /** Whether a surface of ours is mounted at all — the shortcut command's gate. */
+    surfaceActive: function () { return surfaceCount > 0 },
     setEnabled: function (value) { draft.enabled = value; publish() },
     setActive: function (id) {
       ui.activeId = id
@@ -404,7 +427,9 @@ export function createController(ctx, scope, t) {
     addCandidates: function (profileId, entries, isDefault) {
       var list = listOf(profileId, isDefault)
       entries.forEach(function (entry) {
-        list.push({ provider: entry.provider, model: entry.model, maxAttempts: 1 })
+        // 默认值先给、entry 后覆盖：目录选择不带 maxAttempts（1 是它的默认），
+        // 手动录入带了就必须按用户填的走——写死 1 会静默吞掉用户输入。
+        list.push(Object.assign({ maxAttempts: 1 }, entry))
       })
       ui.modal = null
       publish()

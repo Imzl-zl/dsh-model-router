@@ -135,8 +135,9 @@ step.
   synthetic message says nothing about a channel under real load, so route
   selection still reads only real conversation outcomes and explicit user
   conditions.
-  Per-route probe prompts (`health.probe.prompts`) are honored by the Host but
-  have no editor in the settings modal yet — the shared prompt is editable.
+  Per-route probe prompts (`health.probe.prompts`) are edited in the health settings
+  modal (a route picker plus a content field); the Host applies them per route and
+  `tests/remote.mjs` asserts the text each route actually received.
 - **Agent main requests only.** Compaction and session-title calls keep their
   own DSH-provided model configuration and are not routed by this plugin.
 - **`needs` conditions are turn-scoped for images, step-scoped for tokens.**

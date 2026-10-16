@@ -96,19 +96,17 @@ export function RouterPage(props) {
     else if (st === 'degraded') degradedCount++
   })
 
-  // Shortcut: Ctrl+S / Cmd+S save
+  // 面计数：插件页挂一次。卸载时释放，快捷键命令据此判断该不该接键
+  // （见 apply.ts 的 `router: save command`）。
   useEffect(function () {
-    function onKeyDown(e) {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-        e.preventDefault()
-        if (state.dirty && state.writable && !state.saving && !state.invalid) {
-          props.onSave()
-        }
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return function () { window.removeEventListener('keydown', onKeyDown) }
-  }, [state.dirty, state.writable, state.saving, state.invalid, props.onSave])
+    props.retainSurface()
+    return function () { props.releaseSurface() }
+  }, [])
+
+  // 保存快捷键走 DSH 原生的 shortcuts 服务（client/shortcuts，ui-settings-general
+  // 同款）：可重绑定、出现在快捷键设置页、并按模态归属仲裁。这里不再自建 window
+  // 监听——自建版在插件弹窗打开时也会触发保存，且用户改不了键位。
+  // 注册见 apply.ts 的 `router: save command`。
 
   return h('div', { className: 'dsh-router-page', style: isModalView ? S.pageModal : S.page },
     // Enhanced Sticky Action Header (Decoupled: Only configuration lifecycle actions)
@@ -163,8 +161,12 @@ export function RouterPage(props) {
     state.failed ? h('div', { style: S.problemsBox, role: 'alert' },
       h('strong', null, t('formSaveFailed'))) : null,
 
-    // SettingsForm container (preserves lifecycle and bottom save contract).
-    // Its own footer is suppressed by structure below — see .dsh-router-form-body.
+    // SettingsForm 的"卸载即 discard"是 DSH 给**设置页**的契约
+    // （ui-primitives 的 settings-form/SettingsForm.tsx:54：离开页面就丢草稿）。
+    // 侧栏弹窗与插件页共用同一个 controller，弹窗关掉 = 它这一侧卸载 = 会把另一面
+    // 未保存的编辑静默丢掉。弹窗里这个回调换成 no-op：弹窗的"离开"由顶栏的放弃按钮
+    // 显式表达，不该继承页面的隐式契约。底栏照旧被 .dsh-router-form-body +
+    // div:has(button) 压掉（弹窗顶栏自己接了保存/放弃/失败徽标）。
     h(SettingsForm, {
       labels: {
         unavailable: t('formUnavailable'),
@@ -182,7 +184,7 @@ export function RouterPage(props) {
         failed: state.failed,
       },
       onSave: props.onSave,
-      onDiscard: props.onDiscard,
+      onDiscard: isModalView ? function () {} : props.onDiscard,
     },
       // One wrapper around everything the page contributes: the SettingsForm
       // footer is the element right after it, so the suppression rule needs no
@@ -345,6 +347,7 @@ export function RouterPage(props) {
                   catalog: state.ui.catalog,
                   passive: state.ui.passive,
                   discover: state.ui.discover,
+                  probe: state.ui.probe,
                   onStrategy: props.onStrategy,
                   onWeight: props.onWeight,
                   onMaxAttempts: props.onMaxAttempts,

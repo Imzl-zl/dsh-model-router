@@ -112,6 +112,7 @@ export function ChainView(props) {
             catalog: props.catalog,
             passive: props.passive,
             discover: props.discover,
+            probe: props.probe,
             onStrategy: function (val) { props.onStrategy(chainId, val, isDefault) },
             onJumpHealth: props.onJumpHealth,
             onMaxAttempts: function (index, value) { props.onMaxAttempts(chainId, index, value, isDefault) },

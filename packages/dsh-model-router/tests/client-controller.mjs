@@ -136,9 +136,15 @@ async function mount({ value, writable = true, mutate, remote } = {}) {
     }),
   }
   const registrations = []
+  const shortcutRegistrations = []
   const ctx = {
     locale: { bind: () => (key) => key, register: () => () => {} },
     effect: (fn) => { const off = fn(); return typeof off === 'function' ? off : () => {} },
+    // DSH's native shortcuts service: register() hands back a command object the
+    // test can drive, exactly like the real client registry does.
+    shortcuts: {
+      register: (command) => { shortcutRegistrations.push(command); return () => {} },
+    },
     configForms: { get: () => scope },
     slots: {
       // The real inject() runs its callback to register, then returns a disposer.
@@ -189,6 +195,8 @@ async function mount({ value, writable = true, mutate, remote } = {}) {
     state: () => store.getSnapshot(),
     republish: (next) => { snapshot = { ...snapshot, ...next }; publish() },
     mutateCalls: calls,
+    // The commands this plugin registered with DSH's native shortcuts service.
+    shortcutCommands: () => shortcutRegistrations.slice(),
   }
 }
 
@@ -460,6 +468,87 @@ test('opening the health workspace re-reads the passive snapshot, so a failover 
 })
 
 // ---- workbench structure (hand-written createElement nesting) ----
+
+// 回归：时间线合并曾是不去重的 concat，而 loadPassive 会在挂载/打开健康页/每轮巡检后
+// 重读同样 20 个会话——同一批点被反复并进来，数组无界增长，可用率与"观测点数"漂移。
+// 现有两条被动用例每次返回不同记录，恰好绕开"同记录读两次"的形态。
+test('re-reading the same passive record does not grow the timeline', async () => {
+  const record = {
+    'a/b': {
+      route: 'a/b', provider: 'a', model: 'b', status: 'healthy', latencyMs: 12, throughputTps: 3, lastCheckedAt: 2,
+      timeline: [
+        { time: 1, status: 'healthy', latencyMs: 10 },
+        { time: 2, status: 'healthy', latencyMs: 12 },
+      ],
+    },
+  }
+  const h = await mount({
+    value: config(),
+    remote: {
+      session: {
+        list: () => Promise.resolve({ ok: true, value: { items: [{ sessionId: 's', updatedAt: 1 }] } }),
+        projections: () => Promise.resolve({ ok: true, value: { values: { 'router/channel-health': record } } }),
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  const first = h.state().ui.passive['a/b']?.timeline ?? []
+  h.actions.onActive('__health__')            // 打开健康工作台：再读一次
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  const second = h.state().ui.passive['a/b']?.timeline ?? []
+  assert.equal(first.length, 2, 'the first read carries the two observations')
+  assert.equal(second.length, 2, 'the same record read again adds nothing')
+  assert.deepEqual(second.map((p) => p.time), [1, 2])
+  assert.equal(h.state().ui.passive['a/b']?.latencyMs, 12, 'scalars still come from the newest record')
+})
+
+// 回归：addCandidates 曾把用户在手录面板填的 maxAttempts 写死成 1（目录选择没有这个
+// 字段，1 是它的默认值；手录带了就必须按用户填的走）。
+test('a manually added candidate keeps the attempt count the user typed', async () => {
+  const h = await mount({ value: config() })
+  h.actions.onAddCandidates('p1', [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 3 }], false)
+  const chain = h.state().draft.profiles[0].candidates
+  assert.equal(chain.length, 2)
+  assert.equal(chain[1].maxAttempts, 3, 'the typed attempt count survives')
+  // 目录选择路径不带 maxAttempts：默认 1 仍然生效。
+  h.actions.onAddCandidates('p1', [{ provider: 'stub-third', model: 'stub-model' }], false)
+  assert.equal(h.state().draft.profiles[0].candidates[2].maxAttempts, 1)
+})
+
+// 回归：侧栏弹窗与插件页共用同一个 controller，而 DSH 的 SettingsForm 卸载即 discard。
+// 关弹窗曾把另一面未保存的编辑静默丢掉。现在弹窗那一侧传的是 no-op。
+test('closing the quick modal does not discard the other surface\'s unsaved edits', async () => {
+  const h = await mount({ value: config() })
+  h.actions.onMaxAttempts('p1', 0, '3', false)
+  assert.equal(h.state().dirty, true, 'the edit is unsaved')
+  // 弹窗挂一次、再卸一次（等价于打开又关掉侧栏快捷弹窗）。
+  h.actions.retainSurface()
+  h.actions.releaseSurface()
+  assert.equal(h.state().dirty, true, 'the draft survives the modal mount/unmount cycle')
+  assert.equal(h.state().draft.profiles[0].candidates[0].maxAttempts, 3)
+})
+
+// 原生快捷键：保存命令注册进 DSH 的 shortcuts 服务（可重绑定、进快捷键设置页、按模态
+// 仲裁），且只在我们的面在位时接键。自建 window 监听那版不可重绑定、弹窗打开也触发。
+test('the save command is registered with DSH\'s shortcuts service and gated by our surface', async () => {
+  const h = await mount({ value: config() })
+  const commands = h.shortcutCommands()
+  assert.equal(commands.length, 1, 'exactly one command contributed')
+  const command = commands[0]
+  assert.equal(command.id, 'model-router.save')
+  assert.ok(command.modals.includes('model-router'), 'the quick modal\'s shortcutModal scope is allowed')
+  assert.equal(typeof command.label(), 'string', 'the label comes from the plugin dictionary')
+  // 没有面在位：让给别的所有者。
+  assert.deepEqual(command.resolve({ modal: null }), { status: 'pass' })
+  h.actions.retainSurface()
+  const resolution = command.resolve({ modal: null })
+  assert.equal(resolution.status, 'handled')
+  h.actions.onMaxAttempts('p1', 0, '3', false)
+  resolution.run()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(h.mutateCalls.length, 1, 'running the command saves the staged edit')
+  assert.equal(h.mutateCalls[0].ops.some((op) => op.path[0] === 'profiles'), true)
+})
 
 test('the workbench keeps the sidebar and the workspace pane as siblings', async () => {
   // A missing paren in the deep h() nesting does not break `node --check`:

@@ -379,6 +379,23 @@ const hostConfig = raw => {
   }
 }
 
+test('the skip-notice gate is one gate for all three skip kinds, keyed per turn', () => {
+  const states = new RouterState()
+  const agent = {} // state 只拿它当 WeakMap 键；agentKey 助手在本文件后部定义
+  // 同一 (turn, key) 只放行一次：工具循环每步都重决同一批跳过，发一次就够。
+  assert.equal(states.shouldNoteSkip(agent, 1, 'condition:a/b:需图片输入'), true)
+  assert.equal(states.shouldNoteSkip(agent, 1, 'condition:a/b:需图片输入'), false)
+  // 不同 key（另一类跳过 / 另一个候选）互不遮挡，且各自都被去重——一次 fire 可能
+  // 同时跳过条件候选、能力候选和冷却候选，三种都得各自只报一次。
+  assert.equal(states.shouldNoteSkip(agent, 1, 'breaker:a/b'), true)
+  assert.equal(states.shouldNoteSkip(agent, 1, 'capability:a/b'), true)
+  assert.equal(states.shouldNoteSkip(agent, 1, 'breaker:a/b'), false)
+  assert.equal(states.shouldNoteSkip(agent, 1, 'capability:a/b'), false)
+  assert.equal(states.shouldNoteSkip(agent, 1, 'condition:a/b:需图片输入'), false, 'an earlier key stays deduped after others were announced')
+  // 新一轮重新武装：新的失败链要重新告知。
+  assert.equal(states.shouldNoteSkip(agent, 2, 'breaker:a/b'), true)
+})
+
 test('the client save shape lands where the host reads it', () => {
   // 这正是 client.js 的 save() 写进去的形状：四档全在 health 底下。
   // 曾经 breaker 被提到顶层 schema，客户端却存进 health——保存成功、Host 读到
@@ -426,16 +443,24 @@ test('assertStructural rejects a weight strategy with no positive weight', () =>
 test('assertStructural rejects a breaker rule that matches nothing', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
   const emptyPool = { enabled: false, candidates: [], switchOn: so, maxTotalAttempts: 3, strategy: 'order' }
+  const health = (breaker) => ({ passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker })
   assert.throws(() => assertStructural({
     profiles: [],
     default: emptyPool,
-    health: { passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker: { enabled: true, rules: [{ code: '', message: '', cooldownSeconds: 60 }] } },
+    health: health({ enabled: true, rules: [{ code: '', message: '', cooldownSeconds: 60 }] }),
   }), /matches nothing/)
-  // 关着的时候不校验——没启用的规则不该挡住保存。
+  // 关着也校验：空规则在 breaker.ts 里命中每一次失败，"关着开关存下的空规则"会让
+  // 所有候选被禁、failover 静默失效。规则可以留着（再开不用重填），空白规则不行。
+  assert.throws(() => assertStructural({
+    profiles: [],
+    default: emptyPool,
+    health: health({ enabled: false, rules: [{ code: '', message: '', cooldownSeconds: 60 }] }),
+  }), /matches nothing/)
+  // 关着 + 正常规则照常放行。
   assert.doesNotThrow(() => assertStructural({
     profiles: [],
     default: emptyPool,
-    health: { passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker: { enabled: false, rules: [{ code: '', message: '', cooldownSeconds: 60 }] } },
+    health: health({ enabled: false, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 60 }] }),
   }))
 })
 
@@ -502,6 +527,59 @@ test('a failure older than the previous header does not leak into the next switc
   )
   assert.equal(state.entries.length, 1)
   assert.equal(state.entries[0].to, 'p-b/m-b')
+})
+
+// 终态失败（不切换）之后用户自己换模型：header 的 reason 也是 'change'，任何 header
+// 差异都是（agent.ts:643-648），所以判据不能只问"变更前有没有失败"——失败还必须是
+// 同一步里发生的，否则用户的操作会被记成插件的 failover。
+test('a user model switch after a terminal failure is not a failover', () => {
+  const state = fold(
+    { type: 'turn/start', time: 900, data: { turn: 1 } },
+    { type: 'step/start', time: 950, data: { turn: 1, step: 1 } },
+    header('p-a', 'm-a', 'initial'),
+    failedAttempt('AUTH'),               // 终态：不切换，turn 在这里结束
+    { type: 'turn/start', time: 1900, data: { turn: 2 } },
+    { type: 'step/start', time: 1950, data: { turn: 2, step: 1 } },
+    header('p-b', 'm-b', 'change'),      // 用户自己换的模型
+  )
+  assert.equal(state.entries.length, 0)
+})
+
+// 同 turn 内的 llm-retry 恢复：失败后同路由重试成功，之后用户换模型——那次切换
+// 同样不该被记成 failover（失败属于上一步/上一轮，且 turn/start 已清掉未决失败）。
+test('a recovered transient failure does not arm a later user switch', () => {
+  const state = fold(
+    { type: 'turn/start', time: 900, data: { turn: 1 } },
+    { type: 'step/start', time: 950, data: { turn: 1, step: 1 } },
+    header('p-a', 'm-a', 'initial'),
+    failedAttempt('RATE_LIMIT'),
+    okAttempt(),                          // llm-retry 同路由重试成功
+    message(),
+    { type: 'turn/start', time: 1900, data: { turn: 2 } },
+    { type: 'step/start', time: 1950, data: { turn: 2, step: 1 } },
+    header('p-b', 'm-b', 'change'),
+  )
+  assert.equal(state.entries.length, 0)
+})
+
+// settled 只归当轮：切过去的路由当轮就失败，之后任意一轮的成功消息不能把这条
+// 旧条目标成"已兑现"。
+test('a success in a later turn does not settle an older failover entry', () => {
+  const state = fold(
+    { type: 'turn/start', time: 900, data: { turn: 1 } },
+    { type: 'step/start', time: 950, data: { turn: 1, step: 1 } },
+    header('p-a', 'm-a', 'initial'),
+    failedAttempt('RATE_LIMIT'),
+    header('p-b', 'm-b', 'change'),
+    failedAttempt('RATE_LIMIT'),          // 切过去也失败：条目保持未结算
+    { type: 'turn/start', time: 1900, data: { turn: 2 } },
+    { type: 'step/start', time: 1950, data: { turn: 2, step: 1 } },
+    header('p-c', 'm-c', 'change'),       // 用户换模型（无同 step 失败）
+    okAttempt(),
+    message(),
+  )
+  assert.equal(state.entries.length, 1)
+  assert.equal(state.entries[0].settled, false)
 })
 
 test('chained failovers each get an entry, unsettled when the chain dies', () => {
@@ -815,6 +893,25 @@ test('stickyTurns holds the image condition for N no-image turns, then reverts',
   states.noteConditions(agent, 1, 1, turnConditions(true, undefined))
   states.noteConditions(agent, 2, 1, turnConditions(false, undefined))
   assert.equal(states.conditionsFor(agent, 2, 1).hasImages, true)
+  states.noteConditions(agent, 3, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 3, 1).hasImages, true)
+  states.noteConditions(agent, 4, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 4, 1).hasImages, false)
+})
+
+// 生产时序：pre-step 先于 agent/request，而 sticky 值只在 request 里写入
+// （resolveChain 之后）。所以会话的第一个带图轮，noteConditions 时 sticky 还是 0。
+// setStickyTurns 必须把当前轮刚写的窗口补上，否则紧随的无图追问不粘——这一条不预置
+// setStickyTurns，复现的就是"新会话第一条消息带图"的真实顺序。
+test('the session first image turn still arms the sticky window (pre-step precedes the request)', () => {
+  const states = new RouterState()
+  const agent = agentKey()
+  states.noteConditions(agent, 1, 1, turnConditions(true, undefined))
+  assert.equal(states.conditionsFor(agent, 1, 1).hasImages, true)
+  // 此刻还没有任何 setStickyTurns：链未解析。请求到达、链解析出来后才写入。
+  states.setStickyTurns(agent, 2)
+  states.noteConditions(agent, 2, 1, turnConditions(false, undefined))
+  assert.equal(states.conditionsFor(agent, 2, 1).hasImages, true, 'the first no-image follow-up sticks')
   states.noteConditions(agent, 3, 1, turnConditions(false, undefined))
   assert.equal(states.conditionsFor(agent, 3, 1).hasImages, true)
   states.noteConditions(agent, 4, 1, turnConditions(false, undefined))

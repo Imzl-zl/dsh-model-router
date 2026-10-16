@@ -57,8 +57,16 @@ const stateSchema = z.object({
   entries: z.array(entrySchema),
   /** Route of the latest `request/header`, for the next switch's `from`. */
   lastRoute: z.string().optional(),
-  /** Failure code of the latest failed attempt, cleared by every header. */
-  lastFailure: z.string().optional(),
+  /**
+   * The latest failed attempt, with the (turn, step) it belongs to. A header in a
+   * later turn is a user-initiated switch (or another request entirely), not this
+   * failure's failover — that is what keeps manual model changes out of the ledger.
+   */
+  lastFailure: z.object({
+    code: z.string(),
+    turn: z.number().int().nonnegative(),
+    step: z.number().int().nonnegative(),
+  }).optional(),
   turn: z.number().int().nonnegative(),
   step: z.number().int().nonnegative(),
 }).strict()
@@ -66,7 +74,7 @@ const stateSchema = z.object({
 interface LineageState {
   entries: FailoverEntry[]
   lastRoute: string | undefined
-  lastFailure: string | undefined
+  lastFailure: { code: string; turn: number; step: number } | undefined
   turn: number
   step: number
 }
@@ -98,7 +106,11 @@ export const failoverHistoryProjection = {
   apply(state: LineageState, event: SessionEvent): LineageState {
     switch (event.type) {
       case 'turn/start':
-        return state.turn === event.data.turn ? state : { ...state, turn: event.data.turn }
+        // A new turn starts with no pending failure: a route change later in this
+        // turn is the user's own switch, and must not inherit an older failure.
+        return state.turn === event.data.turn
+          ? state
+          : { ...state, turn: event.data.turn, lastFailure: undefined }
       case 'step/start':
         return state.step === event.data.step ? state : { ...state, step: event.data.step }
       case 'request/header': {
@@ -110,14 +122,18 @@ export const failoverHistoryProjection = {
         if (state.lastRoute === undefined || state.lastRoute === route) return next
         // A 'change' with no preceding failure is a user-initiated switch, not
         // a failover; the ledger records the plugin's chain, not the user's choice.
-        if (state.lastFailure === undefined) return next
+        // The failure must also belong to THIS step: the router switches inside the
+        // step that failed, so a same-turn/later-turn failure cannot be the cause.
+        const failure = state.lastFailure
+        if (failure === undefined) return next
+        if (failure.turn !== state.turn || failure.step !== state.step) return next
         const entry: FailoverEntry = {
           time: event.time,
           turn: state.turn,
           step: state.step,
           from: state.lastRoute,
           to: route,
-          code: state.lastFailure,
+          code: failure.code,
           settled: false,
         }
         return { ...next, entries: [...state.entries, entry].slice(-MAX_ENTRIES) }
@@ -125,11 +141,13 @@ export const failoverHistoryProjection = {
       case 'assistant/attempt': {
         const code = failureCodeOfStream(event.data.stream)
         if (code === undefined) return state
-        return { ...state, lastFailure: code }
+        return { ...state, lastFailure: { code, turn: state.turn, step: state.step } }
       }
       case 'assistant/message': {
         const last = state.entries[state.entries.length - 1]
-        if (last === undefined || last.settled) return state
+        // Only the turn that owns the switch can settle it: a success in a later
+        // turn says nothing about whether this failover worked.
+        if (last === undefined || last.settled || last.turn !== state.turn) return state
         const entries = state.entries.slice()
         entries[entries.length - 1] = { ...last, settled: true }
         return { ...state, entries }
