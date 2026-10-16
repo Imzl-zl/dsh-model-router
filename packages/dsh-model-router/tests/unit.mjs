@@ -27,17 +27,28 @@ import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, M
 import { breakerNotice } from '../src/notice.ts'
 import { assertStructural } from '../src/config.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
+import { probePromptFor, probeRoute } from '../src/probe.ts'
 
 let passed = 0
+const pending = []
 function test(name, body) {
+  let result
   try {
-    body()
-    passed += 1
-    console.log(`    ok  ${name}`)
+    result = body()
   } catch (error) {
     console.log(`    FAIL ${name}: ${error.message}`)
     process.exitCode = 1
+    return
   }
+  if (result && typeof result.then === 'function') {
+    pending.push(result.then(
+      () => { passed += 1; console.log(`    ok  ${name}`) },
+      (error) => { console.log(`    FAIL ${name}: ${error.message}`); process.exitCode = 1 },
+    ))
+    return
+  }
+  passed += 1
+  console.log(`    ok  ${name}`)
 }
 
 const image = (type) => [{ type: 'text', text: 'hi' }, { type, attachment: { name: 'x.png' } }]
@@ -866,4 +877,104 @@ test('assertStructural accepts stickyTurns 0 and a positive value', () => {
   assertStructural({ profiles: [{ ...base, stickyTurns: 0 }], default: fallback })
   assertStructural({ profiles: [{ ...base, stickyTurns: 3 }], default: fallback })
 })
+
+// ---- the probe (pure paths the integration suite cannot reach) ----
+
+/**
+ * An llm face that answers however the case asks. The stream factory receives
+ * the request options, so a fake stream can observe the probe's signal the way
+ * a real adapter does — which is also what lets an abandoned stream finish.
+ */
+function fakeLlm({ makeStream, prepareError } = {}) {
+  return {
+    prepareCall: () => prepareError === undefined
+      ? Promise.resolve({ config: { provider: 'p', model: 'm' }, stream: (options) => makeStream(options.signal) })
+      : Promise.reject(prepareError),
+  }
+}
+
+/** A stream that never produces and never ends until the signal aborts it. */
+const neverEnding = (signal) => (async function* () {
+  await new Promise((_resolve, reject) => {
+    if (signal?.aborted === true) reject(signal.reason)
+    else signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+  })
+})()
+
+const reachableStream = () => (async function* () {
+  yield { type: 'text-delta', index: 0, text: 'x' }
+})()
+
+const route = { provider: 'p', model: 'm' }
+
+test('probeRoute measures the first content byte and reports reachable', async () => {
+  const result = await probeRoute(fakeLlm({ makeStream: () => reachableStream() }), route, 'ping', 8)
+  assert.equal(result.kind, 'reachable')
+  assert.equal(typeof result.latencyMs, 'number')
+  assert.equal(result.error, undefined)
+})
+
+test('probeRoute reports an error finish as unreachable with its code', async () => {
+  const failing = (async function* () {
+    yield { type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', message: 'denied' } } }
+  })()
+  const result = await probeRoute(fakeLlm({ makeStream: () => failing }), route, 'ping', 8)
+  assert.equal(result.kind, 'unreachable')
+  assert.equal(result.error, 'AUTH')
+  assert.equal(result.latencyMs, undefined, 'a route that never answered has no TTFT')
+})
+
+test('probeRoute reports a thrown adapter error by its code', async () => {
+  const thrown = Object.assign(new Error('stub refused'), { code: 'RATE_LIMIT' })
+  const result = await probeRoute({
+    prepareCall: () => Promise.resolve({
+      config: {},
+      stream: () => { throw thrown },
+    }),
+  }, route, 'ping', 8)
+  assert.equal(result.kind, 'unreachable')
+  assert.equal(result.error, 'RATE_LIMIT')
+})
+
+test('probeRoute times out as unreachable, never as a silent hang', async () => {
+  const started = Date.now()
+  const result = await probeRoute(fakeLlm({ makeStream: (signal) => neverEnding(signal) }), route, 'ping', 1)
+  assert.equal(result.kind, 'unreachable')
+  assert.equal(result.error, 'TIMEOUT')
+  assert.ok(Date.now() - started < 5000, 'the deadline fired instead of waiting on the stream')
+})
+
+test('probeRoute reads a route it cannot even call as unavailable, not as a fault', async () => {
+  const result = await probeRoute(fakeLlm({ prepareError: new Error('no adapter') }), route, 'ping', 8)
+  assert.equal(result.kind, 'unavailable')
+  assert.match(result.error ?? '', /no adapter/)
+})
+
+test('probeRoute stops when the caller cancels, and says so', async () => {
+  const controller = new AbortController()
+  const running = probeRoute(fakeLlm({ makeStream: (signal) => neverEnding(signal) }), route, 'ping', 8, controller.signal)
+  controller.abort()
+  const result = await running
+  assert.equal(result.kind, 'unavailable')
+  assert.equal(result.error, 'cancelled')
+})
+
+test('probeRoute reports a stream that ends empty as unavailable, not as a fault', async () => {
+  const empty = (async function* () {
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  })()
+  const result = await probeRoute(fakeLlm({ makeStream: () => empty }), route, 'ping', 8)
+  assert.equal(result.kind, 'unavailable')
+  assert.equal(result.error, 'empty stream')
+})
+
+test('probePromptFor uses the per-route override, else the shared default', () => {
+  const overrides = [{ route: 'p/m', prompt: 'hi there' }]
+  assert.equal(probePromptFor(route, '1', overrides), 'hi there')
+  assert.equal(probePromptFor({ provider: 'p', model: 'other' }, '1', overrides), '1')
+  assert.equal(probePromptFor(route, '1', []), '1')
+})
+
+await Promise.all(pending)
+console.log(`\n${passed} unit test(s) passed`)
 

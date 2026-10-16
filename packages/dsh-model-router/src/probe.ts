@@ -119,9 +119,15 @@ export async function probeRoute(
 
 /** The probe's own timeout reason, so a timeout reads apart from a caller abort. */
 class TimeoutError extends Error {
-  constructor(readonly code: string, readonly timeoutMs: number) {
+  // Explicit fields, not a parameter property: the source-mode loader strips
+  // types without transforming, and rejects parameter properties outright.
+  readonly code: string
+  readonly timeoutMs: number
+  constructor(code: string, timeoutMs: number) {
     super(`probe timed out after ${timeoutMs}ms`)
     this.name = 'TimeoutError'
+    this.code = code
+    this.timeoutMs = timeoutMs
   }
 }
 
