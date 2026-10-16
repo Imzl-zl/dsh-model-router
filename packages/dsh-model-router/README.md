@@ -120,9 +120,23 @@ step.
   `ctx.remote.session.list()` plus per-session `projections()` reads. A
   user-initiated model switch (a `change` header with no preceding failure) is
   deliberately not an entry.
-- **No channel health view.** The drawer shows failover history only — no
-  latency/success-rate/cooldown telemetry exists, and none is planned without
-  a global health subsystem.
+- **Channel health is three tiers, all visible in one workspace.** Passive
+  observation folds real conversation outcomes per physical route
+  (`router/channel-health`, merged across the 20 most recent sessions so the
+  availability rate is a global fact about the channel); the connectivity check
+  asks DSH's own `discoverModels` for a model list (0 tokens); the end-to-end
+  probe sends one minimal message and stops at the first content byte
+  (`maxTokens: 1`, so the cost is bounded) to measure time-to-first-token. The
+  probe's schedule is user config and defaults to off — it spends tokens on
+  every tick, so how often is the caller's decision. Probe outcomes are three
+  distinct things: reachable (with a TTFT), unreachable (with the
+  provider-neutral code), and unavailable (the check could not run at all),
+  which the UI never reads as a fault. A probe never influences routing: one
+  synthetic message says nothing about a channel under real load, so route
+  selection still reads only real conversation outcomes and explicit user
+  conditions.
+  Per-route probe prompts (`health.probe.prompts`) are honored by the Host but
+  have no editor in the settings modal yet — the shared prompt is editable.
 - **Agent main requests only.** Compaction and session-title calls keep their
   own DSH-provided model configuration and are not routed by this plugin.
 - **`needs` conditions are turn-scoped for images, step-scoped for tokens.**

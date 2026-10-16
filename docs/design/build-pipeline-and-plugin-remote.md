@@ -11,7 +11,10 @@ last_updated: "2026-10-15"
 
 本提案要求把包移到 DSH 标准的 `tsc` + `tsdown` + Typert 生成器构建管线上，使插件拥有自己的 Remote 服务，并在此基础上恢复「主动端到端测速」档位。
 
-当前包是手写单文件、无构建步骤，因此插件自有 Remote 的注册通道不存在：`dsh-typert-loader` 跳过没有生成 `./typert` 导出的包。主动探测需要浏览器触发宿主执行一次模型调用，恰好撞在这条边界上，该档位当前在 UI 中为禁用态加说明。
+当前包是手写单文件、无构建步骤，因此插件自有 Remote 的注册通道不存在：`dsh-typert-loader` 跳过没有生成 `./typert` 导出的包。主动探测需要浏览器触发宿主执行一次模型调用，恰好撞在这条边界上。
+
+> 提案时的状态：探测档在 UI 中为禁用态加说明。Phase 3 落地后该档位已恢复，
+> 构建管线与该边界的事实结论仍如下述（见文首验收处的落地说明）。
 
 工程量不是本提案的约束；约束是**必须用 DSH 的 sanctioned 机制**，不能用手写 manifest 或提交生成物等方式绕过验证器。
 
@@ -125,6 +128,13 @@ async probeAll(request: ProbeRequest, signal: AbortSignal): Promise<ProbeReport>
 3. 交付是否同步改为 tarball/npm，还是继续 link + 本地构建？
 
 ## 验收
+
+> Phase 3 已于 2026-10-15 落地，验收结论与被否方案见
+> [`../../.agents/notes/implemented/2026-10-15-plugin-remote-probe.md`](../../.agents/notes/implemented/2026-10-15-plugin-remote-probe.md)。
+> 与下面提案清单的唯一偏差：探测结果**没有**折进 `router/channel-health`
+> 投影——投影是单会话、事件驱动的契约，探测没有会话可挂；客户端经生成的
+> `./remote` 贡献读宿主持有的最近一次报告（`probeReport`），与被动快照同一套
+> 读取模式。其余各项按原样成立。
 
 - `./typert` 与 `./remote` 由生成器产出并被 loader / 客户端校验通过，无手写 manifest、无提交的生成物副本。
 - `ctx.remote.<ns>.probeAll()` 在浏览器可调，返回 `{ ok, value }` 信封；取消通过 `signal` 传递。
