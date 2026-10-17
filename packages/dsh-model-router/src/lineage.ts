@@ -15,6 +15,9 @@
  * unchanged state publishes nothing; and every tail page carries every
  * client-visible key, so the view stays UI-scale — the last
  * {@link MAX_ENTRIES} entries, nothing more.
+ *
+ * Note: settle 为何按事件自身的 (turn, step) 门控 —— 见
+ * .agents/notes/implemented/2026-10-17-health-latency-step-anchor.md
  */
 
 import type { AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
@@ -142,9 +145,14 @@ export const failoverHistoryProjection = {
       }
       case 'assistant/message': {
         const last = state.entries[state.entries.length - 1]
-        // Only the turn that owns the switch can settle it: a success in a later
-        // turn says nothing about whether this failover worked.
-        if (last === undefined || last.settled || last.turn !== state.turn) return state
+        // Only the step that owns the switch can settle it: the router
+        // switches inside the step that failed, so a success from a later
+        // step of the same turn — on a route the failover never named —
+        // says nothing about whether this failover worked. The event's own
+        // (turn, step) is the authority, the same gate the record path
+        // applies and the same shape session-stats uses.
+        if (last === undefined || last.settled) return state
+        if (last.turn !== event.data.turn || last.step !== event.data.step) return state
         const entries = state.entries.slice()
         entries[entries.length - 1] = { ...last, settled: true }
         return { ...state, entries }

@@ -581,7 +581,7 @@ const failedAttempt = (code, turn = 1, step = 1) => ({
 const okAttempt = (turn = 1, step = 1) => ({
   type: 'assistant/attempt', time: 1100, data: { turn, step, stream: [{ type: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } }] },
 })
-const message = (turn = 1) => ({ type: 'assistant/message', time: 1200, data: { turn } })
+const message = (turn = 1, step = 1) => ({ type: 'assistant/message', time: 1200, data: { turn, step } })
 const fold = (...events) => events.reduce(failoverHistoryProjection.apply, failoverHistoryProjection.init())
 
 test('fold records a failover: from, to, code, settled', () => {
@@ -669,15 +669,36 @@ test('a success in a later turn does not settle an older failover entry', () => 
     { type: 'turn/start', time: 1900, data: { turn: 2 } },
     { type: 'step/start', time: 1950, data: { turn: 2, step: 1 } },
     header('p-c', 'm-c', 'change'),       // 用户换模型（无同 step 失败）
-    okAttempt(),
-    message(),
+    okAttempt(2, 1),
+    message(2, 1),
   )
   assert.equal(state.entries.length, 1)
   assert.equal(state.entries[0].settled, false)
 })
 
-test('chained failovers each get an entry, unsettled when the chain dies', () => {
+// 同 turn 内、跨 step 的成功不能结算旧条目：settle 原先只按 turn 过滤，于是
+// step 2 在路由 C 上的成功会把 step 1 的 a→b 条目标成"已兑现"——而 b 从未应答。
+// 记录路径（request/header 的 change 分支）本来就按 step 门控，settle 漏了。
+test('a success in a later step of the same turn does not settle an older failover entry', () => {
   const state = fold(
+    { type: 'turn/start', time: 100, data: { turn: 1 } },
+    { type: 'step/start', time: 100, data: { turn: 1, step: 1 } },
+    header('a', 'm', 'initial'),
+    failedAttempt('RATE_LIMIT'),
+    header('b', 'm', 'change'),
+    failedAttempt('SERVER'),               // 切过去也失败：条目保持未结算
+    { type: 'step/start', time: 600, data: { turn: 1, step: 2 } },
+    header('c', 'm', 'change'),            // 用户/链在第二步换到 C
+    message(1, 2),                         // step 2 的成功
+  )
+  assert.equal(state.entries.length, 1)
+  assert.equal(state.entries[0].from, 'a/m')
+  assert.equal(state.entries[0].to, 'b/m')
+  assert.equal(state.entries[0].step, 1, 'the entry belongs to step 1')
+  assert.equal(state.entries[0].settled, false, 'a step-2 success says nothing about whether a→b worked')
+})
+
+test('chained failovers each get an entry, unsettled when the chain dies', () => {  const state = fold(
     header('p-a', 'm-a', 'initial'),
     failedAttempt('RATE_LIMIT'),
     header('p-b', 'm-b', 'change'),
@@ -752,6 +773,11 @@ test('pushTimelinePoint does not mutate the timeline it was given', () => {
 test('channelHealthProjection reads throughput from the usage beside message', () => {
   let state = channelHealthProjection.init()
   state = channelHealthProjection.apply(state, {
+    type: 'step/start',
+    time: 1000,
+    data: { turn: 1, step: 1 },
+  })
+  state = channelHealthProjection.apply(state, {
     type: 'request/header',
     time: 1000,
     data: { reason: 'initial', header: { config: { provider: 'prov-fast', model: 'mod-fast' } } },
@@ -783,6 +809,11 @@ test('channelHealthProjection ignores usage nested inside message', () => {
   // a fixture that restates the implementation proves nothing when it changes.
   let state = channelHealthProjection.init()
   state = channelHealthProjection.apply(state, {
+    type: 'step/start',
+    time: 1000,
+    data: { turn: 1, step: 1 },
+  })
+  state = channelHealthProjection.apply(state, {
     type: 'request/header',
     time: 1000,
     data: { reason: 'initial', header: { config: { provider: 'prov-fast', model: 'mod-fast' } } },
@@ -790,15 +821,64 @@ test('channelHealthProjection ignores usage nested inside message', () => {
   state = channelHealthProjection.apply(state, {
     type: 'assistant/message',
     time: 1500,
-    data: { message: { usage: { outputTokens: 100 } }, stream: [] },
+    data: { turn: 1, step: 1, message: { usage: { outputTokens: 100 } }, stream: [] },
   })
   const rec = state.records['prov-fast/mod-fast']
   assert.ok(rec)
   assert.equal(rec.throughputTps, undefined)
 })
 
-test('classifyHealth scores only faults that belong to the channel', () => {
-  assert.equal(classifyHealth('RATE_LIMIT'), 'degraded')
+// 延迟锚点是 step/start，不是 request/header：稳态会话的 step 2..N 不出 header
+// （agent.ts:635-651 的 requestHeaderLogged 置 true 后永不重置），按 header 锚定
+// 会让工具循环的后续步把整个 turn 的时间算成自己的延迟。DSH 自己的 session-stats
+// 用 step/start → assistant/message 并按 (turn, step) 门控
+// （session-stats/src/projection.ts:133-149），这里照抄那个形状。
+test('the health fold measures each step on its own step/start, not on the turn first header', () => {
+  const ev = (type, time, data) => ({ type, time, data })
+  const message = (turn, step, time, tokens) => ({
+    type: 'assistant/message',
+    time,
+    data: {
+      turn,
+      step,
+      message: { source: { provider: 'stub-a', model: 'stub-model' } },
+      stream: [],
+      usage: { inputTokens: 4, outputTokens: tokens },
+    },
+  })
+  const events = [
+    ev('step/start', 1000, { turn: 1, step: 1 }),
+    ev('request/header', 1100, { header: { config: { provider: 'stub-a', model: 'stub-model' } }, reason: 'initial' }),
+    // 步内退避：llm-retry 的两条记录折叠器不读，但时间确实花在这一步里——DSH 自己
+    // 的模型时间定义包含它（"survives an in-step llm/retry"）。
+    ev('llm/retry', 1500, { retryId: 'r1', turn: 1, step: 1, provider: 'stub-a', retry: 1, delayMs: 500 }),
+    ev('llm/retry-started', 2000, { retryId: 'r1', turn: 1, step: 1, retry: 1 }),
+    message(1, 1, 2600, 100),
+    // 第二步：工具花了 2.4s，没有新 header（header 未变、requestHeaderLogged 已置位）。
+    ev('step/start', 5000, { turn: 1, step: 2 }),
+    message(1, 2, 5500, 100),
+  ]
+  let state = channelHealthProjection.init()
+  for (const event of events) state = channelHealthProjection.apply(state, event)
+  const record = state.records['stub-a/stub-model']
+  assert.equal(record.timeline.length, 2)
+  // 第一步：从本步的 header 算起（1500ms，含步内退避）。
+  assert.equal(record.timeline[0].latencyMs, 1500)
+  // 第二步：只算本步的 500ms。修复前它是 4400——把 step 1 的模型时间与工具执行
+  // 时间全算进来，吞吐因此虚高 8.8 倍（22.7 对 200.0）。
+  assert.equal(record.timeline[1].latencyMs, 500)
+  assert.equal(record.timeline[1].throughputTps, 200)
+  // 门控是双向的：不属于任何开着的步的事件不产出测量值（记录照建——这条路确实
+  // 应答了，只是代价无从计算）。
+  const orphan = channelHealthProjection.apply(
+    channelHealthProjection.apply(channelHealthProjection.init(), events[1]),
+    message(9, 9, 9999, 100),
+  )
+  assert.equal(orphan.records['stub-a/stub-model']?.latencyMs, undefined, 'a message from no open step measures nothing')
+  assert.equal(orphan.records['stub-a/stub-model']?.throughputTps, undefined)
+})
+
+test('classifyHealth scores only faults that belong to the channel', () => {  assert.equal(classifyHealth('RATE_LIMIT'), 'degraded')
   assert.equal(classifyHealth('SERVER'), 'unhealthy')
   assert.equal(classifyHealth('TIMEOUT'), 'unhealthy')
   assert.equal(classifyHealth('TRANSPORT'), 'unhealthy')
@@ -826,6 +906,11 @@ test('channelHealthProjection folds session headers and attempts into channel re
   assert.deepEqual(state.records, {})
 
   // 1. Initial request header
+  state = channelHealthProjection.apply(state, {
+    type: 'step/start',
+    time: 1000,
+    data: { turn: 1, step: 1 },
+  })
   state = channelHealthProjection.apply(state, {
     type: 'request/header',
     time: 1000,
@@ -858,7 +943,7 @@ test('channelHealthProjection folds session headers and attempts into channel re
   state = channelHealthProjection.apply(state, {
     type: 'assistant/message',
     time: 2400,
-    data: { message: { content: [] }, stream: [], usage: { inputTokens: 5, outputTokens: 40 } },
+    data: { turn: 1, step: 1, message: { content: [] }, stream: [], usage: { inputTokens: 5, outputTokens: 40 } },
   })
   assert.ok(state.records['prov-2/mod-2'])
   assert.equal(state.records['prov-2/mod-2'].status, 'healthy')
@@ -874,6 +959,11 @@ test('channelHealthProjection folds session headers and attempts into channel re
 
 test('channelHealthProjection leaves the record alone for a non-channel fault', () => {
   let state = channelHealthProjection.init()
+  state = channelHealthProjection.apply(state, {
+    type: 'step/start',
+    time: 1000,
+    data: { turn: 1, step: 1 },
+  })
   state = channelHealthProjection.apply(state, {
     type: 'request/header',
     time: 1000,

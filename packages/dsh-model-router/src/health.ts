@@ -20,6 +20,9 @@
  * The other half — can the model actually produce a token right now — has no
  * zero-cost answer and no plugin-reachable channel, so it is not implemented
  * here. See the decision note for why.
+ *
+ * Note: 延迟锚点为何在 step/start、为何让步内退避留在本步成本里 —— 见
+ * .agents/notes/implemented/2026-10-17-health-latency-step-anchor.md
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -46,9 +49,14 @@ export type ChannelHealthStatus = 'healthy' | 'degraded' | 'unhealthy'
 export interface ChannelTimelinePoint {
   time: number
   status: ChannelHealthStatus
-  /** Whole-turn cost: request header to this event. Not TTFT — DSH's own `sessionStats` projection owns TTFT. */
+  /**
+   * This route's cost inside the event's own step: `step/start` (re-anchored by
+   * each `request/header`) to this event. Not a turn cost — a tool-loop turn's
+   * later steps each carry their own. Not TTFT either — DSH's own
+   * `sessionStats` projection owns TTFT.
+   */
   latencyMs?: number
-  /** Turn-average output rate, first-token wait included. Not a decode rate. */
+  /** Output rate over that step cost, first-token wait included. Not a decode rate. */
   throughputTps?: number
   error?: string
 }
@@ -102,9 +110,23 @@ export function pushTimelinePoint(
   return capTimeline(current)
 }
 
-/** Whole-turn cost from the request header this fold is tracking, when there is one. */
-function elapsedSince(state: ChannelHealthProjectionState, time: number): number | undefined {
-  return state.lastStart === undefined ? undefined : Math.max(1, time - state.lastStart)
+/**
+ * This route's cost inside the event's own step, or `undefined` when the event
+ * belongs to no open step.
+ *
+ * The gate is what makes the number mean one thing: a settlement from another
+ * step (a tool-loop turn's later step, or a step the fold never saw open) has
+ * no measured cost here, and reporting one would bill it this route's time.
+ */
+function elapsedSince(
+  state: ChannelHealthProjectionState,
+  turn: number | undefined,
+  step: number | undefined,
+  time: number,
+): number | undefined {
+  const open = state.openStep
+  if (open === undefined || open.turn !== turn || open.step !== step) return undefined
+  return Math.max(1, time - open.start)
 }
 
 // ---------------- Session Projection ----------------
@@ -134,13 +156,19 @@ const healthRecordSchema = z.object({
 const projectionStateSchema = z.object({
   records: z.record(z.string(), healthRecordSchema),
   currentRoute: z.string().optional(),
-  lastStart: z.number().optional(),
+  openStep: z.object({ turn: z.number(), step: z.number(), start: z.number() }).optional(),
 }).strict()
 
 interface ChannelHealthProjectionState {
   records: Record<string, ChannelHealthRecord>
   currentRoute?: string
-  lastStart?: number
+  /**
+   * The step whose cost is being measured, and when this route's request
+   * inside it started. Anchored on `step/start` (re-anchored by each
+   * `request/header`, which names a new request on the route it carries) and
+   * gated by `(turn, step)` — DSH's own model-time shape, see the fold below.
+   */
+  openStep?: { turn: number; step: number; start: number }
 }
 
 /**
@@ -152,20 +180,47 @@ interface ChannelHealthProjectionState {
  */
 export const channelHealthProjection = {
   key: CHANNEL_HEALTH_KEY,
-  // v2: `status` narrowed to three values ('unknown' removed), `timeline` became
-  // required, and `availabilityPct` / `source` were dropped. A persisted v1 row
-  // would fail the schema and, on the cold-read path, throw — so the version is
-  // bumped to make the registry discard those rows instead.
-  stateVersion: 2,
+  // v3: the latency anchor moved from a bare `request/header` timestamp to
+  // `openStep` (turn, step, start). A persisted v2 row carries `lastStart`,
+  // which the strict schema now rejects — so the version bump makes the
+  // registry discard those rows, the same way v2 discarded v1's.
+  stateVersion: 3,
   stateSchema: projectionStateSchema,
   init: (): ChannelHealthProjectionState => ({ records: {} }),
   apply(state: ChannelHealthProjectionState, event: SessionEvent): ChannelHealthProjectionState {
     switch (event.type) {
+      case 'step/start': {
+        // The latency anchor lives here, not on `request/header`: a
+        // steady-state session emits no header for step 2..N (`requestHeaderLogged`
+        // is set once and never reset, agent.ts:635-651), so a header anchor
+        // made every later step of a tool-loop turn inherit the whole turn's
+        // time — model time plus tool-execution time plus any backoff.
+        // DSH's own session-stats projection measures model time the same way
+        // (`step/start` → `assistant/message`, gated by (turn, step),
+        // session-stats/src/projection.ts:133-149); an in-step `llm/retry`
+        // stays inside the step's cost there and stays here.
+        const { turn, step } = event.data
+        // A step/start that names no step opens nothing: the gate below would
+        // otherwise match every later event and measure against a step that
+        // was never started.
+        if (typeof turn !== 'number' || typeof step !== 'number') return state
+        const open = state.openStep
+        if (open !== undefined && open.turn === turn && open.step === step) return state
+        return { ...state, openStep: { turn, step, start: event.time } }
+      }
       case 'request/header': {
         // Boundary: a header without a route names nothing to attribute to.
         const config = event.data.header.config
         if (config === undefined || !config.provider || !config.model) return state
-        return { ...state, currentRoute: routeKeyOf(config.provider, config.model), lastStart: event.time }
+        // A header names a NEW request on the route it carries, so it
+        // re-anchors the open step: a failover inside one step must not bill
+        // the previous candidate's failure to the route that answered.
+        const open = state.openStep
+        return {
+          ...state,
+          currentRoute: routeKeyOf(config.provider, config.model),
+          ...open === undefined ? {} : { openStep: { ...open, start: event.time } },
+        }
       }
       case 'assistant/attempt': {
         const route = state.currentRoute
@@ -177,7 +232,7 @@ export const channelHealthProjection = {
         if (status === undefined) return state
         const { provider, model } = routeParts(route)
         const existing = state.records[route]
-        const latencyMs = elapsedSince(state, event.time)
+        const latencyMs = elapsedSince(state, event.data.turn, event.data.step, event.time)
         const record: ChannelHealthRecord = {
           route,
           provider,
@@ -194,7 +249,7 @@ export const channelHealthProjection = {
         const route = state.currentRoute
         if (route === undefined) return state
         const { provider, model } = routeParts(route)
-        const latencyMs = elapsedSince(state, event.time)
+        const latencyMs = elapsedSince(state, event.data.turn, event.data.step, event.time)
         // Usage sits beside `message` on the event data, never inside it.
         const outputTokens = event.data.usage?.outputTokens
         const throughputTps = typeof outputTokens === 'number' && latencyMs !== undefined
