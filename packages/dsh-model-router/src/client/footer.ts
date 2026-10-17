@@ -3,7 +3,7 @@
 import { Fragment, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { healthToneBadge } from './format.ts'
+import { healthToneBadge, isMacPlatform, saveShortcutKeyKey } from './format.ts'
 import { RouterPage } from './page.ts'
 import { Icon, ModelRouterIcon, ICON_CHECK, ICON_CLOSE, ICON_SAVE, ICON_SPINNER, ICON_UNDO } from './icons.ts'
 import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -71,7 +71,7 @@ export function ModelRouterFooterAction(props) {
         },
           state.saving ? h(Icon, { d: ICON_SPINNER, size: 14, spin: true }) : (dirty ? h(Icon, { d: ICON_SAVE, size: 14 }) : h(Icon, { d: ICON_CHECK, size: 14 })),
           state.saving ? t('formSaving') : t('formSave'),
-          dirty ? h('kbd', { style: S.kbdTag }, t('saveShortcutKey')) : null),
+          dirty ? h('kbd', { style: S.kbdTag }, t(saveShortcutKeyKey(isMacPlatform()))) : null),
         h('button', {
           type: 'button',
           className: 'dsh-router-modal-close-btn',
@@ -90,7 +90,7 @@ export function ModelRouterFooterAction(props) {
         isWide ? h('span', { style: S.sidebarLabel }, t('sidebarActionLabel')) : null),
       isWide
         ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
-            dirty ? h('span', { style: { width: 6, height: 6, borderRadius: '50%', background: 'var(--dsw-alias-state-warn-primary)', flexShrink: 0 }, title: t('unsavedChangesBadge') }) : null,
+            dirty ? h('span', { style: { width: 6, height: 6, borderRadius: '50%', background: 'var(--dsh-router-tone-warn)', flexShrink: 0 }, title: t('unsavedChangesBadge') }) : null,
             h('span', { style: S.sidebarCountBadge }, String(profileCount)))
         : (dirty ? h('span', { style: S.railDirtyDot }) : null)),
     modalElement

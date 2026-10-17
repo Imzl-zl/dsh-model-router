@@ -33,7 +33,8 @@ import { breakerNotice } from '../src/notice.ts'
 import { assertStructural } from '../src/config.ts'
 import { structuralViolations } from '../src/rules.ts'
 import { SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
-import { defaultSwitchOn, validate } from '../src/client/validate.ts'
+import { defaultSwitchOn, validate, BREAKER_CODE_PRESETS } from '../src/client/validate.ts'
+import { deepEqual, saveShortcutKeyKey } from '../src/client/format.ts'
 import { en, zh } from '../src/client/locales.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
@@ -1648,8 +1649,10 @@ function discoveryLlm({ directory = [], answers = {}, settings } = {}) {
   return {
     asked,
     listConfigurableProviders: () => directory,
-    discoverModels: (settingsNs, request) => {
-      asked.push({ settingsNs, request })
+    discoverModels: (settingsNs, request, signal) => {
+      // signal 只在调用方真的传了才记录：既有用例断言 asked 的精确形状，
+      // 一个恒常的 undefined 键会把它们全打红。
+      asked.push(signal === undefined ? { settingsNs, request } : { settingsNs, request, signal })
       const answer = answers[settingsNs]
       if (answer === undefined) {
         // Exactly what LlmRuntime does when no discovery is registered for the
@@ -1771,6 +1774,58 @@ test('checkConnectivity reads a route with no configurable-provider entry as una
   assert.equal(verdict.kind, 'unavailable')
   assert.equal(verdict.reason, 'notConfigurable')
   assert.equal(llm.asked.length, 0, 'no discovery was asked for a route with no namespace')
+})
+
+test('checkConnectivity threads the caller signal to the discovery, and an aborted check rethrows', async () => {
+  // M4：发现调用是真实网络请求，取消缝必须通到 discoverModels（Typert 的
+  // cancellation 通道把浏览器的 abort 送进宿主方法末参）。取消不是"端点没
+  // 应答"——中止时原样抛回，让远程调用以拒绝结束，客户端本就跑在拒绝路径上。
+  const controller = new AbortController()
+  const llm = discoveryLlm({
+    directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: {
+      'ns-a': () => new Promise((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { code: 'ABORTED' })), { once: true })
+      }),
+    },
+  })
+  const running = checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' }, controller.signal)
+  assert.equal(llm.asked[0].signal, controller.signal, 'the caller signal reaches the discovery call')
+  controller.abort()
+  await assert.rejects(running, /aborted/, 'an aborted check rethrows instead of answering')
+})
+
+// ---- client-side pure helpers ----
+
+test('deepEqual compares by value, not by key order', () => {
+  // M12：宿主重发布同一份值而键序不同时，JSON 串比较会把草稿误判为"变了"
+  // （未保存编辑被冲掉）或反过来漏判真实变化。数组仍按序——顺序是数组的语义。
+  assert.equal(deepEqual({ a: 1, b: { c: 2, d: 3 } }, { b: { d: 3, c: 2 }, a: 1 }), true)
+  assert.equal(deepEqual({ a: [1, { x: 1, y: 2 }] }, { a: [1, { y: 2, x: 1 }] }), true)
+  assert.equal(deepEqual([1, 2], [2, 1]), false, 'array order is meaning, not notation')
+  assert.equal(deepEqual({ a: 1 }, { a: 1, b: undefined }), false, 'a missing key is not an undefined-valued key')
+  assert.equal(deepEqual(null, null), true)
+  assert.equal(deepEqual(null, {}), false)
+  assert.equal(deepEqual({ a: 1 }, { a: 2 }), false)
+})
+
+test('the save shortcut label follows the platform, and both keys exist in both locales', () => {
+  // M14：chip 上的按键标签曾写死 ⌘S，Windows/Linux 用户看到的是 mac 符号。
+  assert.equal(saveShortcutKeyKey(true), 'saveShortcutKeyMac')
+  assert.equal(saveShortcutKeyKey(false), 'saveShortcutKeyOther')
+  for (const key of ['saveShortcutKeyMac', 'saveShortcutKeyOther']) {
+    assert.ok(typeof zh[key] === 'string', `zh has ${key}`)
+    assert.ok(typeof en[key] === 'string', `en has ${key}`)
+  }
+})
+
+test('every breaker preset desc key exists in both locales', () => {
+  // M19：预设文案曾在模块里手写中文，英文用户永远看不到。descKey 进字典，
+  // 漏一个键这里就红。
+  for (const preset of BREAKER_CODE_PRESETS) {
+    assert.ok(typeof zh[preset.descKey] === 'string', `zh has ${preset.descKey}`)
+    assert.ok(typeof en[preset.descKey] === 'string', `en has ${preset.descKey}`)
+  }
 })
 
 test('routeParts is the exact inverse of routeKeyOf', () => {

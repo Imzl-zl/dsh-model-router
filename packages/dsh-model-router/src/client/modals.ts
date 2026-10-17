@@ -317,7 +317,7 @@ export function HealthSettingsModal(props) {
                   className: 'dsh-router-catalog-btn',
                   style: Object.assign({}, S.chipBtn, exists ? { borderColor: 'var(--dsh-router-accent)', color: 'var(--dsh-router-accent)' } : null),
                   disabled: exists,
-                  title: exists ? t('breakerAlreadyAdded') : preset.desc,
+                  title: exists ? t('breakerAlreadyAdded') : t(preset.descKey),
                   onClick: function () {
                     setRules(function (current) { return current.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds, scope: DEFAULT_BREAKER_SCOPE }]) })
                   },
@@ -568,10 +568,14 @@ export function AddCandidateModal(props) {
                     style: Object.assign({}, S.triggerChk, { accentColor: 'var(--dsh-router-accent)' }),
                     checked: Boolean(selected[route]),
                     onChange: function () {
-                      var next = Object.assign({}, selected)
-                      if (next[route]) delete next[route]
-                      else next[route] = true
-                      setSelected(next)
+                      // 更新器形式：读渲染期闭包里的 selected，同一 tick 的两次
+                      // 点击会互相覆盖（用户看得见却存不上）。
+                      setSelected(function (current) {
+                        var next = Object.assign({}, current)
+                        if (next[route]) delete next[route]
+                        else next[route] = true
+                        return next
+                      })
                     },
                   }),
                   h('span', null, m.name),

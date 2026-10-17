@@ -100,6 +100,7 @@ function loadClient() {
       return {
         SettingsForm: SettingsFormStub, Switch: 'Switch', Button: 'Button', Tag: 'Tag',
         SegmentedTabs: 'SegmentedTabs', Modal: 'Modal', RiskConfirmation: 'RiskConfirmation',
+        SegmentedControl: 'SegmentedControl',
       }
     }
     if (name === '@deepseek-ai/dsh-client-store') return { createSnapshotStore }
@@ -249,10 +250,19 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
   }
   const registrations = []
   const shortcutRegistrations = []
+  // The fiber's effect cleanups, recorded the way Cordis keeps them: unloading
+  // the plugin runs every one. The M11/M4 tests need a real unload — the
+  // controller's timer and in-flight checks are cleaned in that cleanup.
+  const effectDisposers = []
   let capturedComponent = null
   const ctx = {
     locale: { bind: () => (key) => key, register: () => () => {} },
-    effect: (fn) => { const off = fn(); return typeof off === 'function' ? off : () => {} },
+    effect: (fn) => {
+      const off = fn()
+      const disposer = typeof off === 'function' ? off : () => {}
+      effectDisposers.push(disposer)
+      return disposer
+    },
     // DSH's native shortcuts service: register() hands back a command object the
     // test can drive, exactly like the real client registry does.
     shortcuts: {
@@ -316,6 +326,8 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
     actions: injected,
     store,
     state: () => store.getSnapshot(),
+    /** Unload the plugin fiber: run every effect cleanup, the way Cordis does. */
+    unload: () => { for (const disposer of effectDisposers.slice()) disposer() },
     // The registered sidebar-entry component, for the component-level tests.
     component: capturedComponent,
     republish: (next) => { snapshot = { ...snapshot, ...next }; publish() },
@@ -986,6 +998,42 @@ test('breaker rule mutations go through the state updater, not the closure', asy
     'fixture: the updater form is present in the source')
 })
 
+test('the catalog multi-select writes through the state updater, not the closure', async () => {
+  // 与 setRules 同一类（M13）：读渲染期闭包里的 selected，同一 tick 的两次点击
+  // 互相覆盖——用户看得见却存不上。目录多选曾是这个形状。
+  const source = sourceOf('modals.ts')
+  assert.equal((source.match(/setSelected\(next\)/g) ?? []).length, 0,
+    'catalog selection must not write the render-scope object')
+  assert.ok(source.includes('setSelected(function (current)'),
+    'fixture: the updater form is present in the source')
+})
+
+test('the configured-route list has one expression, shared by both halves', async () => {
+  // M15：controller 与 page 曾各写一份 two-line wrapper（configuredRoutes 的
+  // 草稿适配）——两份适配改一处忘一处，巡检与列表就会看到不同的路由集。
+  const routes = readFileSync(new URL('../src/routes.ts', import.meta.url), 'utf8')
+  assert.ok(routes.includes('export function configuredRouteList'), 'the adapter lives in routes.ts')
+  for (const name of ['controller.ts', 'page.ts']) {
+    const source = sourceOf(name)
+    assert.equal((source.match(/function configuredRouteList/g) ?? []).length, 0,
+      `${name} must not carry its own copy of the route-list adapter`)
+    assert.ok(source.includes('configuredRouteList'), `fixture: ${name} uses the shared adapter`)
+  }
+})
+
+test('the health settings modal is handed the section’s writability', async () => {
+  // M21：弹窗里的 SegmentedControl 读 props.disabled（熔断作用域），而 page 渲染
+  // HealthSettingsModal 时没传——只读/保存中它仍然可点，与其余控件不一致。
+  // 熔断 tier 在弹窗自己的 tab 状态后面，一次性渲染够不着它，所以这里钉接线
+  // 本身（与 hidden/inert 同类的接线守卫）：生产方传、消费方读，两个方向都在。
+  const page = sourceOf('page.ts')
+  const modalRender = page.slice(page.indexOf('h(HealthSettingsModal'), page.indexOf('h(NewProfileModal'))
+  assert.ok(modalRender.includes('disabled: disabled'),
+    'page.ts must pass the section’s writability into HealthSettingsModal')
+  assert.ok(sourceOf('modals.ts').includes('disabled: props.disabled'),
+    'fixture: the modal consumes the prop (the breaker scope control reads it)')
+})
+
 // 连通性检查的分类只能发生在宿主侧。`LlmRuntime.discoverModels` 抛的
 // `LlmError` 带着可路由的 `code`，而 `remoteDiscoverModels` 用
 // `RemoteError('llm/model-discovery-rejected', message)` 把它包掉
@@ -1095,6 +1143,66 @@ test('a strategy edit on an unknown profile id fails loudly', async () => {
 test('an unknown profile id fails loudly instead of editing a phantom list', async () => {
   const h = await mount({ value: config() })
   assert.throws(() => h.actions.onMaxAttempts('nope', 0, '2', false), /no profile "nope"/)
+})
+
+test('every profile setter fails loudly on an unknown id, not on a phantom chain', async () => {
+  // M9：三个 setter 曾绕过 profileOf 自己 find——未知 id 时 find 返回 undefined，
+  // 赋值当场 TypeError。调用方（UI）传的是刚渲染过的 id，这种形状只该是响亮的
+  // "没有这个 profile"，而不是一个崩在栈里的 TypeError。
+  const h = await mount({ value: config() })
+  for (const call of [
+    () => h.actions.onMaxTotal('nope', '2', false),
+    () => h.actions.onStickyTurns('nope', '1', false),
+    () => h.actions.onToggleSwitchOn('nope', 'rateLimit', false),
+  ]) {
+    assert.throws(call, /no profile "nope"/)
+  }
+  // 草稿没被碰：响亮的失败不该留下半完成的编辑。
+  assert.equal(h.state().draft.profiles[0].maxTotalAttempts, 3)
+  assert.equal(h.state().draft.profiles[0].stickyTurns, 0)
+  assert.equal(h.state().draft.profiles[0].switchOn.rateLimit, true)
+})
+
+test('unloading stops the discover timer, aborts the checks in flight, and survives late publishes', async () => {
+  // M11 + M4：控制器的定时器与在飞检查是裸的（不归 Cordis 管）。修复前 dispose
+  // 根本没有被接线——巡检 interval 对着卸载了的 fiber 空转、继续打端点；在飞的
+  // 远程回调经 publish 把它复活。卸载 = effect 清理 = 停表 + abort 在飞检查。
+  const realSetInterval = globalThis.setInterval
+  const realClearInterval = globalThis.clearInterval
+  const armed = []
+  globalThis.setInterval = (fn, ms) => { const id = realSetInterval(fn, ms); armed.push(id); return id }
+  let settle = null
+  const h = await mount({
+    value: config({ health: {
+      passive: true,
+      discover: { enabled: true, intervalSeconds: 60 },
+      probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 },
+      breaker: { enabled: false, rules: [] },
+    } }),
+    remote: {
+      routerHealth: {
+        checkConnectivity: (_request, signal) => new Promise((resolve) => { settle = { signal, resolve: () => resolve([]) } }),
+        probeAll: () => Promise.resolve({ ok: true, value: { at: 1, routes: [] } }),
+        probeReport: () => Promise.resolve({ ok: true, value: { at: 0, routes: [] } }),
+      },
+    },
+  })
+  try {
+    h.actions.onCheckAll()
+    assert.equal(armed.length, 1, 'fixture: the discover timer armed from the saved config')
+    assert.ok(settle, 'fixture: the check is in flight')
+    h.unload()
+    assert.equal(settle.signal.aborted, true, 'unloading aborts the check in flight')
+    assert.equal(armed.length, 1, 'no new timer while unloading')
+    // 迟到的发布（在飞回调、忙态下限的 setTimeout）不能把定时器复活。
+    settle.resolve()
+    await settleBusy()
+    assert.equal(armed.length, 1, 'a late publish does not re-arm the timer')
+  } finally {
+    globalThis.setInterval = realSetInterval
+    globalThis.clearInterval = realClearInterval
+    for (const id of armed) realClearInterval(id)
+  }
 })
 
 // ---- legacy shapes ----
@@ -1257,6 +1365,13 @@ test('semantic tone colour has one source and never paints badge text', async ()
   const colored = workspace.match(/Object\.assign\(\{\}, S\.toneDot, healthToneStyle\(/g) ?? []
   assert.equal(dots.length, colored.length,
     `every toneDot must be handed its colour by healthToneStyle: ${dots.length} dot(s), ${colored.length} coloured`)
+  // 色点/色边的背景同理：DSH 的 state-* 是中间调（某个主题下看不见或刺眼），
+  // 未保存点曾直接借 --dsw-alias-state-warn-primary 当背景（M18）。
+  for (const name of ['footer.ts', 'chain.ts', 'workspace.ts', 'modals.ts', 'pipeline.ts', 'page.ts', 'health-ui.ts']) {
+    const toneAsBackground = sourceOf(name).match(/background:\s*'var\(--dsw-alias-state-(success|error|warn)-primary[^)]*\)'/g) ?? []
+    assert.deepEqual(toneAsBackground, [],
+      `${name} must paint points and edges from --dsh-router-tone-*, not DSH's mid-tone state aliases: ${toneAsBackground.join(', ')}`)
+  }
 })
 
 // 强调色只有一个来源：`--dsh-router-accent`（styles.ts 的 :root 声明）。DSH 的

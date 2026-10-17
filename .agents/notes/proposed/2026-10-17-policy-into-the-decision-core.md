@@ -1,9 +1,9 @@
 # Agent Note: 把策略收编进决策核——handler 的副作用表与跨字段校验各一处表达
 
-> 状态：**proposed / 已实施**。轮 A 与轮 B 均已落地（unit 107→117，其余套件数字不变），
-> 实施记录与被否方案的最终理由见
-> `.agents/notes/implemented/2026-10-17-policy-into-the-decision-core.md`；轮 C（M 清单
-> 清扫）按本篇定的边界随后。
+> 状态：**proposed / 已实施**。轮 A、B、C 均已落地（unit 107→121、client-controller
+> 41→46，run 21 场景 0 失败与 remote 14 不变）。实施记录：轮 A/B 见
+> `.agents/notes/implemented/2026-10-17-policy-into-the-decision-core.md`，轮 C 见
+> `.agents/notes/implemented/2026-10-17-m-list-cleanup.md`。
 
 ## Problem
 

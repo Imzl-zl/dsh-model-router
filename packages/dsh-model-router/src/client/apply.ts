@@ -184,11 +184,21 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
   // which renders the whole workbench (footer.ts). The config namespace comes
   // from `ctx.configForms.get(CONFIG_NS)` above, not from this registration, so
   // dropping the Plugins-page carrier cost nothing here.
-  ctx.effect(() => ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action',
-    id: 'model-router',
-    order: 120,
-    locale: NS,
-    inject: () => Object.assign({ hooks: { routerPage: controller.store } }, actions),
-  }, ModelRouterFooterAction)), 'router: sidebar entry')
+  ctx.effect(() => {
+    const unregister = ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+      name: 'sidebar.footer.action',
+      id: 'model-router',
+      order: 120,
+      locale: NS,
+      inject: () => Object.assign({ hooks: { routerPage: controller.store } }, actions),
+    }, ModelRouterFooterAction))
+    return () => {
+      unregister()
+      // 控制器自己的定时器与在飞检查是裸的（裸 setInterval、裸远程调用），不归
+      // Cordis 管：fiber 卸载时必须自己收。修复前 dispose 根本没有被接线——
+      // 巡检 interval 对着已卸载的 fiber 空转、继续打端点，而在飞的远程回调
+      // 还会经 publish 把它复活（M11）。
+      controller.dispose()
+    }
+  }, 'router: sidebar entry')
 }

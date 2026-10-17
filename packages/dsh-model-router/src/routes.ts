@@ -68,6 +68,21 @@ export function configuredRoutes(
 }
 
 /**
+ * Every configured route, from a config or a browser draft: the set the host's
+ * probe and connectivity runs cover, and the browser's lists show. A draft's
+ * fields may be absent (an older record, a half-built form row), so this
+ * adapter normalizes them and delegates — the collection rule itself stays
+ * {@link configuredRoutes}' alone. The browser half had this two-line wrapper
+ * in two modules; one copy lives here now.
+ */
+export function configuredRouteList(config: {
+  profiles?: readonly { candidates: readonly RoutableCandidate[] }[]
+  default?: { candidates: readonly RoutableCandidate[] }
+}): string[] {
+  return configuredRoutes(config.profiles ?? [], config.default ?? { candidates: [] })
+}
+
+/**
  * The route label DSH's own notices use: the bare model inside one provider,
  * `provider/model` across providers — so a chain that stays on one gateway
  * reads as model names, and a cross-gateway switch says which gateway.

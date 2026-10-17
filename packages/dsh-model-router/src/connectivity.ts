@@ -116,6 +116,8 @@ function storedBaseURL(
  * @param llm - the Host llm service (injected so unit tests can supply a fake).
  * @param settings - the Host settings service, or undefined where it is absent.
  * @param route - the physical route to check.
+ * @param signal - cancels the discovery; an aborted check rethrows instead of
+ *   answering, because "we stopped asking" is not "the endpoint did not answer".
  * @returns the route's verdict; a discovery that refuses becomes `unreachable`
  *   carrying its provider-neutral code — unless the code says the runtime never
  *   invoked a discovery at all (see {@link NEVER_DISCOVERED_CODES}), which is
@@ -126,6 +128,7 @@ export async function checkConnectivity(
   llm: ConnectivityLlm,
   settings: ConnectivitySettings | undefined,
   route: ProbeRoute,
+  signal?: AbortSignal,
 ): Promise<ConnectivityVerdict> {
   const entry = llm.listConfigurableProviders().find(candidate => candidate.provider === route.provider)
   // Not in the directory: DSH has no settings namespace to interrogate for this
@@ -135,11 +138,14 @@ export async function checkConnectivity(
   const baseURL = storedBaseURL(settings, entry)
   if (baseURL !== undefined) request.baseURL = baseURL
   try {
-    const models = await llm.discoverModels(entry.settingsNs, request)
+    const models = await llm.discoverModels(entry.settingsNs, request, signal)
     return models.some(model => model.id === route.model)
       ? { provider: route.provider, model: route.model, kind: 'reachable' }
       : { provider: route.provider, model: route.model, kind: 'notAdvertised', advertised: models.length }
   } catch (error) {
+    // 调用方取消了这一轮：中止不是"端点没应答"。原样抛回去，让远程调用以拒绝
+    // 结束——客户端本就跑在拒绝路径上（忙态收尾、计数不变）。
+    if (signal?.aborted) throw error
     const code = (error as { code?: unknown }).code
     if (typeof code === 'string' && NEVER_DISCOVERED_CODES.has(code)) {
       return { provider: route.provider, model: route.model, kind: 'unavailable', reason: 'noDiscovery', error: code }

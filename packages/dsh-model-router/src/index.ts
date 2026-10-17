@@ -162,6 +162,9 @@ export default class ModelRouter extends TypertRemoteService {
     // is what `mayAdvance` reads when it decides whether the chain may advance.
     // This listener exists for the router's state alone — channel health is folded
     // by the `router/channel-health` projection, which the registry drives itself.
+    // 失败码记录只有一个写入方（本 listener）：恢复监听曾经自己也写一份，实测
+    // durable log 路径足够——删掉 handler 侧写入后，钉「notice 带失败码」的
+    // failover-rate-limit 场景仍绿（21 场景全绿），双写已删。
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
       // read_image's image enters the conversation as a tool result, so the turn
       // becomes image-bearing from the next step on — without this the walk would
@@ -356,7 +359,6 @@ export default class ModelRouter extends TypertRemoteService {
       const state = states.current(agent, turn, step)
       // 不是本插件接管的 step：纯透传，不改变任何既有恢复行为。
       if (state === undefined) return next()
-      states.noteFailure(agent.session, turn, step, failure.code)
       const current = state.chain.candidates[state.index]!
 
       // 总闸关着就不记：`enabled` 是用户的显式选择。规则留着（再开时不用重填），
@@ -459,7 +461,7 @@ export default class ModelRouter extends TypertRemoteService {
    * .agents/notes/implemented/2026-10-16-connectivity-no-discovery-is-not-a-refusal.md
    */
   @Remote
-  async checkConnectivity(request: ConnectivityRequest): Promise<ConnectivityVerdict[]> {
+  async checkConnectivity(request: ConnectivityRequest, signal?: AbortSignal): Promise<ConnectivityVerdict[]> {
     const wanted = request.routes.length > 0
       ? request.routes
       : configuredRunRoutes(readConfig(this.config))
@@ -467,7 +469,9 @@ export default class ModelRouter extends TypertRemoteService {
     // a composition without it still checks, it just cannot supply a stored
     // baseURL and lets the discovery decide from the provider route alone.
     const settings = this.ctx.get('settings') as ConnectivitySettings | undefined
-    return await Promise.all(wanted.map(route => checkConnectivity(this.ctx.llm, settings, route)))
+    // signal 是 Typert 的取消通道（描述符声明末参即注入，与 probeAll 同一机制）：
+    // 浏览器卸载时在飞的发现调用随它中止，不继续打端点。
+    return await Promise.all(wanted.map(route => checkConnectivity(this.ctx.llm, settings, route, signal)))
   }
 
   /**
@@ -541,40 +545,57 @@ function mayAdvance(
  *
  * `providerRetryPolicy` 是 llm 服务的原生读口（llm/src/index.ts:656），只对已注册的
  * provider 调用（未注册的会抛），未注册的漂移由 warnUnregisteredProviders 处理。
+ *
+ * 已知边界（与 warnUnregisteredProviders 同源，写在这里防止下轮当成新发现）：加载时
+ * 尚未注册的 provider 会被跳过——在本插件之后注册的 always 策略因此逃过加载校验。
+ * 运行时拦截是行为变更（跳过候选 + 新通知形状），属另一轮决策，不在本轮。
  */
 function assertNoAlwaysPolicy(ctx: Context, config: { profiles: readonly Profile[]; default: DefaultProfile }): void {
-  const registered = new Set(ctx.llm.listProviders().map(provider => provider.id))
-  const check = (candidates: readonly Candidate[], where: string): void => {
-    for (const candidate of candidates) {
-      if (!registered.has(candidate.provider)) continue
-      const policy = ctx.llm.providerRetryPolicy(candidate.provider)
-      if (policy?.mode === 'always') {
-        throw new Error(
-          `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names a provider whose retry policy is "always" — `
-          + 'unbounded same-route retries would make the total attempt cap unenforceable; '
-          + 'set that provider back to the normal policy, or remove it from the chain',
-        )
-      }
+  const registered = registeredProviderIds(ctx)
+  eachConfiguredCandidate(config, (candidate, where) => {
+    if (!registered.has(candidate.provider)) return
+    const policy = ctx.llm.providerRetryPolicy(candidate.provider)
+    if (policy?.mode === 'always') {
+      throw new Error(
+        `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names a provider whose retry policy is "always" — `
+        + 'unbounded same-route retries would make the total attempt cap unenforceable; '
+        + 'set that provider back to the normal policy, or remove it from the chain',
+      )
     }
-  }
-  for (const profile of config.profiles) check(profile.candidates, `profile "${profile.id}"`)
-  check(config.default.candidates, 'default pool')
+  })
 }
 
 function warnUnregisteredProviders(ctx: Context, config: { profiles: readonly Profile[]; default: DefaultProfile }): void {
-  const registered = new Set(ctx.llm.listProviders().map(provider => provider.id))
-  const check = (candidates: readonly Candidate[], where: string): void => {
-    for (const candidate of candidates) {
-      if (!registered.has(candidate.provider)) {
-        ctx.logger.warn(
-          `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names an unregistered provider; `
-          + 'that candidate is skipped at runtime and the profile degrades to the remaining chain',
-        )
-      }
+  const registered = registeredProviderIds(ctx)
+  eachConfiguredCandidate(config, (candidate, where) => {
+    if (!registered.has(candidate.provider)) {
+      ctx.logger.warn(
+        `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names an unregistered provider; `
+        + 'that candidate is skipped at runtime and the profile degrades to the remaining chain',
+      )
     }
+  })
+}
+
+/** The provider ids the llm service has registered so far. */
+function registeredProviderIds(ctx: Context): Set<string> {
+  return new Set(ctx.llm.listProviders().map(provider => provider.id))
+}
+
+/**
+ * Walk every configured candidate once — profiles in order, then the default
+ * pool. Both load-time audits (the always-policy rejection and the
+ * unregistered-provider warning) share this walk; they used to each carry
+ * their own copy of the loop, and the second copy is where the two drifts.
+ */
+function eachConfiguredCandidate(
+  config: { profiles: readonly Profile[]; default: DefaultProfile },
+  visit: (candidate: Candidate, where: string) => void,
+): void {
+  for (const profile of config.profiles) {
+    for (const candidate of profile.candidates) visit(candidate, `profile "${profile.id}"`)
   }
-  for (const profile of config.profiles) check(profile.candidates, `profile "${profile.id}"`)
-  check(config.default.candidates, 'default pool')
+  for (const candidate of config.default.candidates) visit(candidate, 'default pool')
 }
 
 /** The projection registry's read face this plugin uses; structurally typed to keep the service optional. */

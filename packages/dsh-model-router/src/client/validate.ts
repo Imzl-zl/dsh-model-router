@@ -16,13 +16,15 @@ import { structuralViolations } from '../rules.ts'
 export var STRATEGY_OPTIONS = ['order', 'weight', 'round-robin']
 
 
+// 熔断码预设：秒数是数据，descKey 是字典键——文案一律进 locales.ts（中英各一份），
+// 模块里不留手写中文（I9 的教训：在飞改动把字典键换成硬编码中文，英文用户永远看不到）。
 export var BREAKER_CODE_PRESETS = [
-  { code: 'RATE_LIMIT', desc: '限流，通常几十秒就恢复', seconds: 60 },
-  { code: 'SERVER', desc: '上游 5xx，几分钟', seconds: 300 },
-  { code: 'TIMEOUT', desc: '超时，几分钟', seconds: 300 },
-  { code: 'TRANSPORT', desc: '网络中断，几分钟', seconds: 300 },
-  { code: 'AUTH', desc: '密钥或权限被拒（DSH 对 401/403 都用这个码），禁到人改配置为止', seconds: 3600 },
-  { code: 'QUOTA', desc: '额度用尽（DSH 的 QUOTA_EXCEEDED_CODE），按账单周期', seconds: 7200 },
+  { code: 'RATE_LIMIT', descKey: 'breakerPresetRateLimit', seconds: 60 },
+  { code: 'SERVER', descKey: 'breakerPresetServer', seconds: 300 },
+  { code: 'TIMEOUT', descKey: 'breakerPresetTimeout', seconds: 300 },
+  { code: 'TRANSPORT', descKey: 'breakerPresetTransport', seconds: 300 },
+  { code: 'AUTH', descKey: 'breakerPresetAuth', seconds: 3600 },
+  { code: 'QUOTA', descKey: 'breakerPresetQuota', seconds: 7200 },
 ]
 
 

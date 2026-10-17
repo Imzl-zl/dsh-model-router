@@ -12,16 +12,8 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, summarize } from './format.ts'
 import { defaultSwitchOn, normalizeDefault, normalizeHealth, normalizeProfiles, validate } from './validate.ts'
 import { capTimeline, MAX_TIMELINE_POINTS } from '../timeline.ts'
-import { configuredRoutes, routeKeyOf, routeParts } from '../routes.ts'
+import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
 import { DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STICKY_TURNS, NEW_PROFILE_MAX_ATTEMPTS } from '../defaults.ts'
-
-/**
- * 配置里点名的全部物理渠道（去重、按链顺序）：巡检与探测都用这一份。规则在
- * ../routes.ts，宿主侧共用同一函数——两边各自收集就会漂移。
- */
-function configuredRouteList(draft) {
-  return configuredRoutes(draft.profiles ?? [], draft.default ?? { candidates: [] })
-}
 
 export function createController(ctx, scope, t) {
   var seed = function () {
@@ -119,7 +111,14 @@ export function createController(ctx, scope, t) {
     }
   }
   var store = createSnapshotStore(project())
-  function publish() { store.set(project()); armDiscoverTimer() }
+  var disposed = false
+  function publish() {
+    // 卸载之后的迟到发布（在飞远程调用的回调、忙态下限的 setTimeout）会经
+    // armDiscoverTimer 把定时器复活——dispose 清掉的 interval 又回来了，而 UI
+    // 早已不在，巡检周期对着一个卸载了的 fiber 空转。卸载后 publish 什么都不做。
+    if (disposed) return
+    store.set(project()); armDiscoverTimer()
+  }
 
   /**
    * 定时连通性检查。跑在浏览器/桌面壳里，所以只在整个 DSH 界面开着的时候有效——
@@ -264,7 +263,12 @@ export function createController(ctx, scope, t) {
    * Note: 为何这条路必须走宿主（LlmError.code 过不了 Remote 信封）—— 见
    * .agents/notes/implemented/2026-10-16-connectivity-no-discovery-is-not-a-refusal.md
    */
-  function runCheck(routes) {
+  // 在飞的连通性检查：卸载时全部 abort。发现调用是真实网络请求，"0 Token"
+  // 不等于"0 后果"——UI 走了还继续打端点既是浪费，也可能把渠道打出限流。
+  // 信号经 Typert 的 cancellation 通道到宿主（描述符声明 signal 末参即注入，
+  // 与 probeAll 同一机制），宿主把取消传进 discoverModels。
+  var checkAborts = new Set()
+  function runCheck(routes, signal) {
     var health = ctx.remote && ctx.remote.routerHealth
     var cannotCheck = function () {
       return routes.map(function (route) {
@@ -272,15 +276,15 @@ export function createController(ctx, scope, t) {
       })
     }
     if (!health || typeof health.checkConnectivity !== 'function') return Promise.resolve(cannotCheck())
-    return health.checkConnectivity({ routes: routes }).then(function (result) {
+    return health.checkConnectivity({ routes: routes }, signal).then(function (result) {
       if (!result || result.ok !== true) return cannotCheck()
       return result.value ?? []
     }, cannotCheck)
   }
 
   /** Ask one route whether its endpoint answers and advertises this model. */
-  function checkRoute(provider, model) {
-    return runCheck([{ provider: provider, model: model }]).then(function (verdicts) {
+  function checkRoute(provider, model, signal) {
+    return runCheck([{ provider: provider, model: model }], signal).then(function (verdicts) {
       return verdicts[0] ?? { provider: provider, model: model, kind: 'unavailable', reason: 'hostUnavailable' }
     })
   }
@@ -440,15 +444,9 @@ export function createController(ctx, scope, t) {
       publish()
     },
     moveCandidate: function (profileId, index, direction, isDefault) {
-      var minIndex = isDefault ? 0 : 1
-      if (index < minIndex) return
-      var list = listOf(profileId, isDefault)
-      var target = index + direction
-      if (target < minIndex || target >= list.length) return
-      var swapped = list[target]
-      list[target] = list[index]
-      list[index] = swapped
-      publish()
+      // 一次移动就是一次换位：与拖拽走同一条重排路径。曾有两套实现（splice 搬家
+      // 与相邻交换），边界守卫各写各的，改一边忘了另一边就静默出错。
+      controller.reorderCandidates(profileId, index, index + direction, isDefault)
     },
     setMaxAttempts: function (profileId, index, value, isDefault) {
       var candidate = listOf(profileId, isDefault)[index]
@@ -477,18 +475,18 @@ export function createController(ctx, scope, t) {
       var parsed = Number(value)
       var clamped = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
       if (isDefault) draft.default.stickyTurns = clamped
-      else draft.profiles.find(function (p) { return p.id === profileId }).stickyTurns = clamped
+      else profileOf(profileId).stickyTurns = clamped
       publish()
     },
     setMaxTotalAttempts: function (profileId, value, isDefault) {
       var parsed = Number(value)
       var clamped = Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 1
       if (isDefault) draft.default.maxTotalAttempts = clamped
-      else draft.profiles.find(function (p) { return p.id === profileId }).maxTotalAttempts = clamped
+      else profileOf(profileId).maxTotalAttempts = clamped
       publish()
     },
     toggleSwitchOn: function (profileId, key, isDefault) {
-      var target = isDefault ? draft.default.switchOn : draft.profiles.find(function (p) { return p.id === profileId }).switchOn
+      var target = isDefault ? draft.default.switchOn : profileOf(profileId).switchOn
       target[key] = !target[key]
       publish()
     },
@@ -572,8 +570,11 @@ export function createController(ctx, scope, t) {
       // keys 是 `provider/model` 字符串（拼拆规则都在 ../routes.ts）；拆回两半
       // 交给检查器。
       var routes = keys.map(routeParts)
+      var abort = new AbortController()
+      checkAborts.add(abort)
       // 一次调用问完整轮：分类在宿主侧，一轮检查因此也只是一次往返。
-      runCheck(routes).then(function ( verdicts) {
+      runCheck(routes, abort.signal).then(function (verdicts) {
+        checkAborts.delete(abort)
         // 先拷贝后写入——store 的 set 会 dev-freeze 它收到的对象，往原对象
         // 上赋值在 dev 构建里会静默失败。
         var next = Object.assign({}, ui.discover)
@@ -593,6 +594,7 @@ export function createController(ctx, scope, t) {
           publish()
         })
       }).catch(function () {
+        checkAborts.delete(abort)
         controller.holdBusy(started, function () {
           ui.checking = false
           publish()
@@ -607,7 +609,10 @@ export function createController(ctx, scope, t) {
       ui.checkingRoutes[key] = true
       publish()
       var started = Date.now()
-      return checkRoute(provider, model).then(function (verdict) {
+      var abort = new AbortController()
+      checkAborts.add(abort)
+      return checkRoute(provider, model, abort.signal).then(function (verdict) {
+        checkAborts.delete(abort)
         ui.discover = Object.assign({}, ui.discover)
         ui.discover[key] = verdict
         controller.holdBusy(started, function () {
@@ -616,6 +621,7 @@ export function createController(ctx, scope, t) {
           publish()
         })
       }).catch(function () {
+        checkAborts.delete(abort)
         controller.holdBusy(started, function () {
           ui.checkingRoutes = Object.assign({}, ui.checkingRoutes)
           delete ui.checkingRoutes[key]
@@ -734,10 +740,13 @@ export function createController(ctx, scope, t) {
       ui.modal = { kind: 'health' }
       publish()
     },
-    /** 供插件半包卸载时调用：停掉定时轮询，别留下孤儿 interval。 */
+    /** 供插件半包卸载时调用：停掉定时轮询、取消在飞的检查，别留下孤儿 interval 与孤儿请求。 */
     dispose: function () {
+      disposed = true
       if (discoverTimer !== null) { clearInterval(discoverTimer); discoverTimer = null }
       armedSeconds = -1
+      checkAborts.forEach(function (abort) { abort.abort() })
+      checkAborts.clear()
     },
   }
   return controller

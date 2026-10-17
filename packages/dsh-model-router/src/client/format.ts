@@ -4,8 +4,27 @@ export function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+/**
+ * 深度相等，**键序无关**。
+ *
+ * JSON 串比较会把 `{a:1,b:2}` 与 `{b:2,a:1}` 判成不同：宿主重发布同一份值而键序
+ * 不同时，草稿会被错误地重新播种（未保存的编辑被冲掉），或反过来漏判真实变化。
+ * 数组仍按序比较——顺序是数组的语义，不是表示法。
+ */
 export function deepEqual(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b)
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false
+    return a.every(function (item, index) { return deepEqual(item, b[index]) })
+  }
+  var keysA = Object.keys(a)
+  var keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  return keysA.every(function (key) {
+    return Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key])
+  })
 }
 
 export function fill(template, vars) {
@@ -37,6 +56,16 @@ export function summarize(verdicts, kindOf, buckets) {
     .filter(bucket => (counts[bucket.key] ?? 0) > 0)
     .map(bucket => `${bucket.label} ${counts[bucket.key]}`)
   return { total: verdicts.length, counts, text: parts.join(' · ') }
+}
+
+/** mac 用 ⌘，其余平台用 Ctrl：DSH 的快捷键服务按平台注册，chip 上的按键标签不能写死。 */
+export function isMacPlatform() {
+  return typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent || '')
+}
+
+/** 保存快捷键的字典键：随平台二选一（两个语系各有两个键）。 */
+export function saveShortcutKeyKey(isMac) {
+  return isMac ? 'saveShortcutKeyMac' : 'saveShortcutKeyOther'
 }
 
 export function formatThroughput(tps) {

@@ -4,18 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { fill, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
-import { configuredRoutes, routeKeyOf } from '../routes.ts'
+import { configuredRouteList, routeKeyOf } from '../routes.ts'
 import { ChainView } from './chain.ts'
 import { AddCandidateModal, HealthSettingsModal, NewProfileModal } from './modals.ts'
 import { FailoverDrawer } from './pipeline.ts'
 import { GlobalHealthWorkspace } from './workspace.ts'
 import { Icon, ICON_BOLT, ICON_CHART, ICON_GLOBE, ICON_PLUS, ICON_SEARCH } from './icons.ts'
 import { RiskConfirmation, SettingsForm } from '@deepseek-ai/dsh-client-ui-primitives'
-
-/** Every physical route the config names, deduplicated: profiles and the default pool alike. */
-function configuredRouteList(draft) {
-  return configuredRoutes(draft.profiles ?? [], draft.default ?? { candidates: [] })
-}
 
 export function RouterPage(props) {
   var t = props.t
@@ -374,6 +369,9 @@ export function RouterPage(props) {
       // The configured routes, so the per-route probe prompt editor can offer
       // them instead of asking the user to type provider/model by hand.
       routes: configuredRouteList(draft),
+      // 保存中/只读时弹窗内的控件一并禁用——不传这个 prop，熔断作用域的
+      // SegmentedControl 在保存期间仍然可点，与其余控件不一致。
+      disabled: disabled,
       onClose: props.onCloseModal,
       onUpdateHealth: props.onUpdateHealth,
     }) : null,
