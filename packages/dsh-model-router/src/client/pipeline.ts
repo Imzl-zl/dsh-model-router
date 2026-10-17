@@ -263,8 +263,9 @@ export function Connector(props) {
     h('div', { style: S.connectorLine }),
     h('span', { style: S.failoverTag },
       h(Icon, { d: ICON_ARROW_DOWN, size: 10 }),
-      '顺延 #' + String(props.toIndex)),
-    h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, '前序重试耗尽后自动切换至此候选'))
+      t('failoverTag')),
+    h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } },
+      fill(t('failoverNotice'), { n: props.toIndex })))
 }
 
 
@@ -371,7 +372,7 @@ export function PipelineEditor(props) {
 
     if (candidates.length <= 1) {
       nodes.push(h('div', { key: 'fallback-empty', style: S.fallbackEmptyCard },
-        h(Icon, { d: ICON_ROUTE, size: 28, style: { opacity: 0.35, color: 'var(--dsh-router-accent, #4A65E8)' } }),
+        h(Icon, { d: ICON_ROUTE, size: 28, style: { opacity: 0.35, color: 'var(--dsh-router-accent)' } }),
         h('h4', { style: S.fallbackEmptyTitle }, t('fallbackEmptyTitle')),
         h('p', { style: S.fallbackEmptyDesc }, t('fallbackEmptyDesc')),
         h('button', {
@@ -453,7 +454,7 @@ export function PipelineEditor(props) {
   if (props.onJumpPolicies) {
     nodes.push(h('div', { key: 'policy-summary', style: S.policySummaryCard },
       h('div', { style: S.policySummaryText },
-        h(Icon, { d: ICON_SHIELD, size: 14, style: { color: 'var(--dsh-router-accent, #4A65E8)' } }),
+        h(Icon, { d: ICON_SHIELD, size: 14, style: { color: 'var(--dsh-router-accent)' } }),
         fill(t('policySummaryPrefix'), { n: props.maxTotalAttempts || DEFAULT_MAX_TOTAL_ATTEMPTS })),
       h('button', {
         type: 'button',

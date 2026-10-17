@@ -34,7 +34,7 @@ export interface ProbeLlm {
   prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>
 }
 
-/** Timeout code stamped on the probe's deadline, read back through `timeoutOf`. */
+/** Timeout code stamped on the probe's deadline, so a timeout reads apart from a caller abort. */
 export const PROBE_TIMEOUT_CODE = 'router/probe-timeout'
 
 /** A failure the probe could not even start: the route is not callable here. */

@@ -69,7 +69,7 @@ export const candidateSchema = z.object({
   provider: z.string().required().description('provider 标识，例如 deepseek-official'),
   model: z.string().required().description('模型 ID，例如 deepseek-v4-flash'),
   maxAttempts: z.number().step(1).min(1).max(5).default(DEFAULT_MAX_ATTEMPTS)
-    .description('这条渠道最多真实调用多少次（切换前会有一次退避等待）'),
+    .description('这条渠道最多真实调用多少次（凭证/额度类失败直接切换、不等待；本候选额度用尽后的切换也不等 llm-retry 的退避）'),
   weight: z.number().step(1).min(0).max(100).default(0)
     .description('权重；只有「按权重」策略会读它，其他策略下写多少都不影响'),
   needs: z.object({

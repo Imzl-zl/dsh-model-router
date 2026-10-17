@@ -150,8 +150,3 @@ export async function checkConnectivity(
     return { provider: route.provider, model: route.model, kind: 'unreachable', error: reason }
   }
 }
-
-/** Every route a run covers, keyed the way the browser half keys its verdicts. */
-export function connectivityKey(route: ProbeRoute): string {
-  return routeKeyOf(route.provider, route.model)
-}

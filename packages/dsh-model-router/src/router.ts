@@ -9,11 +9,13 @@
  * owns the Router's layer:
  *
  * - Same-route retries (with backoff and `llm/retry` durable records) belong to
- *   DSH's `llm-retry`, which registers OUTSIDE this plugin on
- *   `agent/request-error` and retries before delegating. The Router cannot
- *   preempt it, so a retryable code burns llm-retry's per-provider budget
- *   first; `planFire` then redirects each further `agent/request` fire to the
- *   next candidate once the per-candidate cap is reached.
+ *   DSH's `llm-retry`, which registers on the root plugin ctx without prepend.
+ *   The Router registers OUTSIDE it (`prepend: true`, root ctx) and normally
+ *   lets it act first — `await next()` — then honors, vetoes (budget spent) or
+ *   replaces its decision. Since 2026-10-17 the Router decides the "candidate's
+ *   budget is spent && this error should switch" case before asking llm-retry
+ *   at all, so that same-route retry never happens (see index.ts and the note
+ *   below).
  * - Cross-candidate failover and the total-attempt cap belong here.
  *
  * Note: 为何可服务性必须由 decideRecovery 在授权下一次发火之前判（C2 原文最小修法
@@ -203,14 +205,6 @@ export function toolResultHasImage(data: unknown): boolean {
     if (!Array.isArray(typed.content)) return false
     return typed.content.some(inner => (inner as { type?: unknown }).type === 'image')
   })
-}
-
-/**
- * Whether a candidate is eligible for this request's shape: the negation of
- * {@link unmetCondition}.
- */
-export function conditionsMet(candidate: Candidate, conditions: StepConditions): boolean {
-  return unmetCondition(candidate, conditions) === undefined
 }
 
 /**

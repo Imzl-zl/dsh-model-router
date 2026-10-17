@@ -16,9 +16,13 @@ export function ModelRouterIcon(props) {
   var size = props.size ?? 18
   var disabled = Boolean(props.disabled)
   var color = props.color ?? 'currentColor'
-  var useGrad = !disabled && (color.indexOf('brand') !== -1 || color.indexOf('#4A65E8') !== -1 || color === 'currentColor')
+  // The gradient is the logo's own look, so it is keyed off the plugin's accent
+  // token — never off DSH's brand-ink token (near-black on light, near-white on
+  // dark), which is what this icon used to be handed and rendered as a grey
+  // blob. `currentColor` keeps inheriting the caller's colour, gradient and all.
+  var useGrad = !disabled && (color.indexOf('accent') !== -1 || color === 'currentColor')
   var strokeColor = useGrad ? 'url(#dshNexusGrad)' : color
-  var nodeA = useGrad ? 'var(--dsh-router-accent, #4A65E8)' : color
+  var nodeA = useGrad ? 'var(--dsh-router-accent)' : color
   var nodeB = useGrad ? '#3B82F6' : color
   var nodeC = useGrad ? '#06B6D4' : color
   return h('svg', {
@@ -30,10 +34,10 @@ export function ModelRouterIcon(props) {
   },
     h('defs', null,
       h('linearGradient', { id: 'dshNexusGrad', x1: '4', y1: '4', x2: '44', y2: '44', gradientUnits: 'userSpaceOnUse' },
-        h('stop', { stopColor: 'var(--dsh-router-accent, #4A65E8)' }),
+        h('stop', { stopColor: 'var(--dsh-router-accent)' }),
         h('stop', { offset: '0.5', stopColor: '#3B82F6' }),
         h('stop', { offset: '1', stopColor: '#06B6D4' }))),
-    h('path', { d: 'M24 4L42 14V34L24 44L6 34V14L24 4Z', stroke: strokeColor, strokeWidth: '2.5', strokeLinejoin: 'round', fill: useGrad ? 'rgba(74,101,232,0.06)' : 'none' }),
+    h('path', { d: 'M24 4L42 14V34L24 44L6 34V14L24 4Z', stroke: strokeColor, strokeWidth: '2.5', strokeLinejoin: 'round', fill: useGrad ? 'color-mix(in srgb, var(--dsh-router-accent) 6%, transparent)' : 'none' }),
     h('circle', { cx: '24', cy: '24', r: '5', fill: strokeColor }),
     h('circle', { cx: '24', cy: '24', r: '2.2', fill: useGrad ? '#FFFFFF' : 'var(--dsw-alias-bg-layer-2, #18191c)' }),
     h('path', { d: 'M24 24L12 16', stroke: strokeColor, strokeWidth: '2.5', strokeLinecap: 'round' }),

@@ -762,6 +762,14 @@ const propsFor = (h) => Object.assign({}, h.actions, {
   useRouterPage: (selector) => selector(h.store.getSnapshot()),
   wide: true,
 })
+// Two candidates so the pipeline renders a Connector: the render path covers the
+// dictionary-driven failover tag/notice, not just the form.
+const twoCandidates = () => config({
+  profiles: [profile({ candidates: [
+    { provider: 'deepseek', model: 'm', maxAttempts: 1, weight: 0 },
+    { provider: 'deepseek', model: 'm2', maxAttempts: 1, weight: 0 },
+  ] })],
+})
 
 // C3：DSH 的 SettingsForm 在 namespace 未就绪时不渲染 children
 // （ui-primitives 的 settings-form/SettingsForm.tsx:55），.dsh-router-form-body
@@ -771,7 +779,7 @@ const propsFor = (h) => Object.assign({}, h.actions, {
 test('a dialog opened while the config scope is still loading does not throw, and the footer is still suppressed once served', async () => {
   const { RouterPage } = loadClient()
   const loading = await mount({
-    value: config(),
+    value: twoCandidates(),
     firstFrame: { status: 'loading', value: undefined, writable: false, revision: 0 },
   })
   assert.equal(loading.state().available, false, 'fixture: the namespace is unavailable in the loading frame')
@@ -784,7 +792,7 @@ test('a dialog opened while the config scope is still loading does not throw, an
 
   // 对照：namespace 就绪后底栏照旧被压掉，且压制的两个属性都真的落上去了——
   // tripwire 仍然守着"seam 真移动"那一种条件。
-  const ready = await mount({ value: config() })
+  const ready = await mount({ value: twoCandidates() })
   assert.equal(ready.state().available, true, 'fixture: the namespace is served')
   pendingEffects.length = 0
   const tree = render(createEl(RouterPage, propsFor(ready)))
@@ -800,7 +808,7 @@ test('a dialog opened while the config scope is still loading does not throw, an
 // 弹窗的挂载（page.ts）本来就独立 retain，footer 那一次是冗余的。
 test('the permanent sidebar entry alone does not claim the save key; the open dialog does', async () => {
   const { RouterPage } = loadClient()
-  const h = await mount({ value: config() })
+  const h = await mount({ value: twoCandidates() })
   const command = h.shortcutCommands()[0]
   assert.deepEqual(command.resolve({}), { status: 'pass' }, 'nothing mounted: the key passes to its other owners')
 
@@ -1245,6 +1253,31 @@ test('semantic tone colour has one source and never paints badge text', async ()
   const colored = workspace.match(/Object\.assign\(\{\}, S\.toneDot, healthToneStyle\(/g) ?? []
   assert.equal(dots.length, colored.length,
     `every toneDot must be handed its colour by healthToneStyle: ${dots.length} dot(s), ${colored.length} coloured`)
+})
+
+// 强调色只有一个来源：`--dsh-router-accent`（styles.ts 的 :root 声明）。DSH 的
+// `--dsw-alias-brand-primary` 是**品牌墨色**（亮色近黑、暗色近白），借它着色会让
+// Logo 与强调元素在某个主题里渲染成近黑/近白——而且因为插件令牌已定义，写在内联
+// 里的 `#4A65E8` 回退永不生效，错得完全静默。手算的 `rgba(74,101,232,x)` 同理：
+// accent 一改，二十处淡染不会跟着改。两者都归 color-mix / 变量。
+test('the plugin accent has one source, and DSH brand ink is never borrowed', async () => {
+  const modules = ['styles.ts', 'footer.ts', 'modals.ts', 'pipeline.ts', 'icons.ts', 'format.ts', 'health-ui.ts', 'workspace.ts', 'chain.ts', 'controller.ts', 'page.ts']
+  for (const name of modules) {
+    const source = sourceOf(name)
+    const borrowed = source.match(/--dsw-alias-brand-primary/g) ?? []
+    assert.deepEqual(borrowed, [],
+      `${name} must not borrow DSH's brand-ink token — it is near-black on light and near-white on dark`)
+    const handMixed = source.match(/rgba\(\s*74,\s*101,\s*232/g) ?? []
+    assert.deepEqual(handMixed, [],
+      `${name} must not hand-mix the accent's rgba — use color-mix on --dsh-router-accent so the token stays the only source`)
+  }
+  // 令牌本身仍在，且声明一次。
+  const styles = sourceOf('styles.ts')
+  assert.equal((styles.match(/--dsh-router-accent:/g) ?? []).length, 1,
+    'the accent token is declared exactly once')
+  // Logo 的渐变判断认的是插件自己的令牌，不是品牌墨色。
+  assert.ok(sourceOf('icons.ts').includes("color.indexOf('accent')"),
+    'the logo gradient must key off the plugin accent, not the brand-ink token')
 })
 
 // 时间线窗口只有一个常数（../timeline.ts 的 MAX_TIMELINE_POINTS）：投影按它截断，

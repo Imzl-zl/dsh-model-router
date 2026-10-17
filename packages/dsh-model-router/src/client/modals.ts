@@ -315,7 +315,7 @@ export function HealthSettingsModal(props) {
                   key: preset.code,
                   type: 'button',
                   className: 'dsh-router-catalog-btn',
-                  style: Object.assign({}, S.chipBtn, exists ? { borderColor: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)' } : null),
+                  style: Object.assign({}, S.chipBtn, exists ? { borderColor: 'var(--dsh-router-accent)', color: 'var(--dsh-router-accent)' } : null),
                   disabled: exists,
                   title: exists ? t('breakerAlreadyAdded') : preset.desc,
                   onClick: function () {
@@ -565,7 +565,7 @@ export function AddCandidateModal(props) {
                 return h('label', { key: route, style: S.catalogRow },
                   h('input', {
                     type: 'checkbox',
-                    style: Object.assign({}, S.triggerChk, { accentColor: 'var(--dsw-alias-brand-primary)' }),
+                    style: Object.assign({}, S.triggerChk, { accentColor: 'var(--dsh-router-accent)' }),
                     checked: Boolean(selected[route]),
                     onChange: function () {
                       var next = Object.assign({}, selected)

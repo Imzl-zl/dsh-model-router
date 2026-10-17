@@ -8,9 +8,15 @@
  *   `installModelSelection` and its post-`next()` override wins. Every attempt
  *   passes through here, which is what makes the per-candidate attempt cap
  *   enforceable while `llm-retry` owns same-route retries.
- * - `agent/request-error` registered on `agent.ctx` at `agent/created` WITHOUT
- *   prepend, so it sits INSIDE `llm-retry`: built-in same-route recovery acts
- *   first, and its `return next()` hand-off is what reaches this plugin.
+ * - `agent/request-error` with `prepend: true` on the root ctx (registered once;
+ *   the agent comes from the payload), so it is the OUTERMOST listener: it sees
+ *   `llm-retry`'s decision after `await next()` and then honors it, vetoes it
+ *   when the budget is spent, or decides the failover itself. Measured: the same
+ *   "whole chain dies" scenario fires 7 real calls with this listener inside
+ *   `llm-retry` and 2 with it outermost — the hard total cap is only enforceable
+ *   from out here. Since 2026-10-17 it also decides "this candidate's budget is
+ *   spent && this error should switch" BEFORE `await next()`, so llm-retry's
+ *   backoff and its two `llm/retry` durable records never happen for that case.
  *
  * Nothing here re-implements backoff, adapter dispatch, credentials, or the
  * durable attempt record. What the plugin adds is the candidate cursor, the
@@ -43,7 +49,7 @@ import {
 import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
 import { configuredRoutes, routeKeyOf, routeParts } from './routes.ts'
 import { DEFAULT_PROBE_PROMPT, DEFAULT_PROBE_TIMEOUT_SECONDS } from './defaults.ts'
-import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
+import { RouterState, candidateConfig, type StepChain, type StepConditions } from './state.ts'
 import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice, routeMissingNotice, adapterDefectNotice } from './notice.ts'
 import { precheckTierOf, type PrecheckTier } from './precheck.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
@@ -92,8 +98,6 @@ export default class ModelRouter extends TypertRemoteService {
   private lastProbeReport: ProbeReport = { at: 0, routes: [] }
   /** Probes currently running (scheduled or manual); a scheduled tick skips while any is in flight. */
   private probeInFlight = 0
-  /** The scheduled timer's own cancellation, aborted when this fiber unloads. */
-  private probeTimer: AbortController | undefined
   private probeTimerId: ReturnType<typeof setInterval> | undefined
 
   constructor(ctx: Context, config: Config) {
@@ -514,7 +518,6 @@ export default class ModelRouter extends TypertRemoteService {
     const seconds = health?.enabled === true ? (health.intervalSeconds || 0) : 0
     if (seconds <= 0) return
     const controller = new AbortController()
-    this.probeTimer = controller
     this.probeTimerId = setInterval(() => {
       if (this.probeInFlight > 0) return
       void this.probeAll({ routes: [] }, controller.signal).catch((error: unknown) => {

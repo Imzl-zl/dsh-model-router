@@ -15,7 +15,6 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  conditionsMet,
   decideRecovery,
   hasImageContent,
   isSwitchOnEligible,
@@ -98,13 +97,6 @@ test('context gate: 0 disables, unmeasured is unmet, boundary is inclusive', () 
   assert.equal(unmetCondition(candidate({ minContextTokens: 100 }), conditions(false, 99)), '需预估上下文 ≥ 100 tokens')
   assert.equal(unmetCondition(candidate({ minContextTokens: 100 }), conditions(false, 100)), undefined)
   assert.equal(unmetCondition(candidate({ minContextTokens: 100 }), conditions(false, 101)), undefined)
-})
-
-test('conditionsMet is the negation of unmetCondition', () => {
-  const c = candidate({ images: true, minContextTokens: 50 })
-  assert.equal(conditionsMet(c, conditions(true, 50)), true)
-  assert.equal(conditionsMet(c, conditions(false, 50)), false)
-  assert.equal(conditionsMet(c, conditions(true, 49)), false)
 })
 
 // ---- planFire (attempt accounting) ----

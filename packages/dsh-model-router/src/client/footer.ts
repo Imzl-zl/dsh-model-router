@@ -44,7 +44,7 @@ export function ModelRouterFooterAction(props) {
   },
     h('div', { style: S.modalTopBar },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 } },
-        h(ModelRouterIcon, { size: 24, color: 'var(--dsw-alias-brand-primary, #4A65E8)' }),
+        h(ModelRouterIcon, { size: 24, color: 'var(--dsh-router-accent)' }),
         h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
             h('span', { style: S.modalTopTitle }, t('quickModalTitle')),
@@ -86,7 +86,7 @@ export function ModelRouterFooterAction(props) {
   return h(Fragment, null,
     h('button', buttonProps,
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
-        h(ModelRouterIcon, { size: isWide ? 17 : 19, color: enabled ? 'var(--dsw-alias-brand-primary, #4A65E8)' : 'var(--dsw-alias-label-tertiary, #888)' }),
+        h(ModelRouterIcon, { size: isWide ? 17 : 19, color: enabled ? 'var(--dsh-router-accent)' : 'var(--dsw-alias-label-tertiary, #888)' }),
         isWide ? h('span', { style: S.sidebarLabel }, t('sidebarActionLabel')) : null),
       isWide
         ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
