@@ -15,6 +15,9 @@
  *   first; `planFire` then redirects each further `agent/request` fire to the
  *   next candidate once the per-candidate cap is reached.
  * - Cross-candidate failover and the total-attempt cap belong here.
+ *
+ * Note: 为何可服务性必须由 decideRecovery 在授权下一次发火之前判（C2 原文最小修法
+ * 实测只是搬代价）—— 见 .agents/notes/implemented/2026-10-17-attempt-budget-two-layers.md
  */
 
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
@@ -125,6 +128,11 @@ export interface FirePlan {
  * not eligible stays put, so `llm-retry` burns its own budget and the recovery
  * listener terminates the chain — the user's "don't switch on this error"
  * choice holds even for codes llm-retry retries first.
+ *
+ * The `exhausted` flag this sets is a FACT about the transition ("the last
+ * candidate just hit its cap"), consumed by `decideRecovery` and by the
+ * fall-back path; it is not what prevents the extra fire — that is
+ * {@link canFireAgain}, checked before the next fire is authorized.
  */
 export function planFire(state: StepState, mayAdvance: boolean): FirePlan {
   const candidates = state.chain.candidates
@@ -231,17 +239,52 @@ export function unmetCondition(candidate: Candidate, conditions: StepConditions)
   return undefined
 }
 
+/**
+ * Whether one more fire may happen at all: the current candidate still has
+ * budget of its own, or there is a next candidate to move to.
+ *
+ * This is the C2 fix in one sentence. `planFire` learns that the last
+ * candidate is capped only when it counts that fire — and by then the call
+ * has already been dispatched (`index.ts` walks candidates from
+ * `plan.state.index` and nothing reads `plan.state.exhausted` before
+ * dispatching). The earliest decision point that can PREVENT a fire is
+ * `decideRecovery`, which runs after a failure; asking it "may this happen
+ * again" before it answers 'retry' is what makes the cap a real invariant.
+ * A cap that only stops the fire after it has happened is not a cap.
+ *
+ * Layering: the `agent/request-error` handler decides the same condition
+ * even earlier (before `await next()`, so llm-retry never runs at all — see
+ * index.ts and open-questions 第五节第 2 项). This predicate is the pure
+ * layer's own contract: `decideRecovery` must never authorize a fire that
+ * cannot happen, whoever calls it. The two overlap in today's wiring and
+ * that is deliberate — one is the seam's cost-avoidance, the other is the
+ * decision layer's invariant.
+ */
+export function canFireAgain(state: StepState): boolean {
+  const current = state.chain.candidates[state.index]!
+  return state.attemptsOnCandidate < current.maxAttempts
+    || state.index < state.chain.candidates.length - 1
+}
+
 export type RecoveryDecision = 'retry' | 'terminal'
 
 /**
  * Decide what a delegated failure means for the chain. `llm-retry` consults
  * this plugin only after it gives up, so reaching here at all means the
  * same-route layer is finished with this failure.
+ *
+ * `canFireAgain` is checked before 'retry' is granted, not after: the guard
+ * has to run before the fire it is meant to prevent, which is what makes the
+ * per-candidate cap hold on the last candidate too.
  */
 export function decideRecovery(state: StepState, code: string, aborted: boolean): RecoveryDecision {
   if (aborted) return 'terminal'
+  // `exhausted` 与 `canFireAgain` 分工不同，不可互相取代：这个标记还服务
+  // "整条链都服务不了、落回用户原路由"那条路径（index.ts 在 outgoing ===
+  // undefined 时置位），那一步不消耗任何候选配额，canFireAgain 看不见它。
   if (state.exhausted) return 'terminal'
   if (!isSwitchOnEligible(state.chain, code)) return 'terminal'
   if (state.totalAttempts >= state.chain.maxTotalAttempts) return 'terminal'
+  if (!canFireAgain(state)) return 'terminal'
   return 'retry'
 }

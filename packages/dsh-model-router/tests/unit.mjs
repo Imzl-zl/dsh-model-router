@@ -18,6 +18,7 @@ import {
   conditionsMet,
   decideRecovery,
   hasImageContent,
+  isSwitchOnEligible,
   planFire,
   resolveChain,
   resolveStartIndex,
@@ -1291,8 +1292,7 @@ test('probePromptFor uses the per-route override, else the shared default', () =
 
 // ---- the capability pre-check's three tiers ----
 
-test('a pre-check failure is tiered by who can fix it, and an unknown code gets no tier', () => {
-  // 定案依据 docs/design/open-questions.md 第五节第 3 项：压成一句"不支持当前
+test('a pre-check failure is tiered by who can fix it, and an unknown code gets no tier', () => {  // 定案依据 docs/design/open-questions.md 第五节第 3 项：压成一句"不支持当前
   // 请求参数"会把一个配错的 provider 说成这条链的问题——而这条 notice 是
   // durable 的，指错了就一直在会话历史里。
   assert.equal(precheckTierOf('UNSUPPORTED_REASONING_EFFORT'), 'request-shape')
@@ -1307,6 +1307,53 @@ test('a pre-check failure is tiered by who can fix it, and an unknown code gets 
   for (const code of ['PI_AI_ERROR', 'AUTH', 'TRANSPORT', 'ABORTED']) {
     assert.equal(precheckTierOf(code), undefined, `${code} must keep the generic notice`)
   }
+})
+
+// ---- the attempt budget: a capped last candidate is not fired once more ----
+
+test('the last candidate is not fired once past its cap, and neither is a lone one', () => {
+  // C2：`planFire` 在末位候选被 cap 时置 exhausted、attemptsOnCandidate 仍 +1，
+  // 而第一个能阻止这次发火的决策点（decideRecovery）在下一次失败后才跑——多打的
+  // 那一次已经打完，且 advanced===false 连 notice 都不发，用户完全看不见。
+  // 修法把"还能不能发"提成 canFireAgain 谓词，由 decideRecovery 在授权下一次
+  // 发火之前判。这里复现 index.ts 的发射循环，判据全部取自生产函数本身
+  // （planFire / isSwitchOnEligible / decideRecovery），不另写一套停止条件。
+  const chainOf = (n, maxAttempts, maxTotalAttempts) => ({
+    candidates: Array.from({ length: n }, (_, i) => ({ provider: `c${i}`, model: 'm', maxAttempts })),
+    order: Array.from({ length: n }, (_, i) => i),
+    switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true },
+    maxTotalAttempts,
+    stickyTurns: 0,
+    strategy: 'order',
+  })
+  const replay = (n, maxAttempts, maxTotalAttempts, code) => {
+    let state = startStep(1, 1, chainOf(n, maxAttempts, maxTotalAttempts), { hasImages: false, projectedTokens: undefined }, 0)
+    const calls = []
+    for (let guard = 0; guard < 30; guard += 1) {
+      const plan = planFire(state, isSwitchOnEligible(state.chain, code))
+      state = plan.state
+      calls.push(plan.state.index)
+      if (decideRecovery(state, code, false) !== 'retry') break
+    }
+    return { calls, finalState: state }
+  }
+  // 每候选恰好一次：总数 = 各候选上限之和，一次不多。
+  const three = replay(3, 1, 6, 'AUTH')
+  assert.deepEqual(three.calls, [0, 1, 2])
+  assert.equal(three.finalState.totalAttempts, 3)
+  // 单候选链（合法形态）同样不再打第二次。
+  assert.deepEqual(replay(1, 1, 6, 'AUTH').calls, [0])
+  // 总上限先绷紧的形状不变：cap 2 × 3 候选、总上限 6，六次打完由总上限终态。
+  assert.deepEqual(replay(3, 2, 6, 'AUTH').calls, [0, 0, 1, 1, 2, 2])
+  // 总上限有余额时，末位候选也不许多打：修复前这里是 [0,0,1,1,2,2,2]。
+  assert.deepEqual(replay(3, 2, 8, 'AUTH').calls, [0, 0, 1, 1, 2, 2])
+  // 不该切换的码：llm-retry 继续打同一条路由（既有意图），恢复监听终态——
+  // 这条路径不产出 C2 形状，钉住它没被 canFireAgain 顺手改掉。
+  const capped = { ...startStep(1, 1, chainOf(1, 1, 6), { hasImages: false, projectedTokens: undefined }, 0), attemptsOnCandidate: 1, totalAttempts: 1 }
+  const plan = planFire(capped, false)
+  assert.equal(plan.state.exhausted, false, 'a non-eligible failure leaves the cursor alone for llm-retry')
+  assert.equal(plan.state.attemptsOnCandidate, 2)
+  assert.equal(decideRecovery(plan.state, 'INVALID_REQUEST', false), 'terminal')
 })
 
 // ---- the connectivity check's classification (the Host side) ----

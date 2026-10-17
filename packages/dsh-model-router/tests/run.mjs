@@ -435,6 +435,41 @@ const SCENARIOS = [
       // 每候选一枪，一枪不多：两条各打一次就终态。
       eq('real calls equal the configured cap', failedAttempts(events).length, 2)
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      // I1：预算已尽的处置发生在 `await next()` 之前，llm-retry 根本不参与——
+      // durable log 里因此一条 llm/retry 都不该有。修复前这里各有 2 条（各带一次
+      // 退避；换 3000ms 退避的 stub 实测 boot 墙钟 8547ms→2227ms），且记录里的
+      // provider 可能不是真正被打的那一条。
+      eq('llm/retry records', events.filter(e => e.type === 'llm/retry').length, 0)
+      eq('llm/retry-started records', events.filter(e => e.type === 'llm/retry-started').length, 0)
+      eq('turn end', turnEnd(events), 'error')
+    },
+  },
+  {
+    name: 'last-candidate-cap-fires-no-extra-call',
+    note: '末位候选被 cap 之后不多打：每候选恰好一次，总数等于各候选上限之和',
+    // C2：三个候选各 1 枪、总上限 6，全链 AUTH（switchOn 默认开、llm-retry 立即
+    // 委派）。修复前末位候选被打第二次（真实调用 4 次、health fold 显示它吸收 2
+    // 次），且 advanced===false 连 notice 都不发——用户为一次看不见的调用付了钱。
+    router: {
+      enabled: true,
+      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1), C('stub-third', 1)], { maxTotalAttempts: 6 })],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
+    },
+    script: {
+      policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
+      'stub-primary': { outcomes: ['fail:AUTH', 'fail:AUTH', 'fail:AUTH', 'fail:AUTH'] },
+      'stub-backup': { outcomes: ['fail:AUTH', 'fail:AUTH', 'fail:AUTH', 'fail:AUTH'] },
+      'stub-third': { outcomes: ['fail:AUTH', 'fail:AUTH', 'fail:AUTH', 'fail:AUTH'] },
+    },
+    check(events) {
+      eq('real calls', failedAttempts(events).length, 3)
+      // 每候选恰好一次：health fold 按路由键记失败，末位候选的时间线上只能有一条。
+      const health = channelHealth(events)
+      eq('the last candidate absorbed one', health['stub-third/stub-model']?.timeline.length, 1)
+      eq('every candidate absorbed one', Object.values(health).map(r => r.timeline.length), [1, 1, 1])
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model', 'stub-third/stub-model'])
+      // 两次真实切换各一条通知；被抑制的那次调用不是切换，不该有第三条。
+      eq('failover notices', notices(events).filter(t => t.text.includes('已切换至')).length, 2)
       eq('turn end', turnEnd(events), 'error')
     },
   },

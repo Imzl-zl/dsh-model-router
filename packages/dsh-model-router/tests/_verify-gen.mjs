@@ -47,13 +47,13 @@ const SCENARIOS = [
     check(events) {
       const attempts = events.filter(e => e.type === 'assistant/attempt')
       // Which route each real call actually went to: the health fold counts
-      // failures per route key, and the last candidate's key must show TWO.
+      // failures per route key, and every candidate's key must show ONE.
       const health = channelHealth(events)
       console.log('    -- health per-route failure counts:', JSON.stringify(Object.fromEntries(
         Object.entries(health).map(([k, v]) => [k, v.timeline?.length ?? v.failures ?? null]),
       )))
       eq('real calls', failedAttempts(events).length, 3)
-      eq('the last candidate absorbed two of them', health['stub-third/stub-model']?.timeline.length, 2)
+      eq('every candidate absorbed exactly one', Object.values(health).map(r => r.timeline.length), [1, 1, 1])
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model', 'stub-third/stub-model'])
       const texts = notices(events).map(n => n.text)
       eq('failover notices', texts.filter(t => t.includes('已切换至')).length, 2)
@@ -75,8 +75,10 @@ const SCENARIOS = [
       const started = events.filter(e => e.type === 'llm/retry-started')
       console.log('    -- llm/retry:', JSON.stringify(retry.map(e => ({ provider: e.data.provider, retry: e.data.retry, delayMs: e.data.delayMs, policyKey: e.data.policyKey }))))
       console.log('    -- llm/retry-started:', JSON.stringify(started.map(e => ({ provider: e.data.provider, retry: e.data.retry }))))
-      eq('llm/retry count', retry.length, 2)
-      eq('llm/retry-started count', started.length, 2)
+      // 修复后：两次"配额已尽 && 该切换"都在 await next() 之前决定，llm-retry
+      // 根本不参与——两条记录都不该有（修复前各 2 条、各带 3000ms 退避）。
+      eq('llm/retry count', retry.length, 0)
+      eq('llm/retry-started count', started.length, 0)
       eq('turn end', turnEnd(events), 'error')
     },
   },
@@ -97,8 +99,10 @@ const SCENARIOS = [
       eq('one real call', failedAttempts(events).length, 1)
       const retry = events.filter(e => e.type === 'llm/retry')
       const started = events.filter(e => e.type === 'llm/retry-started')
-      eq('llm/retry committed before the veto', retry.length, 1)
-      eq('llm/retry-started committed before the veto', started.length, 1)
+      // 修复后：候选配额已尽 && 该切换 && 换不动 → await next() 之前终态，
+      // llm-retry 的记录与 3000ms 退避都不发生（修复前各 1 条、boot ~8.5s）。
+      eq('llm/retry committed before the veto', retry.length, 0)
+      eq('llm/retry-started committed before the veto', started.length, 0)
       eq('turn end', turnEnd(events), 'error')
     },
   },
@@ -139,21 +143,23 @@ const SCENARIOS = [
   },
   {
     name: 'rate-limit-switch-pays-the-backoff',
-    note: 'I2 对照组：RATE_LIMIT 在同一形状下 llm-retry 自己退避',
+    note: 'I2 对照组：候选还有余额时 llm-retry 自己退避，余额用尽后切换不再等',
     router: {
       enabled: true,
-      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])],
+      profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])],
       default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
     },
-    // RATE_LIMIT IS in llm-retry's default retryable set, so the same shape
-    // pays the backoff before the chain moves on.
+    // RATE_LIMIT IS in llm-retry's default retryable set. With budget left on
+    // the candidate the plugin passes the retry through, so llm-retry sleeps
+    // its backoff; once the candidate's own budget is spent the switch itself
+    // no longer waits (I1).
     script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT'] }, 'stub-backup': { outcomes: ['ok'] } },
     check(events) {
-      eq('one real call', failedAttempts(events).length, 1)
+      eq('one failed call before the switch', failedAttempts(events).length, 2)
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
       const retry = events.filter(e => e.type === 'llm/retry')
       eq('llm/retry records', retry.length, 1)
-      eq('the backoff really was scheduled', retry[0]?.delayMs, 3000)
+      eq('the backoff really was scheduled', retry[0]?.data.delayMs, 3000)
       eq('turn end', turnEnd(events), 'completed')
     },
   },
