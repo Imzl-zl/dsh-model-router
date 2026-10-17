@@ -425,11 +425,21 @@ export function createController(ctx, scope, t) {
       listOf(profileId, isDefault).splice(index, 1)
       publish()
     },
+    reorderCandidates: function (profileId, fromIndex, toIndex, isDefault) {
+      var minIndex = isDefault ? 0 : 1
+      if (fromIndex < minIndex || toIndex < minIndex) return
+      var list = listOf(profileId, isDefault)
+      if (fromIndex >= list.length || toIndex >= list.length || fromIndex === toIndex) return
+      var item = list.splice(fromIndex, 1)[0]
+      list.splice(toIndex, 0, item)
+      publish()
+    },
     moveCandidate: function (profileId, index, direction, isDefault) {
-      if (index <= 0 && !isDefault) return
+      var minIndex = isDefault ? 0 : 1
+      if (index < minIndex) return
       var list = listOf(profileId, isDefault)
       var target = index + direction
-      if (target < 1 || target >= list.length) return
+      if (target < minIndex || target >= list.length) return
       var swapped = list[target]
       list[target] = list[index]
       list[index] = swapped

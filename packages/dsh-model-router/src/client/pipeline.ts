@@ -6,7 +6,7 @@ import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { fill, healthToneBadge, routeOf } from './format.ts'
 import { HealthSignalDot, reasoningLabelOf } from './health-ui.ts'
-import { Icon, ICON_ARROW_DOWN, ICON_CLOSE, ICON_DOWN, ICON_MINUS, ICON_PLUS, ICON_TRASH, ICON_UP, ICON_WARN } from './icons.ts'
+import { Icon, ICON_ARROW_DOWN, ICON_BOLT, ICON_CLOSE, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_ROUTE, ICON_SHIELD, ICON_TRASH, ICON_UP, ICON_WARN } from './icons.ts'
 import { SegmentedTabs, Tag, useModalLayer } from '@deepseek-ai/dsh-client-ui-primitives'
 import { STRATEGY_OPTIONS, SWITCH_ON_CODES } from './validate.ts'
 
@@ -23,11 +23,36 @@ export function CandidateNode(props) {
   var imagesMode = needs.images === true ? 'require' : needs.images === false ? 'forbid' : 'any'
   var reasoning = reasoningLabelOf(props.catalog, candidate.provider, candidate.model)
 
+  var minMoveIndex = props.isDefault ? 0 : 1
+  var canMoveUp = !isPrimary && index > minMoveIndex && !props.disabled
+  var canMoveDown = (!isPrimary || props.isDefault) && index < props.total - 1 && !props.disabled
+  var canDrag = (!isPrimary || props.isDefault) && props.total > 1 && !props.disabled
+
   return h('div', { style: S.node },
-    h('div', { style: Object.assign({}, S.nodeCard, isPrimary ? S.nodeCardPrimary : null) },
+    h('div', {
+      style: Object.assign(
+        {},
+        S.nodeCard,
+        isPrimary ? S.nodeCardPrimary : null,
+        props.isDragging ? S.nodeCardDragging : null,
+        props.isDragTarget && !props.isDragging ? S.nodeCardDragOver : null,
+      ),
+      onDragOver: function (e) { if (props.onDragOver) props.onDragOver(e, index) },
+      onDrop: function (e) { if (props.onDrop) props.onDrop(e, index) },
+      onDragEnd: function (e) { if (props.onDragEnd) props.onDragEnd(e) },
+    },
       h('div', { style: S.nodeMainRow },
+        !isPrimary ? h('div', {
+          className: 'dsh-router-grip-handle',
+          style: Object.assign({}, S.gripHandle, !canDrag ? S.gripHandleDisabled : null),
+          title: t('dragReorderHint'),
+          draggable: canDrag,
+          onDragStart: function (e) {
+            if (canDrag && props.onDragStart) props.onDragStart(e, index)
+          },
+        }, h(Icon, { d: ICON_GRIP, size: 14 })) : null,
         h('div', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null) },
-          isPrimary ? '★' : String(index + 1).padStart(2, '0')),
+          isPrimary ? '★' : String(props.isDefault ? index + 1 : index).padStart(2, '0')),
         h('div', { style: S.nodeContent },
           h('div', { style: S.modelInfo },
             h('div', { style: S.modelNameRow },
@@ -97,30 +122,39 @@ export function CandidateNode(props) {
                 }),
                 h('span', { style: { whiteSpace: 'nowrap' } }, props.weightShare + '%')) : null),
             h('div', { style: S.nodeActions },
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-action-btn',
-                style: Object.assign({}, S.actionBtn, index <= 0 ? S.actionBtnDisabled : null),
-                disabled: index <= 0 || props.disabled,
-                title: isPrimary ? t('primaryPinnedHint') : t('moveUp'),
-                onClick: function () { props.onMove(index, -1) },
-              }, h(Icon, { d: ICON_UP, size: 13 })),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-action-btn',
-                style: Object.assign({}, S.actionBtn, index >= props.total - 1 ? S.actionBtnDisabled : null),
-                disabled: index >= props.total - 1 || props.disabled,
-                title: t('moveDown'),
-                onClick: function () { props.onMove(index, 1) },
-              }, h(Icon, { d: ICON_DOWN, size: 13 })),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-action-btn dsh-router-action-btn-danger',
-                style: Object.assign({}, S.actionBtn, S.actionBtnDanger, (index <= 0 && !props.isDefault) ? S.actionBtnDisabled : null),
-                disabled: (index <= 0 && !props.isDefault) || props.disabled,
-                title: isPrimary ? t('primaryPinnedHint') : t('removeNode'),
-                onClick: function () { props.onRemove(index) },
-              }, h(Icon, { d: ICON_TRASH, size: 12 })))))),
+              isPrimary
+                ? h('span', { style: S.primaryLockedBadge, title: t('primaryPinnedHint') },
+                    h(Icon, { d: ICON_SHIELD, size: 11 }),
+                    t('primaryLockedBadge'))
+                : [
+                    h('button', {
+                      key: 'up',
+                      type: 'button',
+                      className: 'dsh-router-action-btn',
+                      style: Object.assign({}, S.actionBtn, !canMoveUp ? S.actionBtnDisabled : null),
+                      disabled: !canMoveUp,
+                      title: t('moveUp'),
+                      onClick: function () { props.onMove(index, -1) },
+                    }, h(Icon, { d: ICON_UP, size: 13 })),
+                    h('button', {
+                      key: 'down',
+                      type: 'button',
+                      className: 'dsh-router-action-btn',
+                      style: Object.assign({}, S.actionBtn, !canMoveDown ? S.actionBtnDisabled : null),
+                      disabled: !canMoveDown,
+                      title: t('moveDown'),
+                      onClick: function () { props.onMove(index, 1) },
+                    }, h(Icon, { d: ICON_DOWN, size: 13 })),
+                    h('button', {
+                      key: 'del',
+                      type: 'button',
+                      className: 'dsh-router-action-btn dsh-router-action-btn-danger',
+                      style: Object.assign({}, S.actionBtn, S.actionBtnDanger),
+                      disabled: props.disabled,
+                      title: t('removeNode'),
+                      onClick: function () { props.onRemove(index) },
+                    }, h(Icon, { d: ICON_TRASH, size: 12 })),
+                  ])))),
       expanded ? h('div', { style: S.needsPanel },
         h('div', { style: S.needsGrid },
           h('div', { style: S.needCard, id: 'images-' + imagesMode + '-panel-' + index, role: 'tabpanel', 'aria-labelledby': 'images-' + imagesMode + '-' + index },
@@ -226,9 +260,9 @@ export function Connector(props) {
   return h('div', { style: S.connector },
     h('div', { style: S.connectorLine }),
     h('span', { style: S.failoverTag },
-      h(Icon, { d: ICON_ARROW_DOWN, size: 11 }),
-      t('failoverTag') + ' #' + String(props.toIndex)),
-    h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('failoverNotice')))
+      h(Icon, { d: ICON_ARROW_DOWN, size: 10 }),
+      '顺延 #' + String(props.toIndex)),
+    h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, '前序重试耗尽后自动切换至此候选'))
 }
 
 
@@ -237,31 +271,195 @@ export function PipelineEditor(props) {
   var candidates = props.candidates
   var strategy = props.strategy === 'weight' || props.strategy === 'round-robin' ? props.strategy : 'order'
   var weightTotal = candidates.reduce(function (sum, c) { return sum + Math.max(0, c.weight || 0) }, 0)
+
+  var dragSourceIndexState = useState(null)
+  var dragSourceIndex = dragSourceIndexState[0]
+  var setDragSourceIndex = dragSourceIndexState[1]
+
+  var dragTargetIndexState = useState(null)
+  var dragTargetIndex = dragTargetIndexState[0]
+  var setDragTargetIndex = dragTargetIndexState[1]
+
+  var handleDragStart = function (e, index) {
+    setDragSourceIndex(index)
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', String(index))
+    }
+  }
+
+  var handleDragOver = function (e, index) {
+    var minIndex = props.isDefault ? 0 : 1
+    if (index < minIndex) return
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    if (dragTargetIndex !== index) {
+      setDragTargetIndex(index)
+    }
+  }
+
+  var handleDrop = function (e, toIndex) {
+    e.preventDefault()
+    var minIndex = props.isDefault ? 0 : 1
+    var from = dragSourceIndex
+    setDragSourceIndex(null)
+    setDragTargetIndex(null)
+    if (from !== null && from !== toIndex && from >= minIndex && toIndex >= minIndex) {
+      if (props.onReorder) {
+        props.onReorder(from, toIndex)
+      }
+    }
+  }
+
+  var handleDragEnd = function () {
+    setDragSourceIndex(null)
+    setDragTargetIndex(null)
+  }
+
   var nodes = []
-  candidates.forEach(function (candidate, index) {
-    if (index > 0) nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: index }))
-    nodes.push(h(CandidateNode, {
-      key: 'n' + index,
-      t: t,
-      candidate: candidate,
-      index: index,
-      total: candidates.length,
-      isDefault: props.isDefault,
-      disabled: props.disabled,
-      catalog: props.catalog,
-      passive: props.passive,
-      discover: props.discover,
-      probe: props.probe,
-      onJumpHealth: props.onJumpHealth,
-      showWeight: strategy === 'weight',
-      weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
-      onMaxAttempts: props.onMaxAttempts,
-      onWeight: props.onWeight,
-      onMove: props.onMove,
-      onRemove: props.onRemove,
-      onNeeds: props.onNeeds,
-    }))
-  })
+  if (!props.isDefault && candidates.length > 0) {
+    // 1. Primary Model Block
+    nodes.push(h('div', { key: 'primary-wrapper', style: S.primaryCardContainer },
+      h('div', { style: S.primaryCardHeader },
+        h('span', { style: S.primaryCardTitle },
+          h(Icon, { d: ICON_BOLT, size: 14 }),
+          t('primaryTargetSection')),
+        h('span', { style: S.primaryCardHint }, t('primaryTargetHint'))),
+      h(CandidateNode, {
+        key: 'primary-node',
+        t: t,
+        candidate: candidates[0],
+        index: 0,
+        total: candidates.length,
+        isDefault: false,
+        disabled: props.disabled,
+        catalog: props.catalog,
+        passive: props.passive,
+        discover: props.discover,
+        probe: props.probe,
+        onJumpHealth: props.onJumpHealth,
+        showWeight: strategy === 'weight',
+        weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidates[0].weight || 0) / weightTotal) * 100) : 0,
+        isDragging: false,
+        isDragTarget: false,
+        onDragStart: handleDragStart,
+        onDragOver: handleDragOver,
+        onDrop: handleDrop,
+        onDragEnd: handleDragEnd,
+        onMaxAttempts: props.onMaxAttempts,
+        onWeight: props.onWeight,
+        onMove: props.onMove,
+        onRemove: props.onRemove,
+        onNeeds: props.onNeeds,
+      })))
+
+    // 2. Flow transition indicator
+    nodes.push(h('div', { key: 'flow-indicator', style: S.flowConnector },
+      h('div', { style: S.flowConnectorPill },
+        h(Icon, { d: ICON_ARROW_DOWN, size: 12 }),
+        t('flowIndicatorText'))))
+
+    // 3. Fallback Section Header
+    nodes.push(h('div', { key: 'fallback-header', style: S.fallbackSectionHeader },
+      h('span', { style: S.fallbackSectionTitle },
+        h(Icon, { d: ICON_ROUTE, size: 14 }),
+        t('fallbackChainSection'),
+        h('span', { style: S.countBadge }, String(Math.max(0, candidates.length - 1)))),
+      h('span', { style: S.primaryCardHint }, t('fallbackChainHint'))))
+
+    if (candidates.length <= 1) {
+      nodes.push(h('div', { key: 'fallback-empty', style: S.fallbackEmptyCard },
+        h(Icon, { d: ICON_ROUTE, size: 28, style: { opacity: 0.35, color: 'var(--dsh-router-accent, #4A65E8)' } }),
+        h('h4', { style: S.fallbackEmptyTitle }, t('fallbackEmptyTitle')),
+        h('p', { style: S.fallbackEmptyDesc }, t('fallbackEmptyDesc')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-catalog-btn',
+          style: Object.assign({}, S.catalogBtn, { height: 32, padding: '0 14px', fontSize: 12.5, gap: 6 }),
+          disabled: props.disabled,
+          onClick: props.onOpenAddCandidate,
+        }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addCandidateBtn'))))
+    } else {
+      candidates.slice(1).forEach(function (candidate, offset) {
+        var index = offset + 1
+        if (offset > 0) {
+          nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: offset + 1 }))
+        }
+        nodes.push(h(CandidateNode, {
+          key: 'n' + index,
+          t: t,
+          candidate: candidate,
+          index: index,
+          total: candidates.length,
+          isDefault: false,
+          disabled: props.disabled,
+          catalog: props.catalog,
+          passive: props.passive,
+          discover: props.discover,
+          probe: props.probe,
+          onJumpHealth: props.onJumpHealth,
+          showWeight: strategy === 'weight',
+          weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
+          isDragging: dragSourceIndex === index,
+          isDragTarget: dragTargetIndex === index,
+          onDragStart: handleDragStart,
+          onDragOver: handleDragOver,
+          onDrop: handleDrop,
+          onDragEnd: handleDragEnd,
+          onMaxAttempts: props.onMaxAttempts,
+          onWeight: props.onWeight,
+          onMove: props.onMove,
+          onRemove: props.onRemove,
+          onNeeds: props.onNeeds,
+        }))
+      })
+    }
+  } else {
+    // Default pool mode: all candidates in one pool
+    candidates.forEach(function (candidate, index) {
+      if (index > 0) nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: index + 1 }))
+      nodes.push(h(CandidateNode, {
+        key: 'n' + index,
+        t: t,
+        candidate: candidate,
+        index: index,
+        total: candidates.length,
+        isDefault: true,
+        disabled: props.disabled,
+        catalog: props.catalog,
+        passive: props.passive,
+        discover: props.discover,
+        probe: props.probe,
+        onJumpHealth: props.onJumpHealth,
+        showWeight: strategy === 'weight',
+        weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
+        isDragging: dragSourceIndex === index,
+        isDragTarget: dragTargetIndex === index,
+        onDragStart: handleDragStart,
+        onDragOver: handleDragOver,
+        onDrop: handleDrop,
+        onDragEnd: handleDragEnd,
+        onMaxAttempts: props.onMaxAttempts,
+        onWeight: props.onWeight,
+        onMove: props.onMove,
+        onRemove: props.onRemove,
+        onNeeds: props.onNeeds,
+      }))
+    })
+  }
+
+  if (props.onJumpPolicies) {
+    nodes.push(h('div', { key: 'policy-summary', style: S.policySummaryCard },
+      h('div', { style: S.policySummaryText },
+        h(Icon, { d: ICON_SHIELD, size: 14, style: { color: 'var(--dsh-router-accent, #4A65E8)' } }),
+        fill(t('policySummaryPrefix'), { n: props.maxTotalAttempts || 6 })),
+      h('button', {
+        type: 'button',
+        className: 'dsh-router-policy-summary-btn',
+        style: S.policySummaryBtn,
+        onClick: props.onJumpPolicies,
+      }, t('policySummaryBtn'))))
+  }
   return h('div', null,
     h('div', { style: S.strategyRow },
       h('span', { style: S.formLabel }, t('strategyLabel')),

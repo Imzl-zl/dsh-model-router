@@ -301,8 +301,50 @@ test('the default pool has no pinned head: its first candidate moves and removes
   h.actions.onActive('__default__')
   h.actions.onMove(null, 0, 1, true)
   assert.equal(routeOf(h.state().draft.default.candidates[0]), 'b/y', 'the first pool candidate moves down')
+  h.actions.onMove(null, 1, -1, true)
+  assert.equal(routeOf(h.state().draft.default.candidates[0]), 'a/x', 'the second pool candidate moves back up')
+  h.actions.onMove(null, 0, 1, true)
   h.actions.onRemove(null, 0, true)
   assert.deepEqual(h.state().draft.default.candidates.map(routeOf), ['a/x'], 'the first pool candidate removes')
+})
+
+test('the candidates reorder within allowed bounds', async () => {
+  const h = await mount({
+    value: config({
+      default: defaultPool({
+        enabled: true,
+        candidates: [
+          { provider: 'a', model: '1', maxAttempts: 1 },
+          { provider: 'b', model: '2', maxAttempts: 1 },
+          { provider: 'c', model: '3', maxAttempts: 1 },
+        ],
+      }),
+      profiles: [
+        {
+          id: 'p1',
+          when: { provider: 'deepseek', model: 'm' },
+          candidates: [
+            { provider: 'deepseek', model: 'm', maxAttempts: 1 },
+            { provider: 'sub1', model: 's1', maxAttempts: 1 },
+            { provider: 'sub2', model: 's2', maxAttempts: 1 },
+          ],
+        },
+      ],
+    }),
+  })
+  // Default pool: full reorder allowed
+  h.actions.onReorder(null, 0, 2, true)
+  assert.deepEqual(h.state().draft.default.candidates.map(routeOf), ['b/2', 'c/3', 'a/1'])
+
+  // Profile: primary (index 0) remains pinned
+  h.actions.onReorder('p1', 0, 2, false)
+  assert.equal(routeOf(h.state().draft.profiles[0].candidates[0]), 'deepseek/m', 'primary cannot be moved via reorder')
+  h.actions.onReorder('p1', 2, 0, false)
+  assert.equal(routeOf(h.state().draft.profiles[0].candidates[0]), 'deepseek/m', 'candidate cannot replace primary via reorder')
+
+  // Profile: candidates 1 and 2 can reorder freely
+  h.actions.onReorder('p1', 2, 1, false)
+  assert.deepEqual(h.state().draft.profiles[0].candidates.map(routeOf), ['deepseek/m', 'sub2/s2', 'sub1/s1'])
 })
 
 // ---- scope republish vs the draft ----

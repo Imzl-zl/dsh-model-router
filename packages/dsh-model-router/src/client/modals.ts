@@ -43,10 +43,12 @@ export function HealthSettingsModal(props) {
   useEffect(function () {
     if (promptOverrides.length === 0) return
     var body = document.getElementById('dsh-router-health-modal-body')
-    if (body && typeof body.scrollTo === 'function') {
-      body.scrollTo({ top: body.scrollHeight, behavior: 'smooth' })
+    var scroller = (body ? body.closest('[class*="body"]') : null) || body
+    if (scroller && typeof scroller.scrollTo === 'function') {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
     }
   }, [promptOverrides.length])
+  var [healthTab, setHealthTab] = useState('inspect')
   var breaker = health.breaker || {}
   var [breakerOn, setBreakerOn] = useState(breaker.enabled === true)
   var [rules, setRules] = useState((breaker.rules || []).map(function (rule) {
@@ -115,38 +117,52 @@ export function HealthSettingsModal(props) {
         },
       }, t('applyChanges'))),
   },
-    // Tall enough that the probe tier's own fields sit above the fold: with a
-    // 500px cap the global prompt and the per-route editor were below the
-    // scroll, which read as "the setting does not exist".
-    h('div', { id: 'dsh-router-health-modal-body', style: { width: 'min(640px, 92vw)', maxHeight: 'min(720px, 88vh)', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingRight: 4, boxSizing: 'border-box' } },
-      // --- Tier 1: runtime observation ---
-      h('div', { style: S.healthTierCard },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+    // Comfortable width that fills the modal body without horizontal overflow.
+    // The shell's own body scroller owns overflow-y so no double scrollbars exist.
+    h('div', { id: 'dsh-router-health-modal-body', style: { width: '100%', display: 'flex', flexDirection: 'column', gap: 12, boxSizing: 'border-box' } },
+      h('div', { style: { marginBottom: 4 } },
+        h(SegmentedTabs, {
+          items: [
+            { value: 'inspect', label: t('healthTabProbe'), id: 'health-tab-inspect', panelId: 'health-panel-inspect' },
+            { value: 'breaker', label: t('healthTabBreaker'), id: 'health-tab-breaker', panelId: 'health-panel-breaker' },
+          ],
+          value: healthTab,
+          onChange: function (val) { setHealthTab(val) },
+          label: t('healthModalTitle'),
+        })),
+
+      healthTab === 'inspect' ? [
+        // --- Tier 1: runtime observation ---
+        h('div', { key: 'tier-passive', style: S.healthTierCard },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 } },
             h('span', { style: S.formLabel }, t('healthPassiveLabel')),
             h('span', { style: S.formHint }, t('healthPassiveHint'))),
-          h(Switch, {
-            checked: passiveOn,
-            label: t('healthPassiveLabel'),
-            onChange: function (next) { setPassiveOn(next) },
-          }))),
+          h('div', { style: { flexShrink: 0 } },
+            h(Switch, {
+              checked: passiveOn,
+              label: t('healthPassiveLabel'),
+              onChange: function (next) { setPassiveOn(next) },
+            })))),
 
       // --- Tier 2: connectivity check ---
       h('div', { style: S.healthTierCard },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 } },
             h('span', { style: S.formLabel }, t('healthDiscoverLabel')),
             h('span', { style: S.formHint }, t('healthDiscoverHint'))),
-          h(Switch, {
-            checked: discoverOn,
-            label: t('healthDiscoverLabel'),
-            onChange: function (next) { setDiscoverOn(next) },
-          })),
-        discoverOn ? h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 6, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }) },
-          h('span', { style: S.formLabel }, t('healthDiscoverIntervalLabel')),
-          h('span', { style: S.formHint }, t('healthDiscoverIntervalHint')),
+          h('div', { style: { flexShrink: 0 } },
+            h(Switch, {
+              checked: discoverOn,
+              label: t('healthDiscoverLabel'),
+              onChange: function (next) { setDiscoverOn(next) },
+            }))),
+        discoverOn ? h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 8, marginTop: 4, borderTop: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }) },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 220 } },
+            h('span', { style: S.formLabel }, t('healthDiscoverIntervalLabel')),
+            h('span', { style: S.formHint }, t('healthDiscoverIntervalHint'))),
           h('input', {
-            style: Object.assign({}, S.formInput, { width: 140 }),
+            style: Object.assign({}, S.formInput, { width: 100, flexShrink: 0 }),
             type: 'text',
             inputMode: 'numeric',
             placeholder: '0',
@@ -155,207 +171,207 @@ export function HealthSettingsModal(props) {
             onChange: function (event) { setDiscoverInterval(event.target.value) },
           })) : null),
 
-      // --- Tier 3: end-to-end probe ---
-      // 探测是真功能：手动按钮与宿主定时器都通。默认关闭写在默认值里，开不开、
-      // 多久一轮由用户定——插件只提供能力，不替用户决定要不要花这个 token。
-      h('div', { style: S.healthTierCard },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        // --- Tier 3: end-to-end probe ---
+        h('div', { key: 'tier-probe', style: S.healthTierCard },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 } },
             h('span', { style: S.formLabel }, t('healthProbeLabel')),
             h('span', { style: S.formHint }, t('healthProbeHint'))),
-          h(Switch, {
-            checked: probeOn,
-            label: t('healthProbeLabel'),
-            onChange: function (next) { setProbeOn(next) },
-          })),
-        h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 6, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }) },
-          h('span', { style: S.formLabel }, t('healthProbeIntervalLabel')),
-          h('span', { style: S.formHint }, t('healthProbeIntervalHint')),
-          h('input', {
-            style: Object.assign({}, S.formInput, { width: 140 }),
-            type: 'text',
-            inputMode: 'numeric',
-            placeholder: '0',
-            'aria-label': t('healthProbeIntervalLabel'),
-            value: probeInterval,
-            onChange: function (event) { setProbeInterval(event.target.value) },
-          })),
-        h('div', { style: S.formGroup },
-          h('span', { style: S.formLabel }, t('healthProbePromptLabel')),
-          h('span', { style: S.formHint }, t('healthProbePromptHint')),
-          h('input', {
-            style: Object.assign({}, S.formInput, { width: '100%' }),
-            type: 'text',
-            placeholder: '1',
-            'aria-label': t('healthProbePromptLabel'),
-            value: probePrompt,
-            onChange: function (event) { setProbePrompt(event.target.value) },
-          })),
-        // Per-route probe content sits directly under the shared prompt: a
-        // gateway filters content by its own rules, so a route that rejects the
-        // shared prompt needs its own — the host has always honored this, the
-        // editor was the missing half. The add button shares the label's row so
-        // the control is reachable without scrolling.
-        h('div', { style: S.formGroup },
-          h('div', { style: S.probeOverrideHead },
-            h('span', { style: S.formLabel }, t('healthProbePromptsLabel')),
+          h('div', { style: { flexShrink: 0 } },
+            h(Switch, {
+              checked: probeOn,
+              label: t('healthProbeLabel'),
+              onChange: function (next) { setProbeOn(next) },
+            }))),
+          probeOn ? h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 6, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }) },
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 } },
+              h('div', { style: Object.assign({}, S.formGroup, { flex: 1, minWidth: 160 }) },
+                h('span', { style: S.formLabel }, t('healthProbeIntervalLabel')),
+                h('span', { style: S.formHint }, t('healthProbeIntervalHint')),
+                h('input', {
+                  style: Object.assign({}, S.formInput, { width: '100%' }),
+                  type: 'text',
+                  inputMode: 'numeric',
+                  placeholder: '0',
+                  'aria-label': t('healthProbeIntervalLabel'),
+                  value: probeInterval,
+                  onChange: function (event) { setProbeInterval(event.target.value) },
+                })),
+              h('div', { style: Object.assign({}, S.formGroup, { flex: 1, minWidth: 160 }) },
+                h('span', { style: S.formLabel }, t('healthProbeTimeoutLabel')),
+                h('span', { style: S.formHint }, t('healthProbeTimeoutHint')),
+                h('input', {
+                  style: Object.assign({}, S.formInput, { width: '100%' }),
+                  type: 'text',
+                  inputMode: 'numeric',
+                  placeholder: '8',
+                  'aria-label': t('healthProbeTimeoutLabel'),
+                  value: probeTimeout,
+                  onChange: function (event) { setProbeTimeout(event.target.value) },
+                }))),
+            h('div', { style: S.formGroup },
+              h('span', { style: S.formLabel }, t('healthProbePromptLabel')),
+              h('span', { style: S.formHint }, t('healthProbePromptHint')),
+              h('input', {
+                style: Object.assign({}, S.formInput, { width: '100%' }),
+                type: 'text',
+                placeholder: '1',
+                'aria-label': t('healthProbePromptLabel'),
+                value: probePrompt,
+                onChange: function (event) { setProbePrompt(event.target.value) },
+              })),
+            h('div', { style: S.formGroup },
+              h('div', { style: S.probeOverrideHead },
+                h('span', { style: S.formLabel }, t('healthProbePromptsLabel')),
+                h('button', {
+                  type: 'button',
+                  style: Object.assign({}, S.manualBtn, { marginTop: 0 }),
+                  disabled: routeChoices.length === 0,
+                  onClick: function () {
+                    setPromptOverrides(function (current) {
+                      var free = routeChoices.filter(function (route) {
+                        return !current.some(function (entry) { return entry.route === route })
+                      })
+                      return current.concat([{ route: free[0] ?? '', prompt: '' }])
+                    })
+                  },
+                }, t('healthProbeOverrideAdd'))),
+              h('span', { style: S.formHint }, t('healthProbePromptsHint')),
+              promptOverrides.map(function (entry, index) {
+                return h('div', { key: entry.route + '#' + index, style: S.probeOverrideRow },
+                  h('select', {
+                    style: Object.assign({}, S.formInput, { width: 200, flex: 'none' }),
+                    'aria-label': t('healthProbeRouteLabel'),
+                    value: entry.route,
+                    onChange: function (event) { patchPromptOverride(index, { route: event.target.value }) },
+                  },
+                    h('option', { value: entry.route }, entry.route || t('healthProbeRoutePlaceholder')),
+                    routeChoices.map(function (route) {
+                      return h('option', { key: route, value: route }, route)
+                    })),
+                  h('input', {
+                    style: Object.assign({}, S.formInput, { flex: 1, minWidth: 120 }),
+                    type: 'text',
+                    placeholder: probePrompt || '1',
+                    'aria-label': t('healthProbePromptLabel'),
+                    value: entry.prompt,
+                    onChange: function (event) { patchPromptOverride(index, { prompt: event.target.value }) },
+                  }),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-router-action-btn dsh-router-action-btn-danger',
+                    style: Object.assign({}, S.actionBtn, S.actionBtnDanger, { flex: 'none' }),
+                    title: t('healthProbeOverrideRemove'),
+                    'aria-label': t('healthProbeOverrideRemove'),
+                    onClick: function () {
+                      setPromptOverrides(function (current) {
+                        var next = current.slice()
+                        next.splice(index, 1)
+                        return next
+                      })
+                    },
+                  }, h(Icon, { d: ICON_TRASH, size: 13 })))
+              }))) : null),
+      ] : null,
+
+      healthTab === 'breaker' ? [
+        // --- Tier 4: circuit breaker ---
+        h('div', { key: 'tier-breaker', style: S.healthTierCard },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } },
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 } },
+              h('span', { style: S.formLabel }, t('breakerLabel')),
+              h('span', { style: S.formHint }, t('breakerHint'))),
+            h('div', { style: { flexShrink: 0 } },
+              h(Switch, {
+                checked: breakerOn,
+                label: t('breakerLabel'),
+                onChange: function (next) { setBreakerOn(next) },
+              }))),
+          breakerOn ? h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 8, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }) },
+            h('p', { style: Object.assign({}, S.formHint, { margin: '0 0 6px 0' }) }, t('breakerSharedHint')),
+            h('span', { style: S.formLabel }, t('breakerRulesLabel')),
+            h('span', { style: S.formHint }, t('breakerRulesHint')),
+            h('div', { style: S.breakerChips },
+              BREAKER_CODE_PRESETS.map(function (preset) {
+                var exists = rules.some(function (rule) { return rule.code === preset.code && !rule.message })
+                return h('button', {
+                  key: preset.code,
+                  type: 'button',
+                  className: 'dsh-router-catalog-btn',
+                  style: Object.assign({}, S.chipBtn, exists ? { borderColor: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)' } : null),
+                  disabled: exists,
+                  title: exists ? t('breakerAlreadyAdded') : preset.desc,
+                  onClick: function () {
+                    setRules(function (current) { return current.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds, scope: 'route' }]) })
+                  },
+                }, preset.code)
+              })),
+            rules.map(function (rule, index) {
+              return h('div', { key: 'br' + index, style: S.breakerRuleRow },
+                h('input', {
+                  style: Object.assign({}, S.formInput, { flex: 1 }),
+                  type: 'text',
+                  placeholder: t('breakerCodePlaceholder'),
+                  'aria-label': t('breakerCodeLabel'),
+                  value: rule.code,
+                  onChange: function (event) { patchRule(index, { code: event.target.value }) },
+                }),
+                h('input', {
+                  style: Object.assign({}, S.formInput, { flex: 1 }),
+                  type: 'text',
+                  placeholder: t('breakerMessagePlaceholder'),
+                  'aria-label': t('breakerMessageLabel'),
+                  value: rule.message,
+                  onChange: function (event) { patchRule(index, { message: event.target.value }) },
+                }),
+                h('input', {
+                  style: Object.assign({}, S.formInput, { width: 76 }),
+                  type: 'text',
+                  inputMode: 'numeric',
+                  placeholder: '300',
+                  'aria-label': t('breakerCooldownLabel'),
+                  value: String(rule.cooldownSeconds),
+                  onChange: function (event) { patchRule(index, { cooldownSeconds: event.target.value }) },
+                }),
+                h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('breakerSecondsUnit')),
+                // A segmented control, not a native select: the modal body scrolls,
+                // and a native popup gets clipped by the scroll container — the user
+                // saw the scope options cut off. Two exclusive choices are exactly
+                // what a tablist is for, and it needs no popup at all.
+                h('div', { style: { flex: 'none' } },
+                  h(SegmentedControl, {
+                    id: 'router-breaker-scope-' + index,
+                    label: t('breakerScopeLabel'),
+                    value: rule.scope,
+                    disabled: props.disabled,
+                    options: [
+                      { value: 'route', label: t('breakerScopeRoute'), title: t('breakerScopeRouteHint') },
+                      { value: 'channel', label: t('breakerScopeChannel'), title: t('breakerScopeChannelHint') },
+                    ],
+                    onChange: function (next) { patchRule(index, { scope: next }) },
+                  })),
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-router-action-btn dsh-router-action-btn-danger',
+                  style: Object.assign({}, S.actionBtn, S.actionBtnDanger),
+                  title: t('breakerRemoveRule'),
+                  'aria-label': t('breakerRemoveRule'),
+                  onClick: function () {
+                    setRules(function (current) {
+                      var next = current.slice()
+                      next.splice(index, 1)
+                      return next
+                    })
+                  },
+                }, h(Icon, { d: ICON_TRASH, size: 13 })))
+            }),
             h('button', {
               type: 'button',
-              style: Object.assign({}, S.manualBtn, { marginTop: 0 }),
-              disabled: routeChoices.length === 0,
-              onClick: function () {
-                setPromptOverrides(function (current) {
-                  var free = routeChoices.filter(function (route) {
-                    return !current.some(function (entry) { return entry.route === route })
-                  })
-                  return current.concat([{ route: free[0] ?? '', prompt: '' }])
-                })
-              },
-            }, t('healthProbeOverrideAdd'))),
-          h('span', { style: S.formHint }, t('healthProbePromptsHint')),
-          promptOverrides.map(function (entry, index) {
-            return h('div', { key: entry.route + '#' + index, style: S.probeOverrideRow },
-              h('select', {
-                style: Object.assign({}, S.formInput, { width: 200, flex: 'none' }),
-                'aria-label': t('healthProbeRouteLabel'),
-                value: entry.route,
-                onChange: function (event) { patchPromptOverride(index, { route: event.target.value }) },
-              },
-                h('option', { value: entry.route }, entry.route || t('healthProbeRoutePlaceholder')),
-                routeChoices.map(function (route) {
-                  return h('option', { key: route, value: route }, route)
-                })),
-              h('input', {
-                style: Object.assign({}, S.formInput, { flex: 1, minWidth: 120 }),
-                type: 'text',
-                placeholder: probePrompt || '1',
-                'aria-label': t('healthProbePromptLabel'),
-                value: entry.prompt,
-                onChange: function (event) { patchPromptOverride(index, { prompt: event.target.value }) },
-              }),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-action-btn dsh-router-action-btn-danger',
-                style: Object.assign({}, S.actionBtn, S.actionBtnDanger, { flex: 'none' }),
-                title: t('healthProbeOverrideRemove'),
-                'aria-label': t('healthProbeOverrideRemove'),
-                onClick: function () {
-                  setPromptOverrides(function (current) {
-                    var next = current.slice()
-                    next.splice(index, 1)
-                    return next
-                  })
-                },
-              }, h(Icon, { d: ICON_TRASH, size: 13 })))
-          })),
-        h('div', { style: S.formGroup },
-          h('span', { style: S.formLabel }, t('healthProbeTimeoutLabel')),
-          h('span', { style: S.formHint }, t('healthProbeTimeoutHint')),
-          h('input', {
-            style: Object.assign({}, S.formInput, { width: 140 }),
-            type: 'text',
-            inputMode: 'numeric',
-            placeholder: '8',
-            'aria-label': t('healthProbeTimeoutLabel'),
-            value: probeTimeout,
-            onChange: function (event) { setProbeTimeout(event.target.value) },
-          }))),
-
-      // --- Tier 4: circuit breaker ---
-      h('div', { style: S.healthTierCard },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-            h('span', { style: S.formLabel }, t('breakerLabel')),
-            h('span', { style: S.formHint }, t('breakerHint'))),
-          h(Switch, {
-            checked: breakerOn,
-            label: t('breakerLabel'),
-            onChange: function (next) { setBreakerOn(next) },
-          })),
-        breakerOn ? h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 8, borderTop: '0.5px solid var(--dsw-alias-border-l2)' }) },
-          h('p', { style: Object.assign({}, S.formHint, { margin: '0 0 6px 0' }) }, t('breakerSharedHint')),
-          h('span', { style: S.formLabel }, t('breakerRulesLabel')),
-          h('span', { style: S.formHint }, t('breakerRulesHint')),
-          h('div', { style: S.breakerChips },
-            BREAKER_CODE_PRESETS.map(function (preset) {
-              var exists = rules.some(function (rule) { return rule.code === preset.code && !rule.message })
-              return h('button', {
-                key: preset.code,
-                type: 'button',
-                className: 'dsh-router-catalog-btn',
-                style: Object.assign({}, S.chipBtn, exists ? { borderColor: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)' } : null),
-                disabled: exists,
-                title: exists ? t('breakerAlreadyAdded') : preset.desc,
-                onClick: function () {
-                  setRules(function (current) { return current.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds, scope: 'route' }]) })
-                },
-              }, preset.code)
-            })),
-          rules.map(function (rule, index) {
-            return h('div', { key: 'br' + index, style: S.breakerRuleRow },
-              h('input', {
-                style: Object.assign({}, S.formInput, { flex: 1 }),
-                type: 'text',
-                placeholder: t('breakerCodePlaceholder'),
-                'aria-label': t('breakerCodeLabel'),
-                value: rule.code,
-                onChange: function (event) { patchRule(index, { code: event.target.value }) },
-              }),
-              h('input', {
-                style: Object.assign({}, S.formInput, { flex: 1 }),
-                type: 'text',
-                placeholder: t('breakerMessagePlaceholder'),
-                'aria-label': t('breakerMessageLabel'),
-                value: rule.message,
-                onChange: function (event) { patchRule(index, { message: event.target.value }) },
-              }),
-              h('input', {
-                style: Object.assign({}, S.formInput, { width: 76 }),
-                type: 'text',
-                inputMode: 'numeric',
-                placeholder: '300',
-                'aria-label': t('breakerCooldownLabel'),
-                value: String(rule.cooldownSeconds),
-                onChange: function (event) { patchRule(index, { cooldownSeconds: event.target.value }) },
-              }),
-              h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('breakerSecondsUnit')),
-              // A segmented control, not a native select: the modal body scrolls,
-              // and a native popup gets clipped by the scroll container — the user
-              // saw the scope options cut off. Two exclusive choices are exactly
-              // what a tablist is for, and it needs no popup at all.
-              h('div', { style: { flex: 'none' } },
-                h(SegmentedControl, {
-                  id: 'router-breaker-scope-' + index,
-                  label: t('breakerScopeLabel'),
-                  value: rule.scope,
-                  disabled: props.disabled,
-                  options: [
-                    { value: 'route', label: t('breakerScopeRoute'), title: t('breakerScopeRouteHint') },
-                    { value: 'channel', label: t('breakerScopeChannel'), title: t('breakerScopeChannelHint') },
-                  ],
-                  onChange: function (next) { patchRule(index, { scope: next }) },
-                })),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-action-btn dsh-router-action-btn-danger',
-                style: Object.assign({}, S.actionBtn, S.actionBtnDanger),
-                title: t('breakerRemoveRule'),
-                'aria-label': t('breakerRemoveRule'),
-                onClick: function () {
-                  setRules(function (current) {
-                    var next = current.slice()
-                    next.splice(index, 1)
-                    return next
-                  })
-                },
-              }, h(Icon, { d: ICON_TRASH, size: 13 })))
-          }),
-          h('button', {
-            type: 'button',
-            style: Object.assign({}, S.manualBtn, { marginTop: 8 }),
-            onClick: function () { setRules(function (current) { return current.concat([{ code: '', message: '', cooldownSeconds: 300, scope: 'route' }]) }) },
-          }, t('breakerAddRule')),
-          hasEmptyRule ? h('span', { style: S.formHint, role: 'alert' }, t('problemBreakerEmptyRule')) : null) : null))
+              style: Object.assign({}, S.manualBtn, { marginTop: 8 }),
+              onClick: function () { setRules(function (current) { return current.concat([{ code: '', message: '', cooldownSeconds: 300, scope: 'route' }]) }) },
+            }, t('breakerAddRule')),
+            hasEmptyRule ? h('span', { style: S.formHint, role: 'alert' }, t('problemBreakerEmptyRule')) : null) : null),
+      ] : null)
   )
 }
 

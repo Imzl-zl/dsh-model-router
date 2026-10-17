@@ -153,6 +153,7 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onMaxAttempts: function (profileId, index, value, isDefault) { controller.setMaxAttempts(profileId, index, value, isDefault) },
     onNeeds: function (profileId, index, patch, isDefault) { controller.setNeeds(profileId, index, patch, isDefault) },
     onMove: function (profileId, index, direction, isDefault) { controller.moveCandidate(profileId, index, direction, isDefault) },
+    onReorder: function (profileId, fromIndex, toIndex, isDefault) { controller.reorderCandidates(profileId, fromIndex, toIndex, isDefault) },
     onRemove: function (profileId, index, isDefault) { controller.removeCandidate(profileId, index, isDefault) },
     onMaxTotal: function (profileId, value, isDefault) { controller.setMaxTotalAttempts(profileId, value, isDefault) },
     onStickyTurns: function (profileId, value, isDefault) { controller.setStickyTurns(profileId, value, isDefault) },

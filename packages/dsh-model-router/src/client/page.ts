@@ -258,7 +258,7 @@ export function RouterPage(props) {
                                     title: t('healthStatus' + worstCandStatus[0].toUpperCase() + worstCandStatus.slice(1)),
                                   })
                                 : null,
-                              h('span', { style: S.navCandidateBadge }, fill(t('candidateCountTag'), { n: profile.candidates.length })))),
+                              h('span', { style: S.navCandidateBadge }, fill(t('candidateCountTag'), { n: Math.max(0, profile.candidates.length - 1) })))),
                           h('div', { style: S.navItemTagsRow },
                             h('span', { style: S.navProviderTag }, profile.when.provider),
                             hasImages ? h('span', { style: S.navImageTag, title: t('needImagesTitle') }, '🖼️') : null))))
@@ -345,6 +345,7 @@ export function RouterPage(props) {
                   onWeight: props.onWeight,
                   onMaxAttempts: props.onMaxAttempts,
                   onMove: props.onMove,
+                  onReorder: props.onReorder,
                   onRemove: props.onRemove,
                   onMaxTotal: props.onMaxTotal,
                   onStickyTurns: props.onStickyTurns,
