@@ -942,16 +942,19 @@ test('every plugin dialog is capped to the viewport and scrolls inside itself', 
   }
   // One shared rule block bounds both: assert it once, on the block itself.
   const dialogBlock = css.slice(
-    css.indexOf('.dsh-router-settings-modal'),
-    css.indexOf('.dsh-router-settings-modal [class*="content"]'),
+    css.indexOf('.dsh-router-settings-modal,'),
+    css.indexOf('.dsh-router-modal-content {'),
   )
   assert.match(dialogBlock, /max-height:\s*84vh\s*!important/,
     'the dialog block must cap height against the viewport, not its content')
   assert.match(dialogBlock, /overflow:\s*hidden\s*!important/,
     'the dialog block must clip so the body is the only scroller')
-  // The body rule is a separate block that follows the content rule.
-  assert.match(css, /\[class\*="body"\][^}]*\{[^}]*overflow-y:\s*auto\s*!important/,
-    'the body must scroll, which is what keeps the header and footer on screen')
+  // DSH's scroll region (the content wrapper's last child) is reached structurally
+  // from the contentClassName hook — no hashed class name is guessed anywhere.
+  assert.match(css, /\.dsh-router-modal-content > div:last-child\s*\{[^}]*overflow-y:\s*auto\s*!important/,
+    'the scroll region must scroll, which is what keeps the header and footer on screen')
+  assert.ok(components.includes("contentClassName: 'dsh-router-modal-content'"),
+    'the modal must hand DSH its own content hook, or the height chain has no first link')
 })
 
 // ---- breaker rule edits must not read the render-time closure ----
@@ -1131,13 +1134,53 @@ test('the browser half registers exactly one surface: the sidebar dialog', async
   }
 })
 
-// 高度只能来自容器链：任何 `100vh` 常数都是把某个载体的 chrome 高度写死，换一个
-// 载体就错（实测弹窗内两条滚动条）。滚动区由 flex + min-height:0 串起来。
-test('no viewport arithmetic sizes the workbench; the flex chain does', async () => {
+// 高度只能来自容器链，且不许猜 DSH 的类名。两条硬不变量：
+// ① 内容链里不允许任何 vh 算术——`calc(84vh - 70px)` 曾在 settings 弹窗上，它的 70px
+//    既不是 DSH 真实头高（62px）也没算 footer 与 gap，内容盒一变滚动区就错尺寸。vh
+//    常数只允许出现在"载体本身"的 dialog 根上（"载体不超过视口 84%"是合法常数）。
+// ② 注入 CSS 与组件不许出现 `[class*=`——那是猜 DSH 的 CSS-module 哈希类名，失败模式
+//    是静默的（DSH 改名后选择器静默失配）。够到 DSH 的节点只能从插件自己的类/结构出发
+//    （Modal.tsx:64 的 clsx(css.dialog, className)、:73 的 contentClassName、:83 的
+//    body 是 content 的最后一个孩子）。
+test('the modal height chain derives from the dialog root, and no DSH class name is guessed', async () => {
   const styles = sourceOf('styles.ts')
-  const vhConstants = styles.match(/calc\(100vh[^)]*\)/g) ?? []
-  assert.deepEqual(vhConstants, [],
-    `layout must come from the flex chain, not the viewport: found ${vhConstants.join(', ')}`)
+  // 只读注入的那段 CSS（S 对象是 JS，不是规则），且注释里合法地提到历史常量与
+  // DSH 的类名形状，所以再剥掉注释。
+  const css = styles
+    .slice(styles.indexOf('var ROUTER_CSS'), styles.indexOf('function ensureStyles'))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+  // ① vh 算术：一条也不许有（旧守卫只匹配 calc(100vh…)，84vh/88vh 全漏）。
+  const vhMath = css.match(/calc\([^)]*vh/g) ?? []
+  assert.deepEqual(vhMath, [],
+    `viewport arithmetic must not size the content chain: ${vhMath.join(', ')}`)
+  // vh 常数只属于 dialog 根：把注入 CSS 拆成规则逐条查。
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  for (const [, selector, body] of rules) {
+    if (!/\d+vh/.test(body)) continue
+    assert.ok(/\.dsh-router-(settings|candidate)-modal\b|\.dsh-router-modal-dialog\b/.test(selector),
+      `a vh constant may only size the dialog root itself, found in: ${selector.trim()}`)
+  }
+  // ② 类名猜测：注入 CSS 一条也不许有。
+  const guesses = css.match(/\[class\*=/g) ?? []
+  assert.deepEqual(guesses, [],
+    `DSH's hashed module class names must not be guessed: ${guesses.length} occurrence(s)`)
+  // contentClassName 这条 DSH 自己的钩子必须真的接上，且给出链上第一环。
+  assert.ok(/\.dsh-router-modal-content\s*\{[\s\S]*?flex:\s*1\s*!important;[\s\S]*?min-height:\s*0\s*!important;/.test(css),
+    'the contentClassName rule must make DSH\'s content wrapper the first shrinkable link')
+  assert.ok(/\.dsh-router-modal-content > div:last-child\s*\{[\s\S]*?flex:\s*1\s*!important;[\s\S]*?min-height:\s*0\s*!important;[\s\S]*?overflow-y:\s*auto\s*!important;/.test(css),
+    'DSH\'s scroll region (the content wrapper\'s last child) must be reached structurally, with min-height:0 + overflow')
+  const modals = sourceOf('modals.ts')
+  for (const carrier of ['dsh-router-settings-modal', 'dsh-router-candidate-modal']) {
+    assert.ok(modals.includes(`contentClassName: 'dsh-router-modal-content'`),
+      `every styled modal must pass contentClassName (${carrier})`)
+  }
+  // 健康弹窗的滚动容器是插件自己的元素，effect 读自己的 id——不再 closest 猜类名。
+  assert.ok(modals.includes("getElementById('dsh-router-health-modal-body')"),
+    'the scroll-to-bottom effect must target this plugin\'s own element')
+  assert.ok(!modals.includes("closest('[class*="),
+    'the effect must not hunt for a DSH class — a rename used to silence it')
+  assert.ok(/flex: 1, minHeight: 0, overflowY: 'auto'/.test(modals),
+    'the health modal\'s own div must be the scroll container (flex:1 + min-height:0 + overflow-y:auto)')
   // 取出 S 对象里某个键的整块（按缩进配平到块尾），别用固定字数窗口——注释一长就漏。
   const blockOf = (key) => {
     const at = styles.indexOf(`  ${key}: {`)
@@ -1160,6 +1203,14 @@ test('no viewport arithmetic sizes the workbench; the flex chain does', async ()
   assert.ok(/maxHeight:\s*'100%'/.test(sidebar), 'masterSidebar must cap at the row so a long list scrolls inside it')
   const list = blockOf('masterList')
   assert.ok(/flex:\s*'0 1 auto'/.test(list), 'masterList must be content-height — flex:1 here pushed the health entry 468px down')
+  // M20：自建浮层的 z-index 提成命名常量，且注释点名 DSH 的先例（Modal 1000 之上那层
+  // 是 1100，DSH 自己有 9 处同值先例；dockkit 明写没有 z-index token 量表可抄）。
+  assert.ok(/const Z_OVERLAY = 1100/.test(styles) && /const Z_PANEL = 1101/.test(styles),
+    'the drawer\'s z-index pair must be named constants, not bare numbers')
+  assert.ok(/zIndex: Z_OVERLAY/.test(styles) && /zIndex: Z_PANEL/.test(styles),
+    'both layers must read the constants')
+  assert.ok(/Modal\.module\.css:10/.test(styles),
+    'the constants must cite DSH\'s Modal z-index anchor, so the value is traceable rather than magic')
 })
 
 // 语义色只有一个来源：`healthToneBadge`/`healthToneStyle` 读同一批

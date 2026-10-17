@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  .dialog {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 720px;
+    padding: 0 0 20px;
+    overflow: hidden;
+    border-radius: 16px;
+    background: #1c1f26;
+    max-height: 84vh;
+  }
+  .content { display: flex; flex-direction: column; width: 100%; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding: 22px 14px 12px 24px; height: 62px; box-sizing: border-box; }
+  .body { display: flex; flex-direction: column; min-width: 0; margin-top: 20px; padding: 0 24px; }
+  .footer { display: flex; align-items: center; justify-content: flex-end; padding: 0 24px; height: 36px; }
+  .scroller { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  .row { height: 40px; background: #2b3040; flex: none; }
+  .label { color: #8f9; font: 12px monospace; padding: 4px 24px; }
+  .probe { position: fixed; left: 8px; top: 8px; font: 12px monospace; color: #fff; background: #000c; padding: 6px; z-index: 9999; white-space: pre; max-width: 90vw; }
+
+  /* V1: the decision's literal chain — contentClassName only */
+  .v1 .content { flex: 1; min-height: 0; }
+
+  /* V2: + a structural rule reaching DSH's body as the last child of the plugin's content class */
+  .v2 .content { flex: 1; min-height: 0; }
+  .v2 .content > div:last-child { flex: 1; min-height: 0; }
+
+  /* V3: + min-height:0 on every child of the plugin's content class, no flex:1 */
+  .v3 .content { flex: 1; min-height: 0; }
+  .v3 .content > * { min-height: 0; }
+
+  /* V4 (SHIPPED): V2's structural rule + the plugin's own div as its own scroller
+     (what the health modal now does). Expect exactly one scrollbar: the inner div. */
+  .v4 .content { flex: 1; min-height: 0; }
+  .v4 .content > div:last-child { flex: 1; min-height: 0; overflow-y: auto; }
+</style>
+</head>
+<body>
+<div class="dialog v1" id="v1-dialog">
+  <div class="content" id="v1-content">
+    <div class="header">V1 header</div>
+    <div class="body" id="v1-body"><div class="scroller" id="v1-scroller">
+      <div class="row">r1</div><div class="row">r2</div><div class="row">r3</div><div class="row">r4</div>
+      <div class="row">r5</div><div class="row">r6</div><div class="row">r7</div><div class="row">r8</div>
+      <div class="row">r9</div><div class="row">r10</div><div class="row">r11</div><div class="row">r12</div>
+      <div class="row">r13</div><div class="row">r14</div><div class="row">r15</div><div class="row">r16</div>
+      <div class="row">r17</div><div class="row">r18</div><div class="row">r19</div><div class="row">r20</div>
+    </div></div>
+  </div>
+  <div class="footer">V1 footer</div>
+</div>
+<div class="label">—— V2 ——</div>
+<div class="dialog v2" id="v2-dialog">
+  <div class="content" id="v2-content">
+    <div class="header">V2 header</div>
+    <div class="body" id="v2-body"><div class="scroller" id="v2-scroller">
+      <div class="row">r1</div><div class="row">r2</div><div class="row">r3</div><div class="row">r4</div>
+      <div class="row">r5</div><div class="row">r6</div><div class="row">r7</div><div class="row">r8</div>
+      <div class="row">r9</div><div class="row">r10</div><div class="row">r11</div><div class="row">r12</div>
+      <div class="row">r13</div><div class="row">r14</div><div class="row">r15</div><div class="row">r16</div>
+      <div class="row">r17</div><div class="row">r18</div><div class="row">r19</div><div class="row">r20</div>
+    </div></div>
+  </div>
+  <div class="footer">V2 footer</div>
+</div>
+<div class="label">—— V3 ——</div>
+<div class="dialog v3" id="v3-dialog">
+  <div class="content" id="v3-content">
+    <div class="header">V3 header</div>
+    <div class="body" id="v3-body"><div class="scroller" id="v3-scroller">
+      <div class="row">r1</div><div class="row">r2</div><div class="row">r3</div><div class="row">r4</div>
+      <div class="row">r5</div><div class="row">r6</div><div class="row">r7</div><div class="row">r8</div>
+      <div class="row">r9</div><div class="row">r10</div><div class="row">r11</div><div class="row">r12</div>
+      <div class="row">r13</div><div class="row">r14</div><div class="row">r15</div><div class="row">r16</div>
+      <div class="row">r17</div><div class="row">r18</div><div class="row">r19</div><div class="row">r20</div>
+    </div></div>
+  </div>
+  <div class="footer">V3 footer</div>
+</div>
+<div class="probe" id="probe">measuring…</div>
+<div class="label">—— V4 (shipped: body + plugin's own div both scrollers) ——</div>
+<div class="dialog v4" id="v4-dialog">
+  <div class="content" id="v4-content">
+    <div class="header">V4 header</div>
+    <div class="body" id="v4-body"><div class="scroller" id="v4-scroller">
+      <div class="row">r1</div><div class="row">r2</div><div class="row">r3</div><div class="row">r4</div>
+      <div class="row">r5</div><div class="row">r6</div><div class="row">r7</div><div class="row">r8</div>
+      <div class="row">r9</div><div class="row">r10</div><div class="row">r11</div><div class="row">r12</div>
+      <div class="row">r13</div><div class="row">r14</div><div class="row">r15</div><div class="row">r16</div>
+      <div class="row">r17</div><div class="row">r18</div><div class="row">r19</div><div class="row">r20</div>
+    </div></div>
+  </div>
+  <div class="footer">V4 footer</div>
+</div>
+<script>
+  const r = (el) => Math.round(el.getBoundingClientRect().height)
+  const report = (v) => {
+    const scroller = document.getElementById(v + '-scroller')
+    const body = document.getElementById(v + '-body')
+    const content = document.getElementById(v + '-content')
+    const dialog = document.getElementById(v + '-dialog')
+    return {
+      dialog: r(dialog), content: r(content), body: r(body), scroller: r(scroller),
+      scrolls: scroller.scrollHeight > scroller.clientHeight,
+      bodyFitsContent: body.getBoundingClientRect().bottom <= content.getBoundingClientRect().bottom + 1,
+      scrollerFitsBody: scroller.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom + 1,
+      contentFitsDialog: content.getBoundingClientRect().bottom <= dialog.getBoundingClientRect().bottom + 1,
+    }
+  }
+  document.getElementById('probe').textContent = JSON.stringify({ v1: report('v1'), v2: report('v2'), v3: report('v3'), v4: report('v4') }, null, 1)
+</script>
+</body>
+</html>

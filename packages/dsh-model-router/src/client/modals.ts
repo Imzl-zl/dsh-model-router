@@ -48,11 +48,12 @@ export function HealthSettingsModal(props) {
 
   // A newly added override row lands below the fold (the modal body is capped by
   // the shell), so bring it into view — otherwise the user clicks add, sees
-  // nothing change, and concludes the control is dead.
+  // nothing change, and concludes the control is dead. The scroller is this
+  // plugin's own element (styled below), not a DSH class found by guessing: a
+  // rename upstream used to leave this scrolling nothing, silently.
   useEffect(function () {
     if (promptOverrides.length === 0) return
-    var body = document.getElementById('dsh-router-health-modal-body')
-    var scroller = (body ? body.closest('[class*="body"]') : null) || body
+    var scroller = document.getElementById('dsh-router-health-modal-body')
     if (scroller && typeof scroller.scrollTo === 'function') {
       scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
     }
@@ -94,6 +95,7 @@ export function HealthSettingsModal(props) {
   return h(Modal, {
     open: true,
     className: 'dsh-router-settings-modal',
+    contentClassName: 'dsh-router-modal-content',
     title: t('healthModalTitle'),
     closeLabel: t('close'),
     onClose: props.onClose,
@@ -127,8 +129,14 @@ export function HealthSettingsModal(props) {
       }, t('applyChanges'))),
   },
     // Comfortable width that fills the modal body without horizontal overflow.
-    // The shell's own body scroller owns overflow-y so no double scrollbars exist.
-    h('div', { id: 'dsh-router-health-modal-body', style: { width: '100%', display: 'flex', flexDirection: 'column', gap: 12, boxSizing: 'border-box' } },
+    // This div IS the scroll container: flex:1 + min-height:0 hands it the height
+    // the dialog root's 84vh bound leaves after the header and footer, and
+    // overflow-y:auto makes it scroll — the chain DSH's own Modal exposes through
+    // `contentClassName` (see styles.ts), so no DSH class name is guessed anywhere.
+    h('div', {
+      id: 'dsh-router-health-modal-body',
+      style: { width: '100%', display: 'flex', flexDirection: 'column', gap: 12, boxSizing: 'border-box', flex: 1, minHeight: 0, overflowY: 'auto' },
+    },
       h('div', { style: { marginBottom: 4 } },
         h(SegmentedTabs, {
           items: [
@@ -501,6 +509,7 @@ export function AddCandidateModal(props) {
   return h(Modal, {
     open: true,
     className: 'dsh-router-candidate-modal',
+    contentClassName: 'dsh-router-modal-content',
     title: t('addCandidateModalTitle'),
     closeLabel: t('close'),
     onClose: props.onClose,

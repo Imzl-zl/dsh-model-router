@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* DSH Modal.module.css, verbatim shape (z-index/mask omitted) */
+  .dialog {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 720px;
+    padding: 0 0 20px;
+    overflow: hidden;
+    border-radius: 16px;
+    background: #1c1f26;
+    /* the plugin's one vh constant */
+    max-height: 84vh;
+  }
+  .content { display: flex; flex-direction: column; width: 100%; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding: 22px 14px 12px 24px; height: 62px; box-sizing: border-box; }
+  .body { display: flex; flex-direction: column; min-width: 0; margin-top: 20px; padding: 0 24px; }
+  .footer { display: flex; align-items: center; justify-content: flex-end; padding: 0 24px; height: 36px; }
+
+  /* THE FIX UNDER TEST: contentClassName on .content, plugin's own div as the scroll container */
+  .dsh-router-modal-content { flex: 1; min-height: 0; }
+  #dsh-router-health-modal-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+
+  .row { height: 40px; background: #2b3040; flex: none; }
+  .probe { position: fixed; left: 8px; top: 8px; font: 12px monospace; color: #fff; background: #000c; padding: 6px; z-index: 9999; white-space: pre; }
+</style>
+</head>
+<body>
+<div class="dialog" id="dialog">
+  <div class="content dsh-router-modal-content" id="content">
+    <div class="header" id="header">header</div>
+    <div class="body" id="body">
+      <div id="dsh-router-health-modal-body">
+        <div class="row">row 1</div><div class="row">row 2</div><div class="row">row 3</div>
+        <div class="row">row 4</div><div class="row">row 5</div><div class="row">row 6</div>
+        <div class="row">row 7</div><div class="row">row 8</div><div class="row">row 9</div>
+        <div class="row">row 10</div><div class="row">row 11</div><div class="row">row 12</div>
+        <div class="row">row 13</div><div class="row">row 14</div><div class="row">row 15</div>
+        <div class="row">row 16</div><div class="row">row 17</div><div class="row">row 18</div>
+        <div class="row">row 19</div><div class="row">row 20</div><div class="row">row 21</div>
+      </div>
+    </div>
+  </div>
+  <div class="footer" id="footer">footer</div>
+</div>
+<div class="probe" id="probe">measuring…</div>
+<script>
+  const r = (id) => { const e = document.getElementById(id); const b = e.getBoundingClientRect(); return { h: Math.round(b.height), top: Math.round(b.top), bottom: Math.round(b.bottom) } }
+  const scroller = document.getElementById('dsh-router-health-modal-body')
+  const out = {
+    viewport: window.innerHeight,
+    dialog: r('dialog'),
+    content: r('content'),
+    body: r('body'),
+    scroller: r('dsh-router-health-modal-body'),
+    scrollerScrolls: scroller.scrollHeight > scroller.clientHeight,
+    scrollerScrollHeight: scroller.scrollHeight,
+    scrollerClientHeight: scroller.clientHeight,
+    bodyOverflowsContent: r('body').bottom > r('content').bottom + 1,
+    contentOverflowsDialog: r('content').bottom > r('dialog').bottom + 1,
+  }
+  document.getElementById('probe').textContent = JSON.stringify(out, null, 1)
+</script>
+</body>
+</html>

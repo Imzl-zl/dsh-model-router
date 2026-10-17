@@ -4,6 +4,9 @@
  * Convention: inline styles carry the base look, injected CSS carries only
  * hover/active/focus pseudo states — a base rule with !important would beat a
  * same-name inline state variant (see .agents/notes/implemented/2026-10-15-ui-ux-design-overhaul-and-copy-cleanup.md).
+ *
+ * Note: 弹窗高度链为何用结构选择器够到 DSH 的滚动区（定案的原始链实测不工作）——
+ * 见 .agents/notes/implemented/2026-10-17-modal-height-chain.md
  */
 
 
@@ -207,9 +210,17 @@ export var ROUTER_CSS = [
   '  background: var(--dsw-alias-bg-layer-1) !important;',
   '  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55) !important;',
   '}',
-  '/* Settings & Candidate Modals: bounded height, comfortable width, smooth internal scroll */',
-  'div[class*="dialog"].dsh-router-settings-modal,',
-  'div[class*="dialog"].dsh-router-candidate-modal,',
+  '/* Settings & Candidate Modals: bounded height, comfortable width, internal scroll.',
+  '   Exactly ONE vh constant lives in this sheet per carrier — the dialog root itself,',
+  '   "the carrier is at most 84% of the viewport". Everything below derives its height',
+  '   from that bound through flex + min-height:0. A viewport-minus-header calc stood',
+  '   here until 2026-10-17: its 70px matched neither DSH real header (62px —',
+  '   Modal.module.css:71-77, padding 22 + line 28 + 12) nor the dialog 20px gap nor the',
+  '   footer prop, so every content-box change silently mis-sized the scroll region. */',
+  '/* DSH puts the caller className on the SAME element as its own css.dialog',
+  '   (Modal.tsx:64 clsx(css.dialog, className)), so one selector per carrier is enough;',
+  '   the four hashed-dialog variants were one rule written four times, each guessing at',
+  '   DSH module class name. */',
   '.dsh-router-settings-modal,',
   '.dsh-router-candidate-modal {',
   '  width: 720px !important;',
@@ -221,44 +232,46 @@ export var ROUTER_CSS = [
   '  overflow: hidden !important;',
   '  padding: 0 0 20px !important;',
   '}',
-  'div[class*="dialog"].dsh-router-settings-modal [class*="content"],',
-  'div[class*="dialog"].dsh-router-candidate-modal [class*="content"],',
-  '.dsh-router-settings-modal [class*="content"],',
-  '.dsh-router-candidate-modal [class*="content"] {',
-  '  display: flex !important;',
-  '  flex-direction: column !important;',
-  '  max-height: calc(84vh - 70px) !important;',
+  '/* `contentClassName` (Modal.tsx:73) is DSH own hook for the content region: it lands',
+  '   on css.content, and this plugin makes it the first shrinkable link of the chain. */',
+  '.dsh-router-modal-content {',
+  '  flex: 1 !important;',
   '  min-height: 0 !important;',
-  '  overflow: hidden !important;',
   '}',
-  'div[class*="dialog"].dsh-router-settings-modal [class*="body"],',
-  'div[class*="dialog"].dsh-router-candidate-modal [class*="body"],',
-  '.dsh-router-settings-modal [class*="body"],',
-  '.dsh-router-candidate-modal [class*="body"] {',
+  '/* DSH scroll region is the LAST child of that wrapper (Modal.tsx:83 renders header,',
+  '   optional description, then body inside it). Reaching it STRUCTURALLY from this',
+  '   plugin own class — instead of by its hashed body class name — is what makes',
+  '   the height chain survive a DSH rename. Measured in spike/i7-height-chain-variants.html:',
+  '   without this link the body keeps its content height and overflows the content',
+  '   wrapper, so nothing scrolls and the dialog clips. */',
+  '.dsh-router-modal-content > div:last-child {',
+  '  flex: 1 !important;',
+  '  min-height: 0 !important;',
   '  overflow-y: auto !important;',
-  '  max-height: 100% !important;',
-  '  margin-top: 8px !important;',
-  '  padding: 0 24px 14px !important;',
-  '  display: flex !important;',
-  '  flex-direction: column !important;',
-  '  gap: 10px !important;',
   '}',
-  'div[class*="dialog"].dsh-router-settings-modal [class*="body"]::-webkit-scrollbar,',
-  'div[class*="dialog"].dsh-router-candidate-modal [class*="body"]::-webkit-scrollbar,',
-  '.dsh-router-settings-modal [class*="body"]::-webkit-scrollbar,',
-  '.dsh-router-candidate-modal [class*="body"]::-webkit-scrollbar {',
+  '.dsh-router-modal-content > div:last-child::-webkit-scrollbar {',
   '  width: 6px !important;',
   '}',
-  'div[class*="dialog"].dsh-router-settings-modal [class*="body"]::-webkit-scrollbar-thumb,',
-  'div[class*="dialog"].dsh-router-candidate-modal [class*="body"]::-webkit-scrollbar-thumb,',
-  '.dsh-router-settings-modal [class*="body"]::-webkit-scrollbar-thumb,',
-  '.dsh-router-candidate-modal [class*="body"]::-webkit-scrollbar-thumb {',
+  '.dsh-router-modal-content > div:last-child::-webkit-scrollbar-thumb {',
   '  background: var(--dsw-alias-border-l4, rgba(255, 255, 255, 0.2)) !important;',
   '  border-radius: 4px !important;',
   '}',
-  'div[class*="dialog"].dsh-router-settings-modal [class*="body"]::-webkit-scrollbar-thumb:hover,',
-  '.dsh-router-settings-modal [class*="body"]::-webkit-scrollbar-thumb:hover {',
-  '  background: var(--dsh-router-accent, #4A65E8) !important;',
+  '.dsh-router-modal-content > div:last-child::-webkit-scrollbar-thumb:hover {',
+  '  background: var(--dsh-router-accent) !important;',
+  '}',
+  '/* The health modal owns its scroll container outright, so its scroll-to-bottom effect',
+  '   targets an element of ours (modals.ts reads this id) instead of hunting for a DSH',
+  '   class. The base look rides inline per the stylesheet convention; only the scrollbar',
+  '   pseudo lives here. */',
+  '#dsh-router-health-modal-body::-webkit-scrollbar {',
+  '  width: 6px !important;',
+  '}',
+  '#dsh-router-health-modal-body::-webkit-scrollbar-thumb {',
+  '  background: var(--dsw-alias-border-l4, rgba(255, 255, 255, 0.2)) !important;',
+  '  border-radius: 4px !important;',
+  '}',
+  '#dsh-router-health-modal-body::-webkit-scrollbar-thumb:hover {',
+  '  background: var(--dsh-router-accent) !important;',
   '}',
   '/* Workbench Master-Detail Layout */',
   '.dsh-router-nav-item:hover:not(.active) {',
@@ -342,6 +355,25 @@ export function ensureStyles() {
     if (tag && tag.parentNode) tag.parentNode.removeChild(tag)
   }
 }
+
+
+/**
+ * z-index for this plugin's own body-portal layers (the failover drawer's
+ * overlay/panel pair).
+ *
+ * The VALUES are not invented: DSH has no z-index token scale to draw from —
+ * `ui-dockkit/src/components/dockkit.module.css:544` says so outright ("No
+ * z-index token layer exists to draw from") — and 1100 is DSH's own established
+ * "one layer above Modal" value, where Modal is 1000
+ * (`ui-primitives/src/Modal.module.css:10`). Nine in-tree precedents use exactly
+ * 1100 for that meaning: Tooltip.module.css:25, Toast.module.css:12,
+ * Menu.module.css:45, ContextMeter.module.css:48, ModelSelect.module.css:93,
+ * PluginManagerPage.module.css:786, PickerPopover.module.css:8,
+ * TaskMenu.module.css:46, stat-dialog.module.css:12. The panel sits one step
+ * above its own overlay, the way DSH's own pairs do.
+ */
+const Z_OVERLAY = 1100
+const Z_PANEL = 1101
 
 
 export var S = {
@@ -1256,8 +1288,8 @@ export var S = {
   needControlRow: { width: '100%', display: 'flex', alignItems: 'center' },
   needHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.45 },
   needInput: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-sm, 6px)', color: 'var(--dsw-alias-label-primary)', padding: '5px 10px', fontSize: 13, height: 32, outline: 'none', width: '100%', fontFamily: 'inherit' },
-  drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: 1100 },
-  drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, maxWidth: '92vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 36px rgba(0,0,0,0.5)', zIndex: 1101, display: 'flex', flexDirection: 'column' },
+  drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: Z_OVERLAY },
+  drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, maxWidth: '92vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 36px rgba(0,0,0,0.5)', zIndex: Z_PANEL, display: 'flex', flexDirection: 'column' },
   drawerHeader: { padding: '18px 24px', borderBottom: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
   drawerBody: { padding: '16px 24px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 },
   drawerHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', margin: 0 },
