@@ -115,12 +115,21 @@ export function RouterPage(props) {
   // wrapper, so an upstream rename fails loudly here instead of silently
   // restoring a second save button.
   //
+  // Two conditions, two answers: a wrapper that is ABSENT means DSH rendered no
+  // children — the namespace is not served yet (SettingsForm.tsx:55 returns the
+  // unavailable line and nothing else), which is the loading frame a user can
+  // open this dialog in, so there is nothing to suppress and nothing is wrong.
+  // Only a wrapper that EXISTS with no footer sibling is the seam moving.
+  //
   // Note: Tab 圈禁根因与修法 —— 见
   // .agents/notes/implemented/2026-10-16-single-surface-dialog-and-tone-system.md
+  // Note: 为何"wrapper 不在"与"footer 兄弟不在"是两种回答 —— 见
+  // .agents/notes/implemented/2026-10-17-mount-time-gates.md
   var formBodyRef = useRef(null)
   useEffect(function () {
     var wrap = formBodyRef.current
-    var footer = wrap ? wrap.nextElementSibling : null
+    if (!wrap) return
+    var footer = wrap.nextElementSibling
     if (!footer) {
       throw new Error('router: the SettingsForm footer is no longer the sibling after .dsh-router-form-body — the suppression seam moved')
     }

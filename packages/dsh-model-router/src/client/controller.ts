@@ -72,9 +72,13 @@ export function createController(ctx, scope, t) {
   }
   var saving = false
   var failed = false
-  // 本插件的"面"在位计数：插件页与侧栏弹窗可以同时挂着（弹窗从插件页打开），所以是
-  // 计数不是布尔。原生快捷键命令靠它判断"现在该不该由我接这个键"——DSH 的快捷键
-  // 上下文只告诉它有没有模态、是哪個模态，不告诉它哪个设置页在前台。
+  // 本插件"面"的在位计数。唯一的持有者是侧栏弹窗里的工作台（page.ts 的挂载
+  // 副作用）——侧栏入口按钮本身不计数：它常驻，一计数 surfaceActive() 就恒真，
+  // Ctrl+S 会被全局认领（regions 覆盖输入框与终端），而只读时 save() 只是空转、
+  // 并不阻止认领。仍然是计数不是布尔：React 的 effect 成对到来（严格模式下
+  // 挂-卸-挂），一次不配对的释放不该把门永久焊死。
+  // 原生快捷键命令靠它判断"现在该不该由我接这个键"——DSH 的快捷键上下文只告诉
+  // 它有没有模态、是哪個模态，不告诉它哪个设置面在前台。
   var surfaceCount = 0
 
   function project() {
@@ -334,11 +338,11 @@ export function createController(ctx, scope, t) {
 
   var controller = {
     store: store,
-    /** One of this plugin's surfaces (settings page or quick modal) mounted. */
+    /** The dialog's workbench mounted. */
     retainSurface: function () { surfaceCount += 1 },
-    /** That surface unmounted. */
+    /** That workbench unmounted. */
     releaseSurface: function () { if (surfaceCount > 0) surfaceCount -= 1 },
-    /** Whether a surface of ours is mounted at all — the shortcut command's gate. */
+    /** Whether our workbench is mounted at all — the shortcut command's gate. */
     surfaceActive: function () { return surfaceCount > 0 },
     setEnabled: function (value) { draft.enabled = value; publish() },
     setActive: function (id) {

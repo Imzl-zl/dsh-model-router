@@ -1,6 +1,6 @@
 /** The sidebar entry button registered into sidebar.footer.action. */
 
-import { Fragment, useState, useEffect } from 'react'
+import { Fragment, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { healthToneBadge } from './format.ts'
@@ -18,13 +18,6 @@ export function ModelRouterFooterAction(props) {
   var enabled = state.draft.enabled
   var dirty = state.dirty
   var profileCount = state.draft.profiles.length
-
-  // 原生快捷键的作用域计数：侧栏按钮常驻，弹窗开着时本面仍在位（弹窗从这一面打开）。
-  // 与插件页那一面共同决定"现在该不该由 model-router.save 接键"。
-  useEffect(function () {
-    props.retainSurface()
-    return function () { props.releaseSurface() }
-  }, [])
 
   var buttonProps = {
     type: 'button',

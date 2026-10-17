@@ -93,18 +93,12 @@ function loadClient() {
   let captured = null
   globalThis.window = { __ModuleLoader__: { load: (mod) => { captured = mod } } }
   new Function(source)()
-  const react = {
-    createElement: () => null,
-    useState: () => [undefined, () => {}],
-    useEffect: () => {},
-    Fragment: 'Fragment',
-  }
   const require_ = (name) => {
     if (name === 'react') return react
     if (name === 'react-dom') return { createPortal: () => null }
     if (name === '@deepseek-ai/dsh-client-ui-primitives') {
       return {
-        SettingsForm: 'SettingsForm', Switch: 'Switch', Button: 'Button', Tag: 'Tag',
+        SettingsForm: SettingsFormStub, Switch: 'Switch', Button: 'Button', Tag: 'Tag',
         SegmentedTabs: 'SegmentedTabs', Modal: 'Modal', RiskConfirmation: 'RiskConfirmation',
       }
     }
@@ -112,6 +106,107 @@ function loadClient() {
     throw new Error(`unexpected require: ${name}`)
   }
   return captured.factory(require_)
+}
+
+/**
+ * A React stand-in that builds real element objects and collects effects, for
+ * the two tests that mount components. `ref` is attached by the renderer below
+ * — the way the reconciler does, only for elements that actually reach the
+ * tree — which is exactly the distinction the loading-frame case turns on.
+ */
+const pendingEffects = []
+const react = {
+  createElement: (type, props, ...children) => {
+    const next = props ?? {}
+    if (children.length === 1) next.children = children[0]
+    else if (children.length > 1) next.children = children
+    return { type, props: next, children }
+  },
+  useState: (init) => [init, () => {}],
+  useRef: (init) => ({ current: init }),
+  useEffect: (fn) => { pendingEffects.push(fn) },
+  useMemo: (fn) => fn(),
+  useCallback: (fn) => fn,
+  Fragment: 'Fragment',
+}
+
+/**
+ * A one-pass renderer: invoke function components, recurse into host elements'
+ * children, link siblings so `nextElementSibling` behaves the way the DOM does
+ * (the suppression seam in page.ts is a sibling lookup), and attach refs only
+ * for elements that reach the tree.
+ */
+function render(element) {
+  if (element === null || element === undefined || element === false || element === true) return null
+  if (Array.isArray(element)) return element.map(render).filter((node) => node !== null)
+  if (typeof element.type === 'function') return render(element.type(element.props))
+  const kids = element.children
+  const children = (Array.isArray(kids) ? kids : kids === undefined ? [] : [kids])
+    .map(render)
+    .filter((node) => node !== null)
+  for (let index = 0; index < children.length; index += 1) {
+    children[index].nextElementSibling = children[index + 1] ?? null
+  }
+  const node = {
+    type: element.type,
+    props: element.props,
+    children,
+    nextElementSibling: null,
+    attributes: {},
+    setAttribute: (name, value) => { node.attributes[name] = value },
+    removeAttribute: (name) => { delete node.attributes[name] },
+  }
+  if (element.props?.ref && typeof element.props.ref === 'object') element.props.ref.current = node
+  return node
+}
+
+/**
+ * DSH's SettingsForm, mirrored from
+ * packages/client/ui-primitives/src/settings-form/SettingsForm.tsx:50-73.
+ * The load-bearing line is :55 — while the namespace is not served the frame
+ * renders the unavailable line and NOTHING else, children included. The footer
+ * (:61) is the sibling right after the children, which is the seam page.ts
+ * looks for. The real source is the spec here, not this plugin.
+ */
+function SettingsFormStub(props) {
+  if (!props.state.available) {
+    return { type: 'p', props: { role: 'status' }, children: [props.labels.unavailable] }
+  }
+  return {
+    type: 'div',
+    props: {},
+    children: [
+      !props.state.writable ? { type: 'p', props: { role: 'status' }, children: [props.labels.readOnly] } : null,
+      props.children,
+      {
+        type: 'div',
+        props: { className: 'footer' },
+        children: [{ type: 'button', props: {}, children: [props.labels.save] }],
+      },
+    ],
+  }
+}
+
+/** Depth-first search over a rendered tree. */
+function find(node, predicate) {
+  if (node === null || typeof node !== 'object') return null
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = find(child, predicate)
+      if (hit !== null) return hit
+    }
+    return null
+  }
+  if (predicate(node)) return node
+  return find(node.children, predicate)
+}
+
+/** The one createElement alias every component module renders through. */
+const createEl = (type, props, ...children) => {
+  const next = props ?? {}
+  if (children.length === 1) next.children = children[0]
+  else if (children.length > 1) next.children = children
+  return { type, props: next, children }
 }
 
 /** Apply one wire mutation to a config value, the way the Host would. */
@@ -133,10 +228,13 @@ function applyOps(value, ops) {
  * @param options.mutate - override for scope.mutate; the default folds the ops
  *   into the served value and republishes, the way the Host's write answer does.
  * @param options.remote - overrides merged over the default remote stubs.
+ * @param options.firstFrame - the scope's FIRST snapshot, before the settings
+ *   mirror answers (`status: 'loading'`, value undefined) — the frame a user
+ *   can open the dialog in.
  */
-async function mount({ value, writable = true, mutate, remote } = {}) {
+async function mount({ value, writable = true, mutate, remote, firstFrame } = {}) {
   const calls = []
-  let snapshot = { status: 'ready', value, writable, revision: 1 }
+  let snapshot = firstFrame ?? { status: 'ready', value, writable, revision: 1 }
   const listeners = new Set()
   const publish = () => { for (const fn of listeners) fn() }
   const scope = {
@@ -151,6 +249,7 @@ async function mount({ value, writable = true, mutate, remote } = {}) {
   }
   const registrations = []
   const shortcutRegistrations = []
+  let capturedComponent = null
   const ctx = {
     locale: { bind: () => (key) => key, register: () => () => {} },
     effect: (fn) => { const off = fn(); return typeof off === 'function' ? off : () => {} },
@@ -163,7 +262,14 @@ async function mount({ value, writable = true, mutate, remote } = {}) {
     slots: {
       // The real inject() runs its callback to register, then returns a disposer.
       inject: (_name, fn) => { fn(); return () => {} },
-      register: (options) => { registrations.push(options); return () => {} },
+      register: (options, component) => {
+        registrations.push(options)
+        // The sidebar entry is this plugin's only surface: it renders the whole
+        // workbench inside the quick dialog, so it is the component the
+        // component-level tests mount.
+        if (options.name === 'sidebar.footer.action') capturedComponent = component
+        return () => {}
+      },
     },
     remote: Object.assign({
       session: {
@@ -210,6 +316,8 @@ async function mount({ value, writable = true, mutate, remote } = {}) {
     actions: injected,
     store,
     state: () => store.getSnapshot(),
+    // The registered sidebar-entry component, for the component-level tests.
+    component: capturedComponent,
     republish: (next) => { snapshot = { ...snapshot, ...next }; publish() },
     mutateCalls: calls,
     // The commands this plugin registered with DSH's native shortcuts service.
@@ -642,6 +750,72 @@ test('the save command is registered with DSH\'s shortcuts service and gated by 
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(h.mutateCalls.length, 1, 'running the command saves the staged edit')
   assert.equal(h.mutateCalls[0].ops.some((op) => op.path[0] === 'profiles'), true)
+})
+
+// ---- component-level mounts (the loading frame and the surface gate) ----
+
+/** The dictionary function the locale stub hands the components. */
+const t = (key) => key
+/** Render one component the way footer.ts renders it, with the store wired in. */
+const propsFor = (h) => Object.assign({}, h.actions, {
+  t,
+  useRouterPage: (selector) => selector(h.store.getSnapshot()),
+  wide: true,
+})
+
+// C3：DSH 的 SettingsForm 在 namespace 未就绪时不渲染 children
+// （ui-primitives 的 settings-form/SettingsForm.tsx:55），.dsh-router-form-body
+// 因此不在树里。把这种帧当成"seam 移动"抛错，等于把"配置未就绪"当成"结构坏了"——
+// 侧栏按钮常驻可点，用户在这个窗口点开弹窗就崩，且 effect 的 deps 是 []，抛了
+// 本次挂载永不恢复，只能关闭重开。
+test('a dialog opened while the config scope is still loading does not throw, and the footer is still suppressed once served', async () => {
+  const { RouterPage } = loadClient()
+  const loading = await mount({
+    value: config(),
+    firstFrame: { status: 'loading', value: undefined, writable: false, revision: 0 },
+  })
+  assert.equal(loading.state().available, false, 'fixture: the namespace is unavailable in the loading frame')
+  pendingEffects.length = 0
+  // Render the page the way footer.ts does when the dialog is open, then run its
+  // mount effects. A throw here is the bug: the tripwire must only fire for a
+  // wrapper that EXISTS while its footer sibling moved.
+  render(createEl(RouterPage, propsFor(loading)))
+  for (const effect of pendingEffects) effect()
+
+  // 对照：namespace 就绪后底栏照旧被压掉，且压制的两个属性都真的落上去了——
+  // tripwire 仍然守着"seam 真移动"那一种条件。
+  const ready = await mount({ value: config() })
+  assert.equal(ready.state().available, true, 'fixture: the namespace is served')
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(ready)))
+  for (const effect of pendingEffects) effect()
+  const footer = find(tree, (node) => node.props?.className === 'footer')
+  assert.ok(footer, 'fixture: the SettingsForm footer reached the tree')
+  assert.equal(footer.attributes.hidden, '', 'the suppressed footer must carry hidden so DSH\'s Tab trap ignores it')
+  assert.equal(footer.attributes.inert, '', 'and inert, for the same reason')
+})
+
+// I4：侧栏入口常驻，它一 retain 就让 surfaceActive() 恒真——Ctrl+S 被全局认领
+// （regions 覆盖输入框与终端），而 save() 在只读时只是空转，并不阻止认领。
+// 弹窗的挂载（page.ts）本来就独立 retain，footer 那一次是冗余的。
+test('the permanent sidebar entry alone does not claim the save key; the open dialog does', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({ value: config() })
+  const command = h.shortcutCommands()[0]
+  assert.deepEqual(command.resolve({}), { status: 'pass' }, 'nothing mounted: the key passes to its other owners')
+
+  // 只挂侧栏入口那一面（footer action 组件本体，常驻不卸载）。
+  pendingEffects.length = 0
+  render(createEl(h.component, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  assert.deepEqual(command.resolve({}), { status: 'pass' },
+    'the permanent sidebar entry alone must not claim the key')
+
+  // 弹窗开着（RouterPage 挂载）时才接键。
+  pendingEffects.length = 0
+  render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  assert.equal(command.resolve({}).status, 'handled', 'the open dialog claims the key')
 })
 
 // 回归：checkAll 曾在内层回调里引用已被删除的 `routes` 对象（keys 改成字符串数组后
