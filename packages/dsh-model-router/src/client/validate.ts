@@ -1,7 +1,6 @@
-/** Client-side mirror of the host's structural checks, plus config defaults and legacy normalization. */
+/** Config defaults, legacy normalization, draft-shape checks, and the browser rendering of the shared cross-field rules. */
 
 import { clone } from './format.ts'
-import { routeKeyOf } from '../routes.ts'
 import {
   DEFAULT_BREAKER_COOLDOWN_SECONDS,
   DEFAULT_BREAKER_SCOPE,
@@ -12,6 +11,7 @@ import {
   DEFAULT_STICKY_TURNS,
   DEFAULT_SWITCH_ON,
 } from '../defaults.ts'
+import { structuralViolations } from '../rules.ts'
 
 export var STRATEGY_OPTIONS = ['order', 'weight', 'round-robin']
 
@@ -54,55 +54,25 @@ export function normalizeDefault(value) {
 
 export function validate(draft) {
   var problems = []
-  var seen = new Set()
+  // 跨字段规则与 host 同源（../rules.ts 的 structuralViolations）：host 抛第一条、
+  // 这里收全部，key + vars 进字典渲染。此前两份规则靠三句「与 host 的 assertStructural
+  // 同步」的注释对齐，且已经漂移——默认兜底池的重复渠道这里漏检，用户存得下一个
+  // 加载即被 host 拒绝的配置，吃的还是一句英文错误。
+  structuralViolations(draft).forEach(function (violation) {
+    problems.push({ key: violation.key, vars: violation.vars })
+  })
+  // 草稿态检查：host 故意不做单字段边界（schema 拥有它们，assertStructural 的
+  // docstring 划了这条线），浏览器要在保存前挡住，否则用户吃到的是 host 的英文拒绝。
   draft.profiles.forEach(function (profile) {
-    if (seen.has(profile.id)) problems.push({ key: 'problemDuplicateId', vars: { id: profile.id } })
-    seen.add(profile.id)
-    if (!profile.candidates.length) {
-      problems.push({ key: 'problemEmptyChain', vars: { id: profile.id } })
-    } else {
-      var head = profile.candidates[0]
-      if (head.provider !== profile.when.provider || head.model !== profile.when.model) {
-        problems.push({ key: 'problemUnpinnedPrimary', vars: { id: profile.id, route: routeKeyOf(profile.when.provider, profile.when.model) } })
-      }
-    }
     profile.candidates.forEach(function (candidate, index) {
       if (!candidate.provider || !candidate.model) problems.push({ key: 'problemEmptyRoute', vars: { id: profile.id, index: index + 1 } })
       if (!(candidate.maxAttempts >= 1 && candidate.maxAttempts <= 5)) problems.push({ key: 'problemBadMaxAttempts', vars: { id: profile.id, index: index + 1 } })
     })
-    // 与 host 的 assertStructural 同步：同链重复的 provider/model 会被各打一遍，
-    // 白吃 attempt 预算。这里漏一条，用户就会存一个被 Host 拒绝、且看不到原因的配置。
-    var seenRoutes = {}
-    profile.candidates.forEach(function (candidate, index) {
-      var key = routeKeyOf(candidate.provider, candidate.model)
-      if (seenRoutes[key]) problems.push({ key: 'problemDuplicateRoute', vars: { id: profile.id, route: key, index: index + 1 } })
-      seenRoutes[key] = true
-    })
     if (!(profile.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: { id: profile.id } })
     if (!(profile.stickyTurns >= 0)) problems.push({ key: 'problemBadSticky', vars: { id: profile.id } })
-    // 空链已经报了 problemEmptyChain，别再叠加一条权重提示；默认兜底池没有
-    // "空链" 这一说，所以它那边不设长度闸（与 host 的抛出点一致）。
-    if (profile.strategy === 'weight' && profile.candidates.length > 0
-      && profile.candidates.every(function (c) { return !(c.weight > 0) })) {
-      problems.push({ key: 'problemProfileWeightNoPositive', vars: { id: profile.id } })
-    }
   })
   if (!(draft.default.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadDefaultTotal', vars: {} })
   if (!(draft.default.stickyTurns >= 0)) problems.push({ key: 'problemBadDefaultSticky', vars: {} })
-  // 与 host 的 assertStructural 保持同步：这里漏一条，用户就会存一个被 Host
-  // 拒绝、且看不到原因的配置。
-  if (draft.default.strategy === 'weight' && draft.default.candidates.every(function (c) { return !(c.weight > 0) })) {
-    problems.push({ key: 'problemWeightNoPositive', vars: {} })
-  }
-  // 与 host 的 assertStructural 同步：空规则的校验不看 enabled——关着开关存下的空规则，
-  // 在 host 侧会命中每一次失败（breaker.ts 对全空规则不 continue）。这里漏一条，用户
-  // 就会存一个让所有候选被禁的配置。
-  var breaker = draft.health && draft.health.breaker
-  if (breaker) {
-    ;(breaker.rules ?? []).forEach(function (rule) {
-      if (!rule.code && !rule.message) problems.push({ key: 'problemBreakerEmptyRule', vars: {} })
-    })
-  }
   return problems
 }
 

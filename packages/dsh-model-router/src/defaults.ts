@@ -21,6 +21,15 @@
 export const DEFAULT_MAX_ATTEMPTS = 1
 
 /**
+ * The default pool's implicit first hop — the user's own route — fires exactly
+ * once. Deliberately NOT {@link DEFAULT_MAX_ATTEMPTS}: that is the schema
+ * default for a candidate the user configured, and it moves with product
+ * decisions; the implicit hop's single shot is structural — the plugin does
+ * not own retries on the user's own route, the pool exists to move ON.
+ */
+export const IMPLICIT_HOP_MAX_ATTEMPTS = 1
+
+/**
  * What a freshly created profile starts its candidates at. Deliberately NOT
  * the schema default: a brand-new chain gets one spare call on the primary,
  * because the user has not tuned anything yet.

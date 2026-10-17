@@ -418,7 +418,7 @@ export function createController(ctx, scope, t) {
       entries.forEach(function (entry) {
         // 默认值先给、entry 后覆盖：目录选择不带 maxAttempts（1 是它的默认），
         // 手动录入带了就必须按用户填的走——写死 1 会静默吞掉用户输入。
-        list.push(Object.assign({ maxAttempts: 1 }, entry))
+        list.push(Object.assign({ maxAttempts: DEFAULT_MAX_ATTEMPTS }, entry))
       })
       ui.modal = null
       publish()

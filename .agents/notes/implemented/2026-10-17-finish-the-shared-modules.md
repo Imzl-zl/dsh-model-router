@@ -96,3 +96,13 @@ Status: implemented
 - 遗留（同类，未修）：`STRATEGIES`（config.ts）与 `STRATEGY_OPTIONS`（validate.ts）
   是同一张枚举的两份——属"枚举"不属"默认值"，不在本轮范围；`weight` 的默认 0 只在
   schema 出现一次，暂无漂移面。
+- 遗留（I6 的另一半，2026-10-17 复审登记）：**跨字段校验仍是双源**——host 的
+  `assertStructural`（`config.ts:362` 起）对跨字段违规抛异常，client 的
+  `validate()`（`validate.ts:55-107`）收 `{key, vars}` 问题对象，两边靠三处
+  「与 host 的 assertStructural 同步」的人工注释维持（`validate.ts:73-74`、
+  `:92-93`、`:97-99`）。本轮只收了默认值那一半（`defaults.ts`）并删了死 guard，
+  没有合这一半。**为什么不合并**：两种产出形状不同（异常 vs 问题对象），合并
+  需要先做一次结果结构设计——抽一个纯规则模块，host 侧抛错、client 侧格式化，
+  代价中等，不塞进本轮。**留给哪一轮**：单独的"校验单源"一轮；在那之前，改
+  任一端的跨字段规则，另一端必须同批改——那三句注释守的就是这件事。下一个问
+  「I6 修完了吗」的人应当得到「默认值已单源、跨字段校验没有」这个答案。

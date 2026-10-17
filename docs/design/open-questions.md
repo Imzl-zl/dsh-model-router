@@ -24,7 +24,8 @@ last_updated: "2026-10-17"
 | 2 | 候选索引跨重启 | **不跨重启**。进程内 `WeakMap<Agent, …>` 按 (agent, turn, step) 键控，重启即重置，README 写明；lineage 经插件自有 projection 可重建是另一件事。跨重启延续列 Phase 3，默认关 | product-plan §五 |
 | 3 | 同渠道重试与 failover 的预算归属 | **两层**：同 route 重试归 `llm-retry`（含退避与 `llm/retry` durable 记录）；跨候选 failover 与硬总上限归 Router。**2026-10-17 修订**：总 worst case = `maxTotalAttempts`（默认 6、默认兜底池 3，含同渠道重试与跨渠道降级，末位候选被 cap 后也不许多打）；`agent/request-error` 用 `prepend: true` 注册在**最外层**（原"内层"位置实测让 llm-retry 自己的 5 次同路由重试越过上限：配 2 打 7 次）；候选配额已尽且该切换时在 `await next()` 之前直接决定，不进 llm-retry。声明 `always` policy 的候选 provider 配置加载时拒绝 | 能力边界 §三 G2；.agents/notes/implemented/2026-10-17-attempt-budget-two-layers.md |
 | 4 | 两个 waterfall 的位置 | **都**用 `prepend: true` 拿最外层：`agent/request` 压过 `installModelSelection` 写回；`agent/request-error` 注册在 root ctx 一次、agent 从 payload 取。**2026-10-17 修订**：原"`agent/request-error` 注册到 `agent.ctx`、不用 prepend（位于 llm-retry 内层接放弃交接）"被实测推翻（同一"整条链都死"场景：内层 7 次 vs 外层 2 次真实调用），旧结论作废 | 能力边界 §三 G2 |
-| 5 | 什么失败切渠道 | **2026-10-16 修订**：默认开 = DSH normal policy 五码（`EMPTY_RESPONSE`/`RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`）+ `AUTH`/`QUOTA`（渠道自身的密钥/额度问题，换渠道通常立刻能救）；`INVALID_REQUEST` 可勾选（默认不勾）；`ABORTED`/`NO_ADAPTER` 不切换。分类用 `LlmFailure.code`，不解析错误文案 | product-plan §2.2 || 6 | 部分流输出后重试的 UI/日志语义 | Router 直接 retry 不产生 `llm/retry` records；用户可见性由中文 notice + Trajectory 既有 attempt 渲染承担。first-token 保留与 turn-process evidence 不作 MVP 要求 | product-plan §4.1-4.2 |
+| 5 | 什么失败切渠道 | **2026-10-16 修订**：默认开 = DSH normal policy 五码（`EMPTY_RESPONSE`/`RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`）+ `AUTH`/`QUOTA`（渠道自身的密钥/额度问题，换渠道通常立刻能救）；`INVALID_REQUEST` 可勾选（默认不勾）；`ABORTED`/`NO_ADAPTER` 不切换。分类用 `LlmFailure.code`，不解析错误文案 | product-plan §2.2 |
+| 6 | 部分流输出后重试的 UI/日志语义 | Router 直接 retry 不产生 `llm/retry` records；用户可见性由中文 notice + Trajectory 既有 attempt 渲染承担。first-token 保留与 turn-process evidence 不作 MVP 要求 | product-plan §4.1-4.2 |
 | 7 | 辅助模型调用 | **不路由**。compaction 与 session-title 由 DSH 各自插件配置管，本插件只覆盖 Agent 主请求，README 写明 | product-plan §十一 |
 | 8 | attempt lineage 持久化 | 插件自有 session projection 折叠 `request/header` + `assistant/attempt`（+ `llm/retry-started`）：key 带插件命名空间、wire view 守 UI-scale、state plain JSON。零新增事件类型、零 plugin record | 能力边界 §三 G3 |
 | 9 | 跨模型族兼容性 | **不推断等价**。候选资格 = 用户显式配置 + 运行时预校验（推理档位，自动维度）+ 条件路由（图片/上下文）。工具能力不做前置条件 | 见二.1 |
@@ -87,6 +88,3 @@ last_updated: "2026-10-17"
 
 **前置说明**：第 1、2 项改同一段代码（`index.ts:317-362`、`router.ts`），同一次提交落地；
 第 3、4、5 项互相独立，可并行。
-
-**前置说明**：上表第 1、2 项会改同一段代码（`index.ts:317-362`、`router.ts`），
-建议同一次会话里一起定；第 3、4、5 项互相独立，可并行。

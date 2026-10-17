@@ -366,7 +366,11 @@ test('an accepted save settles clean once the Host republishes', async () => {
   assert.equal(h.state().draft.profiles[0].candidates[0].maxAttempts, 3)
 })
 
-// ---- validate() mirrors the Host's assertStructural ----
+// ---- validate() renders the shared cross-field rules (../rules.ts) ----
+
+// 这些用例曾经的名字是 "mirrors the Host's assertStructural"——两份规则、一个镜像。
+// 2026-10-17 起规则只有一个表达式（src/rules.ts），host 抛第一条、这里收全部；
+// 本组钉住的是浏览器侧的保存拦截仍按 key 工作。
 
 test('a profile on the weight strategy with no positive weight blocks the save', async () => {
   const h = await mount({ value: config({ profiles: [profile({ strategy: 'weight' })] }) })

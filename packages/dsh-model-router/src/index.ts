@@ -46,7 +46,8 @@ import {
   type Profile,
   type RouterOptions,
 } from './config.ts'
-import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
+import { decideAfterInner, decideBeforeInner, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
+import type { AfterInnerRuling, BeforeInnerRuling } from './router.ts'
 import { configuredRoutes, routeKeyOf, routeParts } from './routes.ts'
 import { DEFAULT_PROBE_PROMPT, DEFAULT_PROBE_TIMEOUT_SECONDS } from './defaults.ts'
 import { RouterState, candidateConfig, type StepChain, type StepConditions } from './state.ts'
@@ -345,6 +346,11 @@ export default class ModelRouter extends TypertRemoteService {
     //   内层决定重试 + 预算已尽 → 否决（返回 undefined 即终态）；
     //   内层决定重试 + 预算还有 → 原样放行（与注册在内层时行为一致）；
     //   内层全部放弃（undefined）→ 才轮到插件做跨候选 failover。
+    // 三条分支的裁决与副作用声明都在 router.ts 的两个纯函数里（decideBeforeInner /
+    // decideAfterInner，含"记不记熔断"的规则与日志文案）；本 handler 是解释器：调
+    // 决策、按声明应用副作用、返回决策。语义依据：open-questions 第五节第 2 项；
+    // 五分支收编的来龙去脉（待办 4 是症状不是独立问题）见
+    // .agents/notes/implemented/2026-10-17-policy-into-the-decision-core.md。
     ctx.on('agent/request-error', async (payload, next) => {
       const { agent, turn, step, failure, signal } = payload
       const state = states.current(agent, turn, step)
@@ -353,73 +359,35 @@ export default class ModelRouter extends TypertRemoteService {
       states.noteFailure(agent.session, turn, step, failure.code)
       const current = state.chain.candidates[state.index]!
 
-      // 熔断记录提成闭包：提前返回的分支与"内层放弃"分支共用。一次失败就是一次
-      // 失败，记不记不该取决于恢复走哪条路——第一次实现在 await next() 之前返回时
-      // 跳过它，breaker-channel-scope 场景立刻打红（headers 多出 sibling、
-      // block notice 不出现）。
+      // 总闸关着就不记：`enabled` 是用户的显式选择。规则留着（再开时不用重填），
+      // 但关着的时候一条都不能生效——此前只读 rules 不读 enabled，开关是个摆设。
       const noteBreaker = (): void => {
-        // 总闸关着就不记：`enabled` 是用户的显式选择。规则留着（再开时不用重填），
-        // 但关着的时候一条都不能生效——此前只读 rules 不读 enabled，开关是个摆设。
         const breakerConfig = (config.health?.get() as HealthConfig | undefined)?.breaker
         if (breakerConfig?.enabled === true) {
           breaker.note(current.provider, current.model, failure.code, failure.message ?? '', breakerConfig.rules, Date.now())
         }
       }
+      // 记不记、记什么，由裁决声明（规则见 router.ts 的 docstring：把当前候选拿出
+      // 轮换的失败才记，失败尚未定论的不记）；这里只执行。A failure the user said
+      // should disqualify the channel takes it out of rotation; the block always
+      // expires, so this is a cooldown, not a ban.
+      const apply = (ruling: BeforeInnerRuling | AfterInnerRuling): void => {
+        if (ruling.record) noteBreaker()
+        if (ruling.log !== '') ctx.logger.warn(ruling.log)
+      }
 
-      // "本候选配额已尽 && 这个错该切换"是插件自己就能定的事：llm-retry 想给同一条
-      // 路由第二次本身就是越权（用户配的"这条渠道最多真实调用多少次"已经用完）。
-      // 在 await next() 之前决定，根本不进 llm-retry——它的退避与两条 durable
-      // 记录因此都不会发生（实测 budget-cap 场景 boot 8547ms→2227ms、llm/retry
-      // 2→0、真实调用数不变），顺带修掉"llm/retry 记的 provider 不是真正被打的
-      // 那一条"。语义依据：open-questions 第五节第 2 项；提前返回不能跳过熔断记录、
-      // 以及与 canFireAgain 的分层 —— 见
-      // .agents/notes/implemented/2026-10-17-attempt-budget-two-layers.md
-      if (!signal.aborted
-        && state.attemptsOnCandidate >= current.maxAttempts
-        && isSwitchOnEligible(state.chain, failure.code)) {
-        const canAdvance = state.index < state.chain.candidates.length - 1
-        if (canAdvance && state.totalAttempts < state.chain.maxTotalAttempts) {
-          // 换得动：自己决定重试，`planFire` 会把下一次发火搬到下一个候选。
-          noteBreaker()
-          ctx.logger.warn(
-            `model-router: ${failure.code} on ${routeKeyOf(current.provider, current.model)} `
-            + `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); this candidate's budget is spent, switching without llm-retry`,
-          )
-          return { kind: 'retry' as const }
-        }
-        // 换不动（末位候选）或总预算已尽：终态，同样不问 llm-retry。
-        noteBreaker()
-        ctx.logger.warn(
-          `model-router: ${failure.code} on ${routeKeyOf(current.provider, current.model)} `
-          + `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); this candidate's budget is spent and the chain has nothing left, terminating without llm-retry`,
-        )
-        return undefined
+      const before = decideBeforeInner(state, failure.code, signal.aborted)
+      if (before.kind !== 'delegate') {
+        apply(before)
+        return before.kind === 'retry' ? { kind: 'retry' as const } : undefined
       }
 
       const inner = await next()
-
-      if (inner?.kind === 'retry') {
-        // 预算耗尽就否决内层的重试决定：用户配的"最多真实调用多少次"是硬承诺，
-        // llm-retry 的同路由重试也不能越过它。返回 undefined 即终态。
-        if (state.exhausted || state.totalAttempts >= state.chain.maxTotalAttempts) {
-          ctx.logger.warn(
-            `model-router: attempt budget spent (${state.totalAttempts}/${state.chain.maxTotalAttempts}) on ${routeKeyOf(current.provider, current.model)}; terminating instead of retrying`,
-          )
-          return undefined
-        }
-        return inner
-      }
-
-      // 内层全部放弃：记录熔断，并决定是否跨候选继续。
-      // A failure the user said should disqualify the channel takes it out of
-      // rotation; the block always expires, so this is a cooldown, not a ban.
-      noteBreaker()
-      if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return undefined
-      ctx.logger.warn(
-        `model-router: ${failure.code} on ${routeKeyOf(current.provider, current.model)} `
-        + `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); continuing the chain`,
-      )
-      return { kind: 'retry' as const }
+      const after = decideAfterInner(state, failure.code, signal.aborted, inner?.kind === 'retry' ? 'retry' : undefined)
+      apply(after)
+      // honor：原样放行——llm-retry 还在重试同一条路由，失败尚未定论。
+      if (after.kind === 'honor') return inner
+      return after.kind === 'retry' ? { kind: 'retry' as const } : undefined
     }, { prepend: true })
   }
 

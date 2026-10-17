@@ -418,13 +418,16 @@ const SCENARIOS = [
   },
   {
     name: 'budget-cap-when-the-whole-chain-dies',
-    note: '整条链都失败：总真实调用数等于用户配的上限，llm-retry 的同路由重试不能越过它',
+    note: '整条链都失败：总真实调用数等于用户配的上限；候选配额已尽时提前决定，llm-retry 不参与',
     // 两个候选各 1 枪、总上限 2，两条都一直 429（既在 switchOn 里、也是 llm-retry
-    // 默认可重试码）。这一场景同时钉住两件事：跨候选行走被上限截断，以及 llm-retry
-    // 在最后一条候选上自己的 5 次重试也被挡住。
-    // 位置依据：`agent/request-error` 用 prepend 注册在最外层，先 await next() 看到
-    // 内层决定再处置——预算尽了就否决。注册在 llm-retry 内层时它看不见这些重试，
-    // 同一场景实测打 7 次（上限 2）。
+    // 默认可重试码）。这一场景钉住 I1 的提前决定：候选配额已尽 && 该切换时，插件在
+    // await next() 之前直接决定（换得动返回 retry、换不动终态），llm-retry 根本
+    // 不参与——所以下面断言 llm/retry 与 llm/retry-started 记录为 0。
+    // 「内层决定重试而预算已尽 → 否决」是同一道硬上限的另一个决策点，由
+    // veto-rejects-llm-retry-when-the-total-cap-is-spent 钉住（那里关掉 rateLimit，
+    // llm-retry 才会真的被咨询）。
+    // prepend 的实测依据：注册在 llm-retry 内层时，它自己的同路由重试发生在插件
+    // 看不见的地方，同一形状实测打 7 次（上限 2）。
     router: {
       enabled: true,
       profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)], { maxTotalAttempts: 2 })],
@@ -442,6 +445,36 @@ const SCENARIOS = [
       eq('llm/retry records', events.filter(e => e.type === 'llm/retry').length, 0)
       eq('llm/retry-started records', events.filter(e => e.type === 'llm/retry-started').length, 0)
       eq('turn end', turnEnd(events), 'error')
+    },
+  },
+  {
+    name: 'veto-rejects-llm-retry-when-the-total-cap-is-spent',
+    note: '未勾选该码 + 总上限已尽：llm-retry 的重试也要被否决，硬上限不许越过',
+    // 与 budget-cap 是同一道硬上限的两个决策点。那条场景里失败码在 switchOn 里，
+    // 候选配额已尽时插件在 await next() 之前直接决定，llm-retry 根本不参与
+    // （llm/retry 记录为 0）。这条把 rateLimit 关掉、总上限压到 5：提前决定不再
+    // 成立，llm-retry 的同路由重试被逐一放行，直到总上限已尽之后那一次决定被
+    // 否决——交付代码恰好 5 次真实调用；删掉 index.ts 的否决分支实测打 6 次，
+    // 越过用户配的硬上限。位置依据：`agent/request-error` 用 prepend 注册在
+    // 最外层，先 await next() 拿到内层决定再处置。
+    router: {
+      enabled: true,
+      profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)],
+        { switchOn: { ...SWITCH_ON, rateLimit: false }, maxTotalAttempts: 5 })],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
+    },
+    script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] } },
+    check(events) {
+      // 首发 1 次 + llm-retry 放行的 4 次 = 5；它第 6 次决定重试时预算已尽，被否决。
+      eq('real calls equal the configured cap', failedAttempts(events).length, 5)
+      // llm-retry 重试的是同一条路由：全程只有用户自己那一条的 header，备用一次未打。
+      eq('headers', headers(events), ['stub-primary/stub-model'])
+      eq('turn end', turnEnd(events), 'error')
+      // 与 budget-cap 的分界：这里 llm-retry 真的被咨询了（同路由重试归它），
+      // 否决发生在它下一次决定之后——否则这条场景会悄悄退化成提前决定的形状。
+      ok('llm-retry was consulted', events.filter(e => e.type === 'llm/retry').length > 0)
+      // 背景与取舍（含被否的「改 switch-off-terminal 上限」方案）：
+      // .agents/notes/implemented/2026-10-17-close-the-review-todos.md
     },
   },
   {

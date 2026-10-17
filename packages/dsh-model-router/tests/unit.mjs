@@ -15,6 +15,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  decideAfterInner,
+  decideBeforeInner,
   decideRecovery,
   hasImageContent,
   isSwitchOnEligible,
@@ -29,8 +31,10 @@ import {
 import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, MAX_ENTRIES } from '../src/lineage.ts'
 import { breakerNotice } from '../src/notice.ts'
 import { assertStructural } from '../src/config.ts'
+import { structuralViolations } from '../src/rules.ts'
 import { SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
-import { defaultSwitchOn } from '../src/client/validate.ts'
+import { defaultSwitchOn, validate } from '../src/client/validate.ts'
+import { en, zh } from '../src/client/locales.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
 import { checkConnectivity } from '../src/connectivity.ts'
@@ -158,6 +162,110 @@ test('recovery retries an eligible code within budget, terminates at the cap', (
   assert.equal(decideRecovery(base, 'TIMEOUT', false), 'retry')
   assert.equal(decideRecovery({ ...base, totalAttempts: 10 }, 'TIMEOUT', false), 'terminal')
   assert.equal(decideRecovery(base, 'TIMEOUT', true), 'terminal')
+})
+
+// ---- the recovery listener's two decision points (index.ts's five branches as one table) ----
+
+// `agent/request-error` 的五条分支（A 透传 / B、C 提前决定 / D 否决 / E 放行 / F 内层
+// 放弃）收编成两个纯决策点，副作用由规则派生而不是各分支各挂：一次失败若把当前候选
+// 拿出轮换（换走 / 凉住 / 终态）就记熔断；失败尚未定论（放行内层继续重试同一条路由）
+// 就不记。index.ts 只剩解释器——调决策、按声明应用副作用、返回决策。
+
+const recoveryChain = (maxAttempts, count, maxTotalAttempts) => ({
+  ...chainOf(maxAttempts, count),
+  maxTotalAttempts,
+})
+const at = (chain, over) => ({ ...startStep(1, 1, chain, emptyConditions(), 0), ...over })
+
+test('before inner: the cap-spent candidate that should switch decides without llm-retry', () => {
+  const ruling = decideBeforeInner(at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }), 'RATE_LIMIT', false)
+  assert.equal(ruling.kind, 'retry')
+  assert.equal(ruling.record, true)
+  assert.match(ruling.log, /this candidate's budget is spent, switching without llm-retry/)
+})
+
+test('before inner: nothing left to switch to, or no budget left, terminates and still records', () => {
+  const lastCandidate = at(recoveryChain(1, 1, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  const noBudget = at(recoveryChain(1, 2, 2), { attemptsOnCandidate: 1, totalAttempts: 2 })
+  for (const state of [lastCandidate, noBudget]) {
+    const ruling = decideBeforeInner(state, 'RATE_LIMIT', false)
+    assert.equal(ruling.kind, 'terminate')
+    assert.equal(ruling.record, true)
+    assert.match(ruling.log, /terminating without llm-retry/)
+  }
+})
+
+test('before inner: an under-cap candidate, an unchecked code or an abort defers to llm-retry', () => {
+  const underCap = at(recoveryChain(2, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  const capSpent = at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  const rows = [
+    [underCap, 'RATE_LIMIT', false],
+    [capSpent, 'EMPTY_RESPONSE', false],
+    [capSpent, 'RATE_LIMIT', true],
+  ]
+  for (const [state, code, aborted] of rows) {
+    const ruling = decideBeforeInner(state, code, aborted)
+    assert.equal(ruling.kind, 'delegate')
+    assert.equal(ruling.record, false)
+    assert.equal(ruling.log, '')
+  }
+})
+
+test('after inner: a retry the budget still covers is honored untouched, unrecorded', () => {
+  const ruling = decideAfterInner(at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }), 'RATE_LIMIT', false, 'retry')
+  assert.equal(ruling.kind, 'honor')
+  assert.equal(ruling.record, false)
+  assert.equal(ruling.log, '')
+})
+
+test('after inner: the budget is spent, so the inner retry is vetoed — and the failure is recorded', () => {
+  // 待办 4：否决分支的终态也要记熔断（此前只 warn 不记）。规则说"把候选拿出轮换就
+  // 记"，终态是比换走更彻底的拿出——不记，这一形状下为该码配的熔断规则就永不落库。
+  const spent = at(recoveryChain(1, 2, 5), { attemptsOnCandidate: 1, totalAttempts: 5 })
+  const exhausted = at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1, exhausted: true })
+  for (const state of [spent, exhausted]) {
+    const ruling = decideAfterInner(state, 'RATE_LIMIT', false, 'retry')
+    assert.equal(ruling.kind, 'terminate')
+    assert.equal(ruling.record, true)
+    assert.match(ruling.log, /terminating instead of retrying/)
+  }
+})
+
+test('after inner: llm-retry gave up, so the chain continues or ends — recorded either way', () => {
+  const continuing = at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  const retry = decideAfterInner(continuing, 'TIMEOUT', false, undefined)
+  assert.equal(retry.kind, 'retry')
+  assert.equal(retry.record, true)
+  assert.match(retry.log, /continuing the chain/)
+  const terminal = decideAfterInner(continuing, 'ABORTED', false, undefined)
+  assert.equal(terminal.kind, 'terminate')
+  assert.equal(terminal.record, true)
+  assert.equal(terminal.log, '')
+})
+
+test('the record rule holds across the whole ruling table: only delegate and honor stay unrecorded', () => {
+  // 不变量本身：record === 这个裁决把候选拿出了轮换。穷举状态 × 码 × aborted × 内层
+  // 决定，任一分支漏记都会在这里红——待办 4 就是这个测试当时会抓到的形状。
+  const states = [
+    at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 0, totalAttempts: 0 }),
+    at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }),
+    at(recoveryChain(2, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }),
+    at(recoveryChain(1, 2, 2), { attemptsOnCandidate: 1, totalAttempts: 2 }),
+    at(recoveryChain(1, 1, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }),
+    at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1, exhausted: true }),
+  ]
+  for (const state of states) {
+    for (const code of ['RATE_LIMIT', 'TIMEOUT', 'EMPTY_RESPONSE', 'ABORTED']) {
+      for (const aborted of [false, true]) {
+        const before = decideBeforeInner(state, code, aborted)
+        assert.equal(before.record, before.kind !== 'delegate', `before ${code}/${String(aborted)}`)
+        for (const inner of [undefined, 'retry']) {
+          const after = decideAfterInner(state, code, aborted, inner)
+          assert.equal(after.record, after.kind !== 'honor', `after ${code}/${String(aborted)}/${String(inner)}`)
+        }
+      }
+    }
+  }
 })
 
 // ---- resolveChain ----
@@ -517,6 +625,96 @@ test('assertStructural rejects a chain that names the same route twice', () => {
     ],
     default: base,
   }))
+})
+
+// ---- the cross-field rules have one expression (host throws, browser formats) ----
+
+// 规则模块（../rules.ts）是唯一产出方：host 的 assertStructural 抛第一条，浏览器半包
+// 的 validate() 把全部格式化成问题列表。2026-10-17 之前两边各写一份、靠三句"与 host
+// 同步"的注释对齐，而且已经漂移——默认兜底池的重复渠道，host 从第一天就拒（上面既有
+// 用例钉着），浏览器漏检：用户存得下一个加载即被拒的配置，吃的还是一句英文错误。
+
+const crossSo = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+const crossPool = (over = {}) => ({ enabled: true, candidates: [], switchOn: crossSo, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
+const crossProfile = (over = {}, candidates = [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }]) => ({
+  id: 'p1', when: { provider: 'stub-primary', model: 'stub-model' }, candidates, switchOn: crossSo, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over,
+})
+
+const crossHealth = (rules) => ({ breaker: { enabled: true, rules } })
+
+// 每条跨字段规则一个形状；keys 是规则模块必须产出的违规键序列（顺序即 host 先抛哪条）。
+const crossCases = [
+  ['duplicate profile id', {
+    profiles: [crossProfile({ id: 'dup' }), crossProfile({ id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' }, candidates: [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 0 }] })],
+    default: crossPool(),
+  }, ['problemDuplicateId']],
+  ['an empty chain', { profiles: [crossProfile({}, [])], default: crossPool() }, ['problemEmptyChain']],
+  ['an unpinned primary', { profiles: [crossProfile({}, [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 0 }])], default: crossPool() }, ['problemUnpinnedPrimary']],
+  ['one route named twice in a profile', {
+    profiles: [crossProfile({}, [
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+    ])],
+    default: crossPool(),
+  }, ['problemDuplicateRoute']],
+  ['one route named twice in the default pool', {
+    profiles: [],
+    default: crossPool({ candidates: [
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+    ] }),
+  }, ['problemDuplicateRouteInPool']],
+  ['a weight strategy with nothing to draw (profile)', {
+    profiles: [crossProfile({ strategy: 'weight' }, [
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1 },
+    ])],
+    default: crossPool(),
+  }, ['problemProfileWeightNoPositive']],
+  ['a weight strategy with nothing to draw (default pool)', {
+    profiles: [],
+    default: crossPool({ strategy: 'weight', candidates: [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }] }),
+  }, ['problemWeightNoPositive']],
+  ['a breaker rule that matches nothing', {
+    profiles: [], default: crossPool(),
+    health: crossHealth([{ code: '', message: '', cooldownSeconds: 60 }]),
+  }, ['problemBreakerEmptyRule']],
+]
+
+test('the cross-field rules are one expression: the host throws the first, the browser formats them all', () => {
+  for (const [label, config, keys] of crossCases) {
+    const violations = structuralViolations(config)
+    assert.deepEqual(violations.map(violation => violation.key), keys, `${label}: the rule module's output`)
+    // host：抛的正是第一条的 message（先抛哪条由此固定，与统一前的顺序一致）。
+    assert.throws(() => assertStructural(config), (error) => error.message === violations[0].message, `${label}: the host throws the module's message`)
+    // 浏览器：全部收进问题列表（key + vars 进字典渲染）。
+    const problems = validate(config)
+    for (const key of keys) assert.ok(problems.some(problem => problem.key === key), `${label}: the browser reports ${key}`)
+  }
+})
+
+test('the default pool naming one route twice is reported on the browser side too', () => {
+  // 双源时期的真实漂移（本条在统一前是红的）：host 一直查兜底池的重复渠道，client 的
+  // validate() 只查了 profiles——用户能存下一个 host 会拒绝的配置。
+  const config = {
+    profiles: [],
+    default: crossPool({ candidates: [
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+    ] }),
+  }
+  assert.ok(validate(config).some(problem => problem.key === 'problemDuplicateRouteInPool'),
+    'the browser must report the pool\'s repeated route, not let the host refuse it in English')
+})
+
+test('every violation key the rules can emit has a dictionary entry in both locales', () => {
+  // 规则模块是唯一产出方、字典是唯一渲染方：加一条规则漏了字典，这里红。
+  for (const [label, config] of crossCases) {
+    for (const violation of structuralViolations(config)) {
+      assert.ok(typeof zh[violation.key] === 'string', `${label}: zh has ${violation.key}`)
+      assert.ok(typeof en[violation.key] === 'string', `${label}: en has ${violation.key}`)
+    }
+  }
 })
 
 test('classifyHealth uses DSH own codes, not invented ones', () => {

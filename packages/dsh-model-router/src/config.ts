@@ -28,7 +28,7 @@ import {
   DEFAULT_STRATEGY,
   DEFAULT_SWITCH_ON,
 } from './defaults.ts'
-import { routeKeyOf } from './routes.ts'
+import { structuralViolations } from './rules.ts'
 
 /**
  * One physical candidate. Credentials stay owned by the provider adapter.
@@ -328,18 +328,6 @@ export interface Config {
 /** The plain config value shape, for validating a hot update before it applies. */
 export type RouterOptions = { [K in keyof Config]?: Config[K] extends Volatile<infer T> ? T : never }
 
-/** Reject one chain naming the same physical route twice. */
-function assertNoDuplicateRoutes(candidates: readonly Candidate[], where: string): void {
-  const seen = new Set<string>()
-  for (const candidate of candidates) {
-    const key = routeKeyOf(candidate.provider, candidate.model)
-    if (seen.has(key)) {
-      throw new Error(`model-router: ${where} names ${key} more than once — a repeated candidate is attempted twice and burns the budget twice`)
-    }
-    seen.add(key)
-  }
-}
-
 /**
  * Structural CROSS-FIELD validation, run before a config update restarts the
  * plugin fiber. Single-field bounds (a negative number, an empty string) are
@@ -351,7 +339,13 @@ function assertNoDuplicateRoutes(candidates: readonly Candidate[], where: string
  * strategy with nothing to draw, a breaker rule that matches nothing.
  *
  * Note: 为何删掉 8 个数值 guard（实测全被 schema 挡在前面）—— 见
- * .agents/notes/implemented/2026-10-17-finish-the-shared-modules.md
+ * .agents/notes/implemented/2026-10-17-finish-the-shared-modules.md；
+ * 为何跨字段规则与浏览器半包同源（被否的「两边各留 + 对账测试」方案）—— 见
+ * .agents/notes/implemented/2026-10-17-policy-into-the-decision-core.md
+ *
+ * The rules themselves live once in ./rules.ts, shared with the browser half
+ * (which formats every violation instead of throwing the first); this
+ * function is the host's rendering.
  *
  * Deliberately narrow: only errors that are wrong in every environment. A
  * candidate whose provider is not registered is environmental drift (the user
@@ -364,47 +358,6 @@ export function assertStructural(config: {
   default: DefaultProfile
   health?: HealthConfig
 }): void {
-  const seen = new Set<string>()
-  for (const profile of config.profiles) {
-    if (seen.has(profile.id)) {
-      throw new Error(`model-router: duplicate profile id "${profile.id}"`)
-    }
-    seen.add(profile.id)
-    if (profile.candidates.length === 0) {
-      throw new Error(`model-router: profile "${profile.id}" has no candidates`)
-    }
-    const head = profile.candidates[0]!
-    if (head.provider !== profile.when.provider || head.model !== profile.when.model) {
-      throw new Error(
-        `model-router: profile "${profile.id}" candidates[0] must be the when model `
-        + `(${routeKeyOf(profile.when.provider, profile.when.model)}), got ${routeKeyOf(head.provider, head.model)}`,
-      )
-    }
-    // 同一条链上重复的 provider/model 没有意义：它会被各打一遍（各含一次退避等待），
-    // 白吃 attempt 预算，而用户看到的是"我配了两条备用"。目录选择和多条目手录都可能
-    // 录出重复，所以在结构校验就挡住，和 ID 重复同级。
-    assertNoDuplicateRoutes(profile.candidates, `profile "${profile.id}"`)
-  }
-  assertNoDuplicateRoutes(config.default.candidates, 'default pool')
-  // A weight strategy with no positive weight has nothing to draw from, and the
-  // failure would surface as every request silently starting at candidate 0.
-  for (const [where, chain] of [['profile', config.profiles], ['default', [config.default]]] as const) {
-    for (const entry of chain) {
-      if (entry.strategy !== 'weight') continue
-      if (entry.candidates.every(candidate => candidate.weight <= 0)) {
-        throw new Error(`model-router: ${where} uses the weight strategy but no candidate has a positive weight`)
-      }
-    }
-  }
-  // 一条两个字段都空白的规则永远命中不了任何东西，留着只会让人以为配过了。
-  // 空规则在任何状态下都是配置错误：breaker.ts 对 code/message 全空的规则命中每一次
-  // 失败，"关着开关存下一条空规则"会让所有候选被禁。所以这里不看 enabled——规则可以
-  // 留着（再开时不用重填），空白规则不行。
-  if (config.health?.breaker !== undefined) {
-    (config.health.breaker.rules ?? []).forEach((rule, index) => {
-      if (rule.code.length === 0 && rule.message.length === 0) {
-        throw new Error(`model-router: health.breaker rule ${index + 1} matches nothing — fill in a code or a message`)
-      }
-    })
-  }
+  const [first] = structuralViolations(config)
+  if (first !== undefined) throw new Error(first.message)
 }

@@ -10,7 +10,7 @@ import { HealthSignalDot, reasoningLabelOf } from './health-ui.ts'
 import { Icon, ICON_ARROW_DOWN, ICON_BOLT, ICON_CLOSE, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_ROUTE, ICON_SHIELD, ICON_TRASH, ICON_UP, ICON_WARN } from './icons.ts'
 import { SegmentedTabs, Tag, useModalLayer } from '@deepseek-ai/dsh-client-ui-primitives'
 import { STRATEGY_OPTIONS } from './validate.ts'
-import { DEFAULT_MAX_TOTAL_ATTEMPTS, SWITCH_ON_CODES } from '../defaults.ts'
+import { DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STRATEGY, SWITCH_ON_CODES } from '../defaults.ts'
 
 export function CandidateNode(props) {
   var t = props.t
@@ -272,7 +272,7 @@ export function Connector(props) {
 export function PipelineEditor(props) {
   var t = props.t
   var candidates = props.candidates
-  var strategy = props.strategy === 'weight' || props.strategy === 'round-robin' ? props.strategy : 'order'
+  var strategy = props.strategy === 'weight' || props.strategy === 'round-robin' ? props.strategy : DEFAULT_STRATEGY
   var weightTotal = candidates.reduce(function (sum, c) { return sum + Math.max(0, c.weight || 0) }, 0)
 
   var dragSourceIndexState = useState(null)

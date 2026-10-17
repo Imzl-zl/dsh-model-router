@@ -18,13 +18,19 @@
  *   below).
  * - Cross-candidate failover and the total-attempt cap belong here.
  *
+ * The recovery listener's two decision points ({@link decideBeforeInner} and
+ * {@link decideAfterInner}) also live here: the seam in `index.ts` asks this
+ * file both questions and applies the side effects the ruling declares, so
+ * the branch table is testable without a boot.
+ *
  * Note: 为何可服务性必须由 decideRecovery 在授权下一次发火之前判（C2 原文最小修法
  * 实测只是搬代价）—— 见 .agents/notes/implemented/2026-10-17-attempt-budget-two-layers.md
  */
 
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Candidate, DefaultProfile, Profile, Strategy, SwitchOn } from './config.ts'
-import { switchOnKeyOf } from './defaults.ts'
+import { IMPLICIT_HOP_MAX_ATTEMPTS, switchOnKeyOf } from './defaults.ts'
+import { routeKeyOf } from './routes.ts'
 import type { StepChain, StepConditions, StepState } from './state.ts'
 
 /**
@@ -85,7 +91,7 @@ export function resolveChain(
     }
   }
   if (!fallback.enabled || fallback.candidates.length === 0) return undefined
-  const implicit: Candidate = { provider: resolved.provider, model: resolved.model, maxAttempts: 1, weight: 0 }
+  const implicit: Candidate = { provider: resolved.provider, model: resolved.model, maxAttempts: IMPLICIT_HOP_MAX_ATTEMPTS, weight: 0 }
   return {
     candidates: [implicit, ...fallback.candidates],
     order: [0, ...fallback.candidates.map((_, index) => index + 1)],
@@ -281,4 +287,110 @@ export function decideRecovery(state: StepState, code: string, aborted: boolean)
   if (state.totalAttempts >= state.chain.maxTotalAttempts) return 'terminal'
   if (!canFireAgain(state)) return 'terminal'
   return 'retry'
+}
+
+/**
+ * The outermost recovery listener's decision before llm-retry is consulted.
+ *
+ * `delegate` asks the inner layer (llm-retry / compaction) first — the only
+ * shape where a same-route retry is still legitimate. `retry` and `terminate`
+ * are the plugin's own decisions, taken without llm-retry at all: its backoff
+ * and both durable `llm/retry` records never happen, and the record it would
+ * have written names the provider the Router may redirect away from anyway.
+ */
+export type BeforeInnerRuling =
+  | { readonly kind: 'delegate'; readonly record: false; readonly log: '' }
+  | { readonly kind: 'retry'; readonly record: true; readonly log: string }
+  | { readonly kind: 'terminate'; readonly record: true; readonly log: string }
+
+/** What the inner layer decided, as the recovery listener sees it. */
+export type InnerDecision = 'retry' | undefined
+
+/**
+ * The same decision after llm-retry answered. `honor` passes its retry
+ * through untouched (the failure's outcome is not settled yet — llm-retry is
+ * still retrying the same route). `terminate` ends the chain when the budget
+ * is spent, and `retry` takes over when llm-retry gave up.
+ */
+export type AfterInnerRuling =
+  | { readonly kind: 'honor'; readonly record: false; readonly log: '' }
+  | { readonly kind: 'retry'; readonly record: true; readonly log: string }
+  | { readonly kind: 'terminate'; readonly record: true; readonly log: string }
+
+/**
+ * The two decision points of `agent/request-error`, as pure rulings that
+ * DECLARE their side effects — the handler in `index.ts` is an interpreter
+ * that applies them.
+ *
+ * Why this shape: the handler used to grow one branch per case, each
+ * attaching its own side effects, and the function's own comment ("whether to
+ * record must not depend on which recovery path the failure takes") was
+ * wider than the code — the veto branch lost its breaker record while its two
+ * siblings kept theirs. That is not a branch to patch; it is the branch TABLE
+ * that has no home. The rule, in one sentence: **a failure that takes the
+ * current candidate OUT of rotation (switch away, cool it down, or end the
+ * chain) is recorded; a failure whose outcome is not yet settled is not.**
+ * The discriminated unions encode it — only `delegate` and `honor` may carry
+ * `record: false` — and the unit suite asserts it across the whole table, so
+ * the next branch added cannot silently drop the record again.
+ *
+ * `log` is the handler's warn line, built here so the copy is pinned by the
+ * same tests as the decision (copy that drifts from behavior is this
+ * project's recurring C4-class bug).
+ *
+ * Note: 五分支收编的来龙去脉（待办 4 是症状不是独立问题，被否的"补一行
+ * noteBreaker()"方案）—— 见 .agents/notes/implemented/2026-10-17-policy-into-the-decision-core.md
+ */
+export function decideBeforeInner(state: StepState, code: string, aborted: boolean): BeforeInnerRuling {
+  const current = state.chain.candidates[state.index]!
+  const route = routeKeyOf(current.provider, current.model)
+  const attempt = `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts})`
+  // "本候选配额已尽 && 这个错该切换"是插件自己就能定的事：llm-retry 想给同一条
+  // 路由第二次本身就是越权（用户配的"这条渠道最多真实调用多少次"已经用完）。
+  if (aborted
+    || state.attemptsOnCandidate < current.maxAttempts
+    || !isSwitchOnEligible(state.chain, code)) {
+    return { kind: 'delegate', record: false, log: '' }
+  }
+  const canAdvance = state.index < state.chain.candidates.length - 1
+  if (canAdvance && state.totalAttempts < state.chain.maxTotalAttempts) {
+    return {
+      kind: 'retry',
+      record: true,
+      log: `model-router: ${code} on ${route} ${attempt}; this candidate's budget is spent, switching without llm-retry`,
+    }
+  }
+  return {
+    kind: 'terminate',
+    record: true,
+    log: `model-router: ${code} on ${route} ${attempt}; this candidate's budget is spent and the chain has nothing left, terminating without llm-retry`,
+  }
+}
+
+/** {@link decideBeforeInner} 的姊妹：llm-retry 已经回答之后的裁决。 */
+export function decideAfterInner(state: StepState, code: string, aborted: boolean, inner: InnerDecision): AfterInnerRuling {
+  const current = state.chain.candidates[state.index]!
+  const route = routeKeyOf(current.provider, current.model)
+  if (inner === 'retry') {
+    // 预算耗尽就否决内层的重试决定：用户配的"最多真实调用多少次"是硬承诺，
+    // llm-retry 的同路由重试也不能越过它。终态同样记熔断——这一击已经把当前
+    // 候选拿出轮换，记不记不该取决于恢复走哪条路。
+    if (state.exhausted || state.totalAttempts >= state.chain.maxTotalAttempts) {
+      return {
+        kind: 'terminate',
+        record: true,
+        log: `model-router: attempt budget spent (${state.totalAttempts}/${state.chain.maxTotalAttempts}) on ${route}; terminating instead of retrying`,
+      }
+    }
+    return { kind: 'honor', record: false, log: '' }
+  }
+  // 内层全部放弃：记录熔断，并决定是否跨候选继续。
+  if (decideRecovery(state, code, aborted) === 'terminal') {
+    return { kind: 'terminate', record: true, log: '' }
+  }
+  return {
+    kind: 'retry',
+    record: true,
+    log: `model-router: ${code} on ${route} (attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); continuing the chain`,
+  }
 }
