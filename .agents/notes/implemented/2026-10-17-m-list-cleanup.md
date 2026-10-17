@@ -101,13 +101,63 @@ M17 经回核**不成立**：全树只有一处 `TimeoutError`（probe.ts 内三
   顺序固定。② deepEqual 语义收紧：undefined 值键现在算键（旧 JSON 比较会忽略）——
   配置值全走 JSON 克隆，无 undefined 值键存活，无影响。③ M21 是接线守卫不是
   行为测试（tab 状态所限，理由见 Alternatives 4）。④ M4 的浏览器→宿主取消 riding
-  在 probeAll 已声明的同一契约上，但本项目的浏览器侧此前未实际使用过该通道——
-  真实浏览器会话是最后一块未铺的验证（隔离 home 冒烟）。
+  在 probeAll 已声明的同一契约上，本项目浏览器侧此前未实际使用过该通道——**已于
+  2026-10-17 在隔离 home 实测补上**（见文末「浏览器实测」段：取消缝与卸载回收都拿到
+  了真实浏览器证据，活体停用路径也覆盖到了，不需要退化成 reload 弱证据）。
 - 数字：`unit.mjs` 117 → **121**（+4：取消缝 / deepEqual / 快捷键键 / 预设覆盖）；
   `client-controller.mjs` 41 → **46**（+5：未知 id / 卸载 / 目录更新器 / 路由清单
   单源 / 弹窗接线）；`run.mjs` **21 场景 0 失败**不变（M3 的删除由它实证）；
   `remote.mjs` 14 不变；`tsc` 0 不变。
 
 **给下一轮的输入**：M1 的运行时拦截（后注册 always 策略）是唯一从"修"降级为
-"登记"的一条，形状已写进 docstring；M4 的真实浏览器取消路径值得一次隔离 home
-冒烟补上；M22/N1–N8/待办 5 仍明确不做。
+"登记"的一条，形状已写进 docstring；M4 的真实浏览器取消路径**已由 2026-10-17 的隔离
+home 实测补上**（下文），这条从待办里划掉；M22/N1–N8/待办 5 仍明确不做。
+
+## 浏览器实测（2026-10-17，隔离 home `.dshhome-view` 端口 3392 + Chrome MCP）
+
+起服务前查端口无残留监听；客户端走 `/plugins/??…dsh-model-router/client.js…&rev=ca8e97299626`
+（`immutable` 一年缓存），查串确认含 `checkAborts` / `checkConnectivity({ routes }, signal)` /
+`disposed` 守卫 / `checkAborts.forEach`——服务端吐的确实是本轮代码，不是旧 `lib/`。
+
+**制造"慢到看得见"的发现窗口的两个前提（都不是猜的）**：任务给的
+`http://10.255.255.1:81` 在本机 **0.03s 直接失败**，挂不住，产不出在飞窗口；且 pi-ai 的
+discovery 对**目录内** provider 直接返回清单、一个网络请求都不发
+（`llm-pi-ai/src/catalog.ts:217-221`）。所以在隔离 home 的 patch 里声明两个 hand-declared
+pi-ai provider 指向本机夹具服务（`127.0.0.1:3399`）：`/hang/models` 接受连接后永不应答
+（真黑洞），`/ok/models` 返回 OpenAI 形状清单。夹具带 socket 级日志——发现请求由宿主
+（Node）发出，浏览器只看得见 Remote POST，"取消有没有真到 `discoverModels`"只能从挂住的
+socket 什么时候关来判断。
+
+- **A 取消缝（M4）**：在飞时 reload 页面，两次独立复现。夹具日志显示发现请求实打实挂了
+  **67.3s / 76.6s**（`65.423s OPEN /hang/models` → `132.741s CLOSE`；`139.218s` →
+  `215.777s`），socket 关掉的时刻正是 reload 的那一刻——取消到达了宿主的
+  `discoverModels`；reload 后的新页面里同一批请求没有继续跑完（下一次是 6.5s 后的新
+  socket）。DevTools Network 里 `POST /api/routerHealth/checkConnectivity` 确实在飞
+  （Remote 一元调用走 HTTP POST，`dsh-client-connection` 的 README：浏览器用 HTTP POST
+  做 Remote unary calls），但本机 MCP 对"被导航中止"的请求只显示 `pending`、不给
+  canceled——这是测量工具的显示限制，不是产品行为；页面活着时的中止（见 B）才拿到
+  `net::ERR_ABORTED`。DSH 进程 stdout 全程只有启动 URL 一行，无未处理拒绝。
+- **B 卸载回收（M11）**：插件**可活体停用**（插件管理页 `role="switch"` +
+  `aria-label="启用 dsh-model-router"`；overlay/link 安装也能停），所以没走 reload 弱证据。
+  停用瞬间有发现请求在飞：Network `reqid=1171 POST /api/routerHealth/checkConnectivity
+  [net::ERR_ABORTED]`——页面没有导航、连接还活着，这个中止只能来自插件自己的
+  `AbortController`；同时夹具 `222.522s OPEN /hang/models` → `345.694s CLOSE`（挂了
+  123.2s，停用即关）。周期请求的停止用**对照组**钉死（排除"定时器还活着只是被
+  `ui.checking` 挡住"）：重新启用后夹具端点每 **5.0s** 被打开一次、连续 8 个周期
+  （445.586s → 480.571s）；再次停用后 50+ 秒（10 个周期）零打开，Network 零新
+  `checkConnectivity` POST（最后一个是停用前的 reqid=1233，停用动作本身是 reqid=1263
+  `pluginManager/setBundleEnabled`）。
+- **C happy path 回归**：带 signal 的正常路径完整落库，四种判定各就各位——
+  `router-ok/router-fixture-model → reachable`（徽标「正常」）、
+  `router-hang/hang-model → notAdvertised`（「降级」）、
+  `deepseek-official ×2 → unavailable/noDiscovery`（「待观测」，tooltip 明说
+  DSH 没为它注册 model discovery）、`real-a ×2 → unavailable/notConfigurable`
+  （「待观测」）；总结行「连通性检查完成 · 可达 1 · 在清单但非此模型 1 · 没能检查 4」。
+  `probeAll` 也照常跑完并落判定（「探测完成 · 未通过 2 · 没能测 4」；两个夹具 provider
+  没配 key，请求没发出即 `PI_AI_ERROR`——夹具缺口，不是产品缺陷）。保存链路：健康设置把
+  巡检周期 5→8 →「应用更改」进草稿（`● 未保存修改` + `放弃更改` 出现）→ 主保存钮落库，
+  `cordis.patch.yml` 被重写且 `intervalSeconds: 8`，定时器按新周期 **8.0s** 重武装
+  （端点打开 801.975s → 809.975s）。
+
+实测后已把隔离 home 的 patch 还原成原样（91 行、无夹具残留）——它是跨轮共用夹具，
+留着会悄悄改变以后各轮的基线路由集与巡检周期。
