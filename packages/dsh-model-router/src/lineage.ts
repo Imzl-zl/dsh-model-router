@@ -20,6 +20,7 @@
 import type { AssistantStreamRecord } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { z } from 'zod'
+import { routeKeyOf } from './routes.ts'
 
 /** One failover: the route that failed, why, where the chain went, and its outcome. */
 export interface FailoverEntry {
@@ -94,10 +95,6 @@ export function failureCodeOfStream(stream: readonly AssistantStreamRecord[]): s
   return undefined
 }
 
-function routeOf(config: { provider?: string; model?: string }): string {
-  return `${config.provider ?? ''}/${config.model ?? ''}`
-}
-
 export const failoverHistoryProjection = {
   key: FAILOVER_HISTORY_KEY,
   stateVersion: 1,
@@ -114,7 +111,7 @@ export const failoverHistoryProjection = {
       case 'step/start':
         return state.step === event.data.step ? state : { ...state, step: event.data.step }
       case 'request/header': {
-        const route = routeOf(event.data.header.config)
+        const route = routeKeyOf(event.data.header.config.provider ?? '', event.data.header.config.model ?? '')
         // Every header clears the pending failure: a failure older than the
         // previous header belongs to an earlier request.
         const next: LineageState = { ...state, lastRoute: route, lastFailure: undefined }

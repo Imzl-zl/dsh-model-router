@@ -25,6 +25,7 @@
 
 import type { GenerateOptions, LlmCallConfig, PreparedLlmCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ProbeRoute, ProbeRouteResult } from './types.ts'
+import { routeKeyOf } from './routes.ts'
 
 /** The llm face the probe needs: prepare once, stream once, read the head. */
 export interface ProbeLlm {
@@ -191,7 +192,7 @@ export function probePromptFor(
   fallback: string,
   overrides: readonly { route: string; prompt: string }[],
 ): string {
-  const key = `${route.provider}/${route.model}`
+  const key = routeKeyOf(route.provider, route.model)
   const own = overrides.find(entry => entry.route === key)
   return own?.prompt ?? fallback
 }

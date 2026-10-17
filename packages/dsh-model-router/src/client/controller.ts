@@ -9,10 +9,11 @@
  */
 
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { clone, deepEqual, routeOf, summarize } from './format.ts'
+import { clone, deepEqual, summarize } from './format.ts'
 import { defaultSwitchOn, normalizeDefault, normalizeHealth, normalizeProfiles, validate } from './validate.ts'
 import { capTimeline, MAX_TIMELINE_POINTS } from '../timeline.ts'
-import { configuredRoutes } from '../routes.ts'
+import { configuredRoutes, routeKeyOf, routeParts } from '../routes.ts'
+import { DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STICKY_TURNS, NEW_PROFILE_MAX_ATTEMPTS } from '../defaults.ts'
 
 /**
  * 配置里点名的全部物理渠道（去重、按链顺序）：巡检与探测都用这一份。规则在
@@ -387,15 +388,15 @@ export function createController(ctx, scope, t) {
       var template = draft.profiles.find(function (profile) { return profile.id === templateId })
       var candidates = template
         ? template.candidates.map(function (candidate) { return clone(candidate) })
-        : [{ provider: when.provider, model: when.model, maxAttempts: 2 }]
-      candidates[0] = { provider: when.provider, model: when.model, maxAttempts: 2 }
+        : [{ provider: when.provider, model: when.model, maxAttempts: NEW_PROFILE_MAX_ATTEMPTS }]
+      candidates[0] = { provider: when.provider, model: when.model, maxAttempts: NEW_PROFILE_MAX_ATTEMPTS }
       draft.profiles.push({
         id: id,
         when: { provider: when.provider, model: when.model },
         candidates: candidates,
         switchOn: defaultSwitchOn(),
-        maxTotalAttempts: 6,
-        stickyTurns: 0,
+        maxTotalAttempts: DEFAULT_MAX_TOTAL_ATTEMPTS,
+        stickyTurns: DEFAULT_STICKY_TURNS,
       })
       ui.activeId = id
       ui.modal = null
@@ -448,7 +449,7 @@ export function createController(ctx, scope, t) {
     setMaxAttempts: function (profileId, index, value, isDefault) {
       var candidate = listOf(profileId, isDefault)[index]
       var parsed = Number(value)
-      candidate.maxAttempts = Number.isFinite(parsed) ? Math.min(5, Math.max(1, Math.round(parsed))) : 1
+      candidate.maxAttempts = Number.isFinite(parsed) ? Math.min(5, Math.max(1, Math.round(parsed))) : DEFAULT_MAX_ATTEMPTS
       publish()
     },
     /** Patch one candidate's `needs`; an empty patch clears the field. */
@@ -564,23 +565,20 @@ export function createController(ctx, scope, t) {
       publish()
       var started = Date.now()
       var keys = configuredRouteList(draft)
-      // keys 是 `provider/model` 字符串（共享规则在 ../routes.ts）；拆回两半交给
-      // 检查器。provider 段永不含 `/`，与 host 的 splitRoute 同口径。
-      var routes = keys.map(function (key) {
-        var slash = key.indexOf('/')
-        return { provider: key.slice(0, slash), model: key.slice(slash + 1) }
-      })
+      // keys 是 `provider/model` 字符串（拼拆规则都在 ../routes.ts）；拆回两半
+      // 交给检查器。
+      var routes = keys.map(routeParts)
       // 一次调用问完整轮：分类在宿主侧，一轮检查因此也只是一次往返。
       runCheck(routes).then(function ( verdicts) {
         // 先拷贝后写入——store 的 set 会 dev-freeze 它收到的对象，往原对象
         // 上赋值在 dev 构建里会静默失败。
         var next = Object.assign({}, ui.discover)
-        verdicts.forEach(function (verdict) { next[verdict.provider + '/' + verdict.model] = verdict })
+        verdicts.forEach(function (verdict) { next[routeKeyOf(verdict.provider, verdict.model)] = verdict })
         ui.discover = next
         // 汇总按"这一轮被问到的每一条"算：宿主对每条请求都给一个判定，两条
         // 到不了宿主的路径也按条补上"没能检查"。少算一条就是少报一次故障。
         ui.checkSummary = summarizeChecks(routes.map(function (route) {
-          return next[route.provider + '/' + route.model]
+          return next[routeKeyOf(route.provider, route.model)]
             ?? { provider: route.provider, model: route.model, kind: 'unavailable', reason: 'hostUnavailable' }
         }))
         // 连通性检查跑完顺带重取被动快照：定时轮次开着的时候，健康工作台要跟着
@@ -599,7 +597,7 @@ export function createController(ctx, scope, t) {
     },
     /** Run a connectivity check on a single route (0 Token discovery check). */
     checkRouteSingle: function (provider, model) {
-      var key = provider + '/' + model
+      var key = routeKeyOf(provider, model)
       if (ui.checkingRoutes && ui.checkingRoutes[key]) return
       ui.checkingRoutes = Object.assign({}, ui.checkingRoutes)
       ui.checkingRoutes[key] = true
@@ -660,7 +658,7 @@ export function createController(ctx, scope, t) {
         if (!result || result.ok !== true || !result.value) return
         var next = {}
         ;(result.value.routes ?? []).forEach(function (entry) {
-          next[entry.provider + '/' + entry.model] = entry
+          next[routeKeyOf(entry.provider, entry.model)] = entry
         })
         ui.probe = next
         publish()
@@ -668,7 +666,7 @@ export function createController(ctx, scope, t) {
     },
     /** Probe one route end to end (1 token, cut at the first content byte). */
     probeRouteSingle: function (provider, model) {
-      var key = provider + '/' + model
+      var key = routeKeyOf(provider, model)
       if (ui.probingRoutes && ui.probingRoutes[key]) return
       var health = ctx.remote && ctx.remote.routerHealth
       if (!health || typeof health.probeAll !== 'function') return
@@ -680,7 +678,7 @@ export function createController(ctx, scope, t) {
         if (result && result.ok === true) {
           var next = Object.assign({}, ui.probe)
           ;(result.value.routes ?? []).forEach(function (entry) {
-            next[entry.provider + '/' + entry.model] = entry
+            next[routeKeyOf(entry.provider, entry.model)] = entry
           })
           ui.probe = next
         }
@@ -702,10 +700,7 @@ export function createController(ctx, scope, t) {
       if (ui.probing) return
       var health = ctx.remote && ctx.remote.routerHealth
       if (!health || typeof health.probeAll !== 'function') return
-      var routes = configuredRouteList(draft).map(function (key) {
-        var slash = key.indexOf('/')
-        return { provider: key.slice(0, slash), model: key.slice(slash + 1) }
-      })
+      var routes = configuredRouteList(draft).map(routeParts)
       ui.probing = true
       ui.probeSummary = null
       publish()
@@ -714,7 +709,7 @@ export function createController(ctx, scope, t) {
         if (result && result.ok === true) {
           var next = Object.assign({}, ui.probe)
           ;(result.value.routes ?? []).forEach(function (entry) {
-            next[entry.provider + '/' + entry.model] = entry
+            next[routeKeyOf(entry.provider, entry.model)] = entry
           })
           ui.probe = next
           ui.probeSummary = summarizeProbes(result.value.routes ?? [])

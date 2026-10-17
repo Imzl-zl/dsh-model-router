@@ -3,6 +3,7 @@
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { formatLatency, formatThroughput, formatTime, healthToneStyle, routeStatus } from './format.ts'
+import { MAX_TIMELINE_POINTS } from '../timeline.ts'
 
 export function reasoningLabelOf(catalog, provider, model) {
   var group = (catalog?.groups ?? []).find(function (entry) { return entry.id === provider })
@@ -21,11 +22,13 @@ export function ChannelMetricsDashboard(props) {
   var throughputTps = record ? record.throughputTps : undefined
 
   var slots = []
-  var padCount = Math.max(0, 24 - timeline.length)
+  // 窗口读共享常量（../timeline.ts）：柱子画几条必须和投影里存几条是同一个数，
+  // 各写一个 24 就会在窗口调整时"看到的比存的多/少"，而可用率算的是另一套。
+  var padCount = Math.max(0, MAX_TIMELINE_POINTS - timeline.length)
   for (var i = 0; i < padCount; i++) {
     slots.push({ isIdle: true })
   }
-  var recent = timeline.length > 24 ? timeline.slice(-24) : timeline
+  var recent = timeline.length > MAX_TIMELINE_POINTS ? timeline.slice(-MAX_TIMELINE_POINTS) : timeline
   for (var j = 0; j < recent.length; j++) {
     slots.push(recent[j])
   }
@@ -66,8 +69,8 @@ export function ChannelMetricsDashboard(props) {
       h('div', { style: S.metricsStatusHeader },
         h('span', { style: S.metricsLabel }, t('healthMetricHistory')),
         // 时间线是跨会话并集，条数只表示"窗口里累计了多少次观测"；柱子画最近
-        // 24 个（下面 slice(-24)），所以这里不再写 /24——那个上限是单会话投影
-        // 的，合并后不适用。
+        // MAX_TIMELINE_POINTS 个（下面 slice(-MAX_TIMELINE_POINTS)），所以这里
+        // 不再写 /24——那个上限是单会话投影的，合并后不适用。
         h('span', { style: S.metricsStatusValue }, String(timeline.length))),
       h('div', { style: S.timelineBarContainer }, barElements)),
     h('div', { style: S.metricsColValue },

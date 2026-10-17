@@ -19,7 +19,7 @@
 
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Candidate, DefaultProfile, Profile, Strategy, SwitchOn } from './config.ts'
-import { switchOnKeyOf } from './config.ts'
+import { switchOnKeyOf } from './defaults.ts'
 import type { StepChain, StepConditions, StepState } from './state.ts'
 
 /**

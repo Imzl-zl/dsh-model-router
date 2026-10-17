@@ -41,7 +41,8 @@ import {
   type RouterOptions,
 } from './config.ts'
 import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
-import { configuredRoutes } from './routes.ts'
+import { configuredRoutes, routeKeyOf, routeParts } from './routes.ts'
+import { DEFAULT_PROBE_PROMPT, DEFAULT_PROBE_TIMEOUT_SECONDS } from './defaults.ts'
 import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
 import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice } from './notice.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
@@ -71,10 +72,7 @@ import type { ConnectivityRequest, ConnectivityVerdict, ProbeReport, ProbeReques
  * both halves.
  */
 function configuredRunRoutes(config: { profiles: readonly Profile[]; default: DefaultProfile }): ProbeRoute[] {
-  return configuredRoutes(config.profiles, config.default).map((key) => {
-    const slash = key.indexOf('/')
-    return { provider: key.slice(0, slash), model: key.slice(slash + 1) }
-  })
+  return configuredRoutes(config.profiles, config.default).map((key) => routeParts(key))
 }
 
 export default class ModelRouter extends TypertRemoteService {
@@ -256,7 +254,7 @@ export default class ModelRouter extends TypertRemoteService {
               break
             } catch (error) {
               ctx.logger.warn(
-                `model-router: candidate ${candidate.provider}/${candidate.model} cannot serve this request, skipping: ${String(error)}`,
+                `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} cannot serve this request, skipping: ${String(error)}`,
               )
               skipped.push(candidate)
               index += 1
@@ -272,11 +270,11 @@ export default class ModelRouter extends TypertRemoteService {
             }
           }
           for (const candidate of skipped) {
-            if (!states.shouldNoteSkip(agent, turn, `capability:${candidate.provider}/${candidate.model}`)) continue
+            if (!states.shouldNoteSkip(agent, turn, `capability:${routeKeyOf(candidate.provider, candidate.model)}`)) continue
             agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
           }
           for (const entry of blocked) {
-            if (!states.shouldNoteSkip(agent, turn, `breaker:${entry.candidate.provider}/${entry.candidate.model}`)) continue
+            if (!states.shouldNoteSkip(agent, turn, `breaker:${routeKeyOf(entry.candidate.provider, entry.candidate.model)}`)) continue
             agent.session.append('user/message', breakerNotice(entry.candidate, entry.block), { surfaceOp: 'append' })
           }
           if (outgoing === undefined) {
@@ -337,7 +335,7 @@ export default class ModelRouter extends TypertRemoteService {
         // llm-retry 的同路由重试也不能越过它。返回 undefined 即终态。
         if (state.exhausted || state.totalAttempts >= state.chain.maxTotalAttempts) {
           ctx.logger.warn(
-            `model-router: attempt budget spent (${state.totalAttempts}/${state.chain.maxTotalAttempts}) on ${current.provider}/${current.model}; terminating instead of retrying`,
+            `model-router: attempt budget spent (${state.totalAttempts}/${state.chain.maxTotalAttempts}) on ${routeKeyOf(current.provider, current.model)}; terminating instead of retrying`,
           )
           return undefined
         }
@@ -355,7 +353,7 @@ export default class ModelRouter extends TypertRemoteService {
       }
       if (decideRecovery(state, failure.code, signal.aborted) === 'terminal') return undefined
       ctx.logger.warn(
-        `model-router: ${failure.code} on ${current.provider}/${current.model} `
+        `model-router: ${failure.code} on ${routeKeyOf(current.provider, current.model)} `
         + `(attempt ${state.totalAttempts}/${state.chain.maxTotalAttempts}); continuing the chain`,
       )
       return { kind: 'retry' as const }
@@ -373,9 +371,9 @@ export default class ModelRouter extends TypertRemoteService {
   @Remote
   async probeAll(request: ProbeRequest, signal: AbortSignal): Promise<ProbeReport> {
     const health = (this.config.health?.get() as HealthConfig | undefined)?.probe
-    const fallback = health?.prompt ?? '1'
+    const fallback = health?.prompt ?? DEFAULT_PROBE_PROMPT
     const overrides = health?.prompts ?? []
-    const timeoutSeconds = health?.timeoutSeconds ?? 8
+    const timeoutSeconds = health?.timeoutSeconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS
     const wanted = request.routes.length > 0
       ? request.routes
       : configuredRunRoutes(readConfig(this.config))
@@ -481,7 +479,7 @@ function readConfig(config: Config): { profiles: readonly Profile[]; default: De
 
 /** Stable identity of one turn's condition-skip set, for the once-per-turn notice. */
 function conditionSkipKey(skipped: readonly { candidate: Candidate; reason: string }[]): string {
-  return skipped.map(entry => `${entry.candidate.provider}/${entry.candidate.model}:${entry.reason}`).join('|')
+  return skipped.map(entry => `${routeKeyOf(entry.candidate.provider, entry.candidate.model)}:${entry.reason}`).join('|')
 }
 
 /**
@@ -522,7 +520,7 @@ function assertNoAlwaysPolicy(ctx: Context, config: { profiles: readonly Profile
       const policy = ctx.llm.providerRetryPolicy(candidate.provider)
       if (policy?.mode === 'always') {
         throw new Error(
-          `model-router: ${where} candidate ${candidate.provider}/${candidate.model} names a provider whose retry policy is "always" — `
+          `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names a provider whose retry policy is "always" — `
           + 'unbounded same-route retries would make the total attempt cap unenforceable; '
           + 'set that provider back to the normal policy, or remove it from the chain',
         )
@@ -539,7 +537,7 @@ function warnUnregisteredProviders(ctx: Context, config: { profiles: readonly Pr
     for (const candidate of candidates) {
       if (!registered.has(candidate.provider)) {
         ctx.logger.warn(
-          `model-router: ${where} candidate ${candidate.provider}/${candidate.model} names an unregistered provider; `
+          `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names an unregistered provider; `
           + 'that candidate is skipped at runtime and the profile degrades to the remaining chain',
         )
       }

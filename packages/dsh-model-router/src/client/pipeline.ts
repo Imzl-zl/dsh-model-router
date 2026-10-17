@@ -2,13 +2,15 @@
 
 import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { routeKeyOf } from '../routes.ts'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, healthToneBadge, routeOf } from './format.ts'
+import { fill, healthToneBadge } from './format.ts'
 import { HealthSignalDot, reasoningLabelOf } from './health-ui.ts'
 import { Icon, ICON_ARROW_DOWN, ICON_BOLT, ICON_CLOSE, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_ROUTE, ICON_SHIELD, ICON_TRASH, ICON_UP, ICON_WARN } from './icons.ts'
 import { SegmentedTabs, Tag, useModalLayer } from '@deepseek-ai/dsh-client-ui-primitives'
-import { STRATEGY_OPTIONS, SWITCH_ON_CODES } from './validate.ts'
+import { STRATEGY_OPTIONS } from './validate.ts'
+import { DEFAULT_MAX_TOTAL_ATTEMPTS, SWITCH_ON_CODES } from '../defaults.ts'
 
 export function CandidateNode(props) {
   var t = props.t
@@ -61,8 +63,8 @@ export function CandidateNode(props) {
               isPrimary ? h('span', { style: Object.assign({}, S.primaryBadge, healthToneBadge('healthy')) }, '👑 ' + t('primaryModelBadge')) : null,
               h(HealthSignalDot, {
                 t: t,
-                route: routeOf(candidate),
-                record: props.passive ? props.passive[routeOf(candidate)] : null,
+                route: routeKeyOf(candidate.provider, candidate.model),
+                record: props.passive ? props.passive[routeKeyOf(candidate.provider, candidate.model)] : null,
                 passive: props.passive,
                 discover: props.discover,
                 probe: props.probe,
@@ -76,7 +78,7 @@ export function CandidateNode(props) {
                 'aria-expanded': expanded,
                 onClick: function () { setExpanded(!expanded) },
               }, hasActiveNeeds ? '⚙️ ● ' + t('toggleNeedsBtn') : '⚙️ ' + t('toggleNeedsBtn'))),
-            h('span', { style: S.modelPath }, routeOf(candidate))),
+            h('span', { style: S.modelPath }, routeKeyOf(candidate.provider, candidate.model))),
           h('div', { style: S.nodeControls },
             h('div', { style: S.nodeTuning },
               h('div', { style: S.attemptPicker, title: t('attemptLimitHint') },
@@ -452,7 +454,7 @@ export function PipelineEditor(props) {
     nodes.push(h('div', { key: 'policy-summary', style: S.policySummaryCard },
       h('div', { style: S.policySummaryText },
         h(Icon, { d: ICON_SHIELD, size: 14, style: { color: 'var(--dsh-router-accent, #4A65E8)' } }),
-        fill(t('policySummaryPrefix'), { n: props.maxTotalAttempts || 6 })),
+        fill(t('policySummaryPrefix'), { n: props.maxTotalAttempts || DEFAULT_MAX_TOTAL_ATTEMPTS })),
       h('button', {
         type: 'button',
         className: 'dsh-router-policy-summary-btn',

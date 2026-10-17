@@ -1,6 +1,17 @@
 /** Client-side mirror of the host's structural checks, plus config defaults and legacy normalization. */
 
 import { clone } from './format.ts'
+import { routeKeyOf } from '../routes.ts'
+import {
+  DEFAULT_BREAKER_COOLDOWN_SECONDS,
+  DEFAULT_BREAKER_SCOPE,
+  DEFAULT_INTERVAL_SECONDS,
+  DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
+  DEFAULT_PROBE_PROMPT,
+  DEFAULT_PROBE_TIMEOUT_SECONDS,
+  DEFAULT_STICKY_TURNS,
+  DEFAULT_SWITCH_ON,
+} from '../defaults.ts'
 
 export var STRATEGY_OPTIONS = ['order', 'weight', 'round-robin']
 
@@ -15,34 +26,20 @@ export var BREAKER_CODE_PRESETS = [
 ]
 
 
-export var SWITCH_ON_CODES = [
-  { key: 'rateLimit', labelKey: 'rateLimit', code: 'RATE_LIMIT' },
-  { key: 'server', labelKey: 'serverError', code: 'SERVER' },
-  { key: 'timeout', labelKey: 'timeout', code: 'TIMEOUT' },
-  { key: 'transport', labelKey: 'transport', code: 'TRANSPORT' },
-  { key: 'emptyResponse', labelKey: 'emptyResponse', code: 'EMPTY_RESPONSE' },
-  { key: 'invalidRequest', labelKey: 'invalidRequest', code: 'INVALID_REQUEST' },
-  // 渠道自身的凭证/额度问题：另一条渠道有自己的密钥和额度，切换通常立刻能救。
-  // 2026-10-16 修订，依据见 .agents/notes/implemented/2026-10-16-switch-on-auth-and-quota.md。
-  { key: 'auth', labelKey: 'auth', code: 'AUTH' },
-  { key: 'quota', labelKey: 'quota', code: 'QUOTA' },
-]
-
-
 export function defaultSwitchOn() {
-  // 与 host 的 switchOnSchema 默认值逐字一致：两边各写一份就会漂移，而漂移的表现是
-  // "UI 说开着、host 说关着"。
-  return { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true }
+  // 与 host 的 switchOnSchema 默认值同源（../defaults.ts 的 DEFAULT_SWITCH_ON）：
+  // 两边各写一份就会漂移，而漂移的表现是"UI 说开着、host 说关着"。
+  return Object.assign({}, DEFAULT_SWITCH_ON)
 }
 
 export function defaultProfileValue() {
-  return { enabled: false, candidates: [], switchOn: defaultSwitchOn(), maxTotalAttempts: 3, stickyTurns: 0 }
+  return { enabled: false, candidates: [], switchOn: defaultSwitchOn(), maxTotalAttempts: DEFAULT_POOL_MAX_TOTAL_ATTEMPTS, stickyTurns: DEFAULT_STICKY_TURNS }
 }
 
 export function normalizeProfiles(value) {
   return clone(value ?? []).map(function (profile) {
     if (!Array.isArray(profile.candidates)) profile.candidates = []
-    if (typeof profile.stickyTurns !== 'number' || profile.stickyTurns < 0) profile.stickyTurns = 0
+    if (typeof profile.stickyTurns !== 'number' || profile.stickyTurns < 0) profile.stickyTurns = DEFAULT_STICKY_TURNS
     return profile
   })
 }
@@ -50,7 +47,7 @@ export function normalizeProfiles(value) {
 export function normalizeDefault(value) {
   var pool = clone(value ?? defaultProfileValue())
   if (!Array.isArray(pool.candidates)) pool.candidates = []
-  if (typeof pool.stickyTurns !== 'number' || pool.stickyTurns < 0) pool.stickyTurns = 0
+  if (typeof pool.stickyTurns !== 'number' || pool.stickyTurns < 0) pool.stickyTurns = DEFAULT_STICKY_TURNS
   return pool
 }
 
@@ -66,7 +63,7 @@ export function validate(draft) {
     } else {
       var head = profile.candidates[0]
       if (head.provider !== profile.when.provider || head.model !== profile.when.model) {
-        problems.push({ key: 'problemUnpinnedPrimary', vars: { id: profile.id, route: profile.when.provider + '/' + profile.when.model } })
+        problems.push({ key: 'problemUnpinnedPrimary', vars: { id: profile.id, route: routeKeyOf(profile.when.provider, profile.when.model) } })
       }
     }
     profile.candidates.forEach(function (candidate, index) {
@@ -77,7 +74,7 @@ export function validate(draft) {
     // 白吃 attempt 预算。这里漏一条，用户就会存一个被 Host 拒绝、且看不到原因的配置。
     var seenRoutes = {}
     profile.candidates.forEach(function (candidate, index) {
-      var key = candidate.provider + '/' + candidate.model
+      var key = routeKeyOf(candidate.provider, candidate.model)
       if (seenRoutes[key]) problems.push({ key: 'problemDuplicateRoute', vars: { id: profile.id, route: key, index: index + 1 } })
       seenRoutes[key] = true
     })
@@ -119,10 +116,10 @@ export function normalizeHealth(value) {
   var legacyMinutes = typeof health.intervalMinutes === 'number' ? health.intervalMinutes : undefined
   var discoverSeconds = typeof discover.intervalSeconds === 'number'
     ? discover.intervalSeconds
-    : legacyMinutes !== undefined ? legacyMinutes * 60 : 0
+    : legacyMinutes !== undefined ? legacyMinutes * 60 : DEFAULT_INTERVAL_SECONDS
   var probeSeconds = typeof probe.intervalSeconds === 'number'
     ? probe.intervalSeconds
-    : legacyMinutes !== undefined ? legacyMinutes * 60 : 0
+    : legacyMinutes !== undefined ? legacyMinutes * 60 : DEFAULT_INTERVAL_SECONDS
   return {
     passive: health.passive !== false,
     discover: {
@@ -132,9 +129,9 @@ export function normalizeHealth(value) {
     probe: {
       enabled: probe.enabled === true,
       intervalSeconds: probeSeconds,
-      prompt: typeof probe.prompt === 'string' && probe.prompt ? probe.prompt : '1',
+      prompt: typeof probe.prompt === 'string' && probe.prompt ? probe.prompt : DEFAULT_PROBE_PROMPT,
       prompts: Array.isArray(probe.prompts) ? probe.prompts.slice() : [],
-      timeoutSeconds: typeof probe.timeoutSeconds === 'number' ? probe.timeoutSeconds : 8,
+      timeoutSeconds: typeof probe.timeoutSeconds === 'number' ? probe.timeoutSeconds : DEFAULT_PROBE_TIMEOUT_SECONDS,
     },
     breaker: {
       enabled: breaker.enabled === true,
@@ -142,10 +139,10 @@ export function normalizeHealth(value) {
         return {
           code: typeof rule.code === 'string' ? rule.code : '',
           message: typeof rule.message === 'string' ? rule.message : '',
-          cooldownSeconds: typeof rule.cooldownSeconds === 'number' ? rule.cooldownSeconds : 300,
+          cooldownSeconds: typeof rule.cooldownSeconds === 'number' ? rule.cooldownSeconds : DEFAULT_BREAKER_COOLDOWN_SECONDS,
           // 旧配置没有这一字段；host schema 的默认值是 route，这里必须填成同一个，
           // 否则 UI 显示与 host 执行会是两个意思。
-          scope: rule.scope === 'channel' ? 'channel' : 'route',
+          scope: rule.scope === 'channel' ? 'channel' : DEFAULT_BREAKER_SCOPE,
         }
       }) : [],
     },

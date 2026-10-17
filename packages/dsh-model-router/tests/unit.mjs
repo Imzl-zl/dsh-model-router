@@ -11,6 +11,9 @@
  */
 
 import assert from 'node:assert/strict'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   conditionsMet,
   decideRecovery,
@@ -25,10 +28,13 @@ import {
 } from '../src/router.ts'
 import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, MAX_ENTRIES } from '../src/lineage.ts'
 import { breakerNotice } from '../src/notice.ts'
-import { assertStructural, switchOnKeyOf } from '../src/config.ts'
+import { assertStructural } from '../src/config.ts'
+import { SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
+import { defaultSwitchOn } from '../src/client/validate.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
 import { checkConnectivity } from '../src/connectivity.ts'
+import { routeParts } from '../src/routes.ts'
 
 let passed = 0
 const pending = []
@@ -370,7 +376,7 @@ test('breakerNotice names the whole channel for a channel-scope block', () => {
 })
 
 // ---- config round-trip: the shape the client saves must land where the host reads ----
-import { Config } from '../src/config.ts'
+import { Config, switchOnSchema } from '../src/config.ts'
 
 const hostConfig = raw => {
   const c = Config(raw)
@@ -405,6 +411,23 @@ test('switchOnKeyOf maps the channel-own faults (AUTH/QUOTA) and never the user-
   assert.equal(switchOnKeyOf('ABORTED'), undefined)
   assert.equal(switchOnKeyOf('NO_ADAPTER'), undefined)
   assert.equal(switchOnKeyOf('RATE_LIMIT'), 'rateLimit')
+})
+
+test('the switch-on table, the host schema and the browser draft are one fact', () => {
+  // 表里每一个键都必须同时是 host schema 的字段——否则 UI 上那个开关根本存不进
+  // host；浏览器草棒的默认值必须与 schema 解析出的默认值逐字相同。三处各写一遍
+  // 就会漂移，而漂移是静默的："UI 说开着、host 说关着"。默认值与码清单的唯一
+  // 来源是 ../defaults.ts，这条用例钉住两边都真的读它。
+  const hostDefaults = switchOnSchema({})
+  const browserDefaults = defaultSwitchOn()
+  assert.deepEqual(Object.keys(browserDefaults).sort(), SWITCH_ON_CODES.map(entry => entry.key).sort(),
+    'the browser draft names exactly the table\'s keys')
+  for (const entry of SWITCH_ON_CODES) {
+    assert.ok(Object.hasOwn(hostDefaults, entry.key), `the host schema has no field for ${entry.key}`)
+    assert.equal(browserDefaults[entry.key], hostDefaults[entry.key],
+      `the browser default for ${entry.key} drifted from the host schema's`)
+    assert.equal(switchOnKeyOf(entry.code), entry.key, `the table's code ${entry.code} no longer maps to ${entry.key}`)
+  }
 })
 
 test('the client save shape lands where the host reads it', () => {
@@ -509,6 +532,37 @@ test('classifyHealth uses DSH own codes, not invented ones', () => {
   assert.equal(classifyHealth('QUOTA'), 'unhealthy')
   assert.equal(classifyHealth('AUTH_FAILED'), undefined)
   assert.equal(classifyHealth('QUOTA_EXCEEDED'), undefined)
+})
+
+test('single-field bounds belong to the schema: it refuses each value the deleted guards used to catch', () => {
+  // assertStructural 曾经自己拦这 8 个条件，而两条生产调用路径都先过 schema
+  // （index.ts:117 读 Cordis 已校验值、index.ts:126 的 Config(raw) 自己跑一遍），
+  // 那些 guard 全是死分支——只在 schema 收紧时变成"接不住"的谎言。删掉之后这条
+  // 用例钉住 schema 真的拥有它们：任何一个条件被 schema 放行就红。
+  const candidate = (over = {}) => ({ provider: 'p', model: 'm', maxAttempts: 1, weight: 0, ...over })
+  const profile = (over = {}, candidates = [candidate()]) => ({
+    id: 'p1', when: { provider: 'p', model: 'm' }, candidates, switchOn: {},
+    maxTotalAttempts: 6, stickyTurns: 0, strategy: 'order', ...over,
+  })
+  const pool = (over = {}) => ({ enabled: false, candidates: [], switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
+  const base = (over = {}) => ({ enabled: true, profiles: [profile()], default: pool(), ...over })
+  const cases = [
+    ['candidate.maxAttempts < 1', base({ profiles: [profile({}, [candidate({ maxAttempts: 0 })])] })],
+    ['profile.maxTotalAttempts < 1', base({ profiles: [profile({ maxTotalAttempts: 0 })] })],
+    ['profile.stickyTurns < 0', base({ profiles: [profile({ stickyTurns: -1 })] })],
+    ['default.maxTotalAttempts < 1', base({ default: pool({ maxTotalAttempts: 0 }) })],
+    ['default.stickyTurns < 0', base({ default: pool({ stickyTurns: -1 }) })],
+    ['health.discover.intervalSeconds < 0', base({ health: { discover: { intervalSeconds: -1 } } })],
+    ['health.probe.intervalSeconds < 0', base({ health: { probe: { intervalSeconds: -1 } } })],
+    // schema 是 .min(2)，比曾经的 `< 1` guard 还严：1 也过不去。
+    ['health.probe.timeoutSeconds < 2', base({ health: { probe: { timeoutSeconds: 1 } } })],
+  ]
+  const throws = (fn) => { try { fn(); return false } catch { return true } }
+  for (const [label, raw] of cases) {
+    assert.ok(throws(() => Config(raw)), `${label}: the schema must refuse it, or a bound moved out of the schema`)
+    assert.doesNotThrow(() => assertStructural(raw),
+      `${label}: assertStructural must not re-guard it — that guard is what made the function look stricter than the schema`)
+  }
 })
 
 console.log(`\n${passed} unit test(s) passed`)
@@ -1010,8 +1064,12 @@ test('toolResultHasImage reads the nested tool-result content', () => {
 
 // ---- stickyTurns structural validation ----
 
-test('assertStructural rejects a negative stickyTurns', () => {
-  assert.throws(() => assertStructural({
+test('a negative stickyTurns is refused by the schema, not by a structural guard', () => {
+  // 曾经 assertStructural 自己拦 stickyTurns < 0——而两条生产调用路径都先过
+  // schema（index.ts:117 读 Cordis 已校验值、index.ts:126 的 Config(raw) 自己
+  // 跑一遍），.min(0) 永远拦在前面，那个 guard 是死分支，只在 schema 收紧时
+  // 变成"接不住"的谎言。单字段边界归 schema：这里钉住它真的归 schema。
+  assert.throws(() => Config({
     profiles: [{
       id: 'p1',
       when: { provider: 'p', model: 'm' },
@@ -1330,6 +1388,55 @@ test('checkConnectivity reads a route with no configurable-provider entry as una
   assert.equal(verdict.kind, 'unavailable')
   assert.equal(verdict.reason, 'notConfigurable')
   assert.equal(llm.asked.length, 0, 'no discovery was asked for a route with no namespace')
+})
+
+test('routeParts is the exact inverse of routeKeyOf', () => {
+  // 真实形状：provider 段永不含 `/`（DSH 的 provider 名是标识符），model 段
+  // 可以含（网关自己的模型路径）。所以切分必须停在第一个 `/`——这是
+  // routes.ts 写下的唯一口径，九个原先各写一遍的解码点都照它。
+  assert.deepEqual(routeParts(routeKeyOf('gw', 'kimi-k3')), { provider: 'gw', model: 'kimi-k3' })
+  assert.deepEqual(routeParts(routeKeyOf('gw', 'vendor/kimi-k3')), { provider: 'gw', model: 'vendor/kimi-k3' })
+  // 没有斜杠的串不是路由键。折叠一条坏记录不能抛，所以它作为"没有 model"
+  // 回来，由调用方自己的空值守卫丢掉（health workspace 的 ensure 正是这么用）。
+  assert.deepEqual(routeParts('gw'), { provider: 'gw', model: '' })
+})
+
+// 路由键的拼与拆只能有一个表达式。`routes.ts` 的 docstring 断言"Everything
+// here is pure and shared"——而实现层审查实测 host 8 处 + browser 18 处编码、
+// 9 处解码全是手抄的，那条断言为假。这条守卫让"再手抄一处"立刻转红：src/ 里
+// 任何 `provider + '/'`、模板串 `${a}/${b}`、`indexOf('/')`、`split('/')`
+// 都不允许出现（routes.ts 自身除外，它拥有这个表达式）。
+test('a route key is built and split in exactly one place', () => {
+  const srcDir = fileURLToPath(new URL('../src/', import.meta.url))
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) return walk(full)
+    return entry.name.endsWith('.ts') ? [full] : []
+  })
+  const files = walk(srcDir).filter((file) => relative(srcDir, file) !== 'routes.ts')
+  // 注释里合法地提到 `/`（说明口径），所以守卫只读代码；块注释按原样留白，
+  // 行号才不会因为剥离而漂移。
+  const codeOf = (text) => text
+    .replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, ''))
+    .replace(/(^|\s)\/\/.*$/gm, '$1')
+  const shapes = [
+    { pattern: /provider \+ '\/'|model \+ '\/'|\+ '\/' \+/, why: 'a hand-joined route key' },
+    // 插值尾巴必须是 provider 或 model（可带 `?? ''` 兜底）：`${position}/${total}`
+    // 这类分数展示长得一样但不是路由键，守卫不拦它。
+    { pattern: /(?:provider|model)(?:\s*\?\?\s*'')?\}\//, why: 'a route key spliced inside a template literal' },
+    { pattern: /indexOf\('\/'\)|split\('\/'\)/, why: 'a hand-split route key' },
+  ]
+  const found = []
+  for (const file of files) {
+    const code = codeOf(readFileSync(file, 'utf8'))
+    for (const { pattern, why } of shapes) {
+      for (const match of code.matchAll(new RegExp(pattern.source, 'g'))) {
+        const line = code.slice(0, match.index).split('\n').length
+        found.push(`${relative(srcDir, file)}:${line}: ${why}`)
+      }
+    }
+  }
+  assert.deepEqual(found, [], `route keys must go through routes.ts, found ${found.length}:\n${found.join('\n')}`)
 })
 
 await Promise.all(pending)

@@ -1,6 +1,15 @@
 /** The plugin's dialogs: health settings, new profile and add-candidate. */
 
 import { useEffect, useState } from 'react'
+import { routeKeyOf, routeParts } from '../routes.ts'
+import {
+  DEFAULT_BREAKER_COOLDOWN_SECONDS,
+  DEFAULT_BREAKER_SCOPE,
+  DEFAULT_INTERVAL_SECONDS,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_PROBE_PROMPT,
+  DEFAULT_PROBE_TIMEOUT_SECONDS,
+} from '../defaults.ts'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { Icon, ICON_TRASH } from './icons.ts'
@@ -14,11 +23,11 @@ export function HealthSettingsModal(props) {
   var probe = health.probe || {}
   var [passiveOn, setPassiveOn] = useState(health.passive !== false)
   var [discoverOn, setDiscoverOn] = useState(discover.enabled === true)
-  var [discoverInterval, setDiscoverInterval] = useState(String(discover.intervalSeconds ?? 0))
+  var [discoverInterval, setDiscoverInterval] = useState(String(discover.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS))
   var [probeOn, setProbeOn] = useState(probe.enabled === true)
-  var [probeInterval, setProbeInterval] = useState(String(probe.intervalSeconds ?? 0))
-  var [probePrompt, setProbePrompt] = useState(typeof probe.prompt === 'string' ? probe.prompt : '1')
-  var [probeTimeout, setProbeTimeout] = useState(String(probe.timeoutSeconds ?? 8))
+  var [probeInterval, setProbeInterval] = useState(String(probe.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS))
+  var [probePrompt, setProbePrompt] = useState(typeof probe.prompt === 'string' ? probe.prompt : DEFAULT_PROBE_PROMPT)
+  var [probeTimeout, setProbeTimeout] = useState(String(probe.timeoutSeconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS))
   // Per-route probe content, seeded from what the Host already holds.
   var [promptOverrides, setPromptOverrides] = useState((probe.prompts ?? []).map(function (entry) {
     return { route: entry.route ?? '', prompt: entry.prompt ?? '' }
@@ -55,8 +64,8 @@ export function HealthSettingsModal(props) {
     return {
       code: rule.code || '',
       message: rule.message || '',
-      cooldownSeconds: rule.cooldownSeconds ?? 300,
-      scope: rule.scope === 'channel' ? 'channel' : 'route',
+      cooldownSeconds: rule.cooldownSeconds ?? DEFAULT_BREAKER_COOLDOWN_SECONDS,
+      scope: rule.scope === 'channel' ? 'channel' : DEFAULT_BREAKER_SCOPE,
     }
   }))
   // 一条两个字段都空白的规则永远命中不了任何东西。这里不静默过滤——弹窗
@@ -100,8 +109,8 @@ export function HealthSettingsModal(props) {
             probe: {
               enabled: probeOn,
               intervalSeconds: intervalOf(probeInterval),
-              prompt: probePrompt.trim().length > 0 ? probePrompt.trim() : '1',
-              timeoutSeconds: Math.max(1, Math.round(Number(probeTimeout)) || 8),
+              prompt: probePrompt.trim().length > 0 ? probePrompt.trim() : DEFAULT_PROBE_PROMPT,
+              timeoutSeconds: Math.max(1, Math.round(Number(probeTimeout)) || DEFAULT_PROBE_TIMEOUT_SECONDS),
               // 逐路由覆盖：路由与内容都填满才算一条——空路由是用户还没选完，
               // 空内容是用户刚删了字，两种情况都不该落一条进配置。
               prompts: promptOverrides
@@ -215,7 +224,7 @@ export function HealthSettingsModal(props) {
               h('input', {
                 style: Object.assign({}, S.formInput, { width: '100%' }),
                 type: 'text',
-                placeholder: '1',
+                placeholder: String(DEFAULT_PROBE_PROMPT),
                 'aria-label': t('healthProbePromptLabel'),
                 value: probePrompt,
                 onChange: function (event) { setProbePrompt(event.target.value) },
@@ -302,7 +311,7 @@ export function HealthSettingsModal(props) {
                   disabled: exists,
                   title: exists ? t('breakerAlreadyAdded') : preset.desc,
                   onClick: function () {
-                    setRules(function (current) { return current.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds, scope: 'route' }]) })
+                    setRules(function (current) { return current.concat([{ code: preset.code, message: '', cooldownSeconds: preset.seconds, scope: DEFAULT_BREAKER_SCOPE }]) })
                   },
                 }, preset.code)
               })),
@@ -328,7 +337,7 @@ export function HealthSettingsModal(props) {
                   style: Object.assign({}, S.formInput, { width: 76 }),
                   type: 'text',
                   inputMode: 'numeric',
-                  placeholder: '300',
+                  placeholder: String(DEFAULT_BREAKER_COOLDOWN_SECONDS),
                   'aria-label': t('breakerCooldownLabel'),
                   value: String(rule.cooldownSeconds),
                   onChange: function (event) { patchRule(index, { cooldownSeconds: event.target.value }) },
@@ -368,7 +377,7 @@ export function HealthSettingsModal(props) {
             h('button', {
               type: 'button',
               style: Object.assign({}, S.manualBtn, { marginTop: 8 }),
-              onClick: function () { setRules(function (current) { return current.concat([{ code: '', message: '', cooldownSeconds: 300, scope: 'route' }]) }) },
+              onClick: function () { setRules(function (current) { return current.concat([{ code: '', message: '', cooldownSeconds: DEFAULT_BREAKER_COOLDOWN_SECONDS, scope: DEFAULT_BREAKER_SCOPE }]) }) },
             }, t('breakerAddRule')),
             hasEmptyRule ? h('span', { style: S.formHint, role: 'alert' }, t('problemBreakerEmptyRule')) : null) : null),
       ] : null)
@@ -382,7 +391,7 @@ export function NewProfileModal(props) {
   var options = []
   ;(props.catalog?.groups ?? []).forEach(function (group) {
     group.models.forEach(function (model) {
-      var route = group.id + '/' + model.id
+      var route = routeKeyOf(group.id, model.id)
       if (configured.some(function (entry) { return entry === route })) return
       options.push({ value: route, label: group.name + ' / ' + model.name + '  (' + route + ')' })
     })
@@ -392,7 +401,7 @@ export function NewProfileModal(props) {
   var [provider, setProvider] = useState('')
   var [model, setModel] = useState('')
   var [templateId, setTemplateId] = useState('')
-  var manualRoute = provider.trim() && model.trim() ? provider.trim() + '/' + model.trim() : ''
+  var manualRoute = provider.trim() && model.trim() ? routeKeyOf(provider.trim(), model.trim()) : ''
   var canCreate = manual ? Boolean(manualRoute) : Boolean(target)
   return h(Modal, {
     open: true,
@@ -407,11 +416,7 @@ export function NewProfileModal(props) {
         onClick: function () {
           if (!canCreate) return
           var route = manual ? manualRoute : target
-          var slash = route.indexOf('/')
-          props.onCreate({
-            provider: route.slice(0, slash),
-            model: route.slice(slash + 1),
-          }, templateId)
+          props.onCreate(routeParts(route), templateId)
         },
       }, t('confirmCreateProfile'))),
   },
@@ -458,7 +463,7 @@ export function NewProfileModal(props) {
       },
         h('option', { value: '' }, t('templateBlank')),
         props.profiles.map(function (profile) {
-          return h('option', { key: profile.id, value: profile.id }, t('templateCopy') + '：' + profile.when.provider + '/' + profile.when.model)
+          return h('option', { key: profile.id, value: profile.id }, t('templateCopy') + '：' + routeKeyOf(profile.when.provider, profile.when.model))
         }))))
 }
 
@@ -486,7 +491,7 @@ export function AddCandidateModal(props) {
   var registered = props.routableProviders ?? []
   var [provider, setProvider] = useState('')
   var [model, setModel] = useState('')
-  var [maxAttempts, setMaxAttempts] = useState('1')
+  var [maxAttempts, setMaxAttempts] = useState(String(DEFAULT_MAX_ATTEMPTS))
   var manualGroup = (props.catalog?.groups ?? []).find(function (entry) { return entry.id === provider })
   var suggestions = (manualGroup?.models ?? []).map(function (entry) { return entry.id })
   var canAddManual = provider !== '' && model.trim() !== ''
@@ -507,14 +512,11 @@ export function AddCandidateModal(props) {
         onClick: function () {
           if (tab === 'catalog') {
             if (selectedCount === 0) return
-            var picked = Object.keys(selected).map(function (route) {
-              var slash = route.indexOf('/')
-              return { provider: route.slice(0, slash), model: route.slice(slash + 1) }
-            })
+            var picked = Object.keys(selected).map(routeParts)
             props.onAdd(picked)
           } else {
             if (!canAddManual) return
-            props.onAdd([{ provider: provider, model: model.trim(), maxAttempts: Math.min(5, Math.max(1, Number(maxAttempts) || 1)) }])
+            props.onAdd([{ provider: provider, model: model.trim(), maxAttempts: Math.min(5, Math.max(1, Number(maxAttempts) || DEFAULT_MAX_ATTEMPTS)) }])
           }
           props.onClose()
         },
@@ -550,7 +552,7 @@ export function AddCandidateModal(props) {
             return h('div', { key: entry.group.id },
               h('div', { style: S.catalogGroupTitle }, entry.group.name),
               entry.models.map(function (m) {
-                var route = entry.group.id + '/' + m.id
+                var route = routeKeyOf(entry.group.id, m.id)
                 return h('label', { key: route, style: S.catalogRow },
                   h('input', {
                     type: 'checkbox',

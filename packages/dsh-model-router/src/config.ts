@@ -15,6 +15,19 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import {
+  DEFAULT_BREAKER_COOLDOWN_SECONDS,
+  DEFAULT_BREAKER_SCOPE,
+  DEFAULT_INTERVAL_SECONDS,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_MAX_TOTAL_ATTEMPTS,
+  DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
+  DEFAULT_PROBE_PROMPT,
+  DEFAULT_PROBE_TIMEOUT_SECONDS,
+  DEFAULT_STICKY_TURNS,
+  DEFAULT_STRATEGY,
+  DEFAULT_SWITCH_ON,
+} from './defaults.ts'
 import { routeKeyOf } from './routes.ts'
 
 /**
@@ -49,13 +62,13 @@ export type Strategy = 'order' | 'weight' | 'round-robin'
 
 export const STRATEGIES: readonly Strategy[] = ['order', 'weight', 'round-robin']
 
-export const strategySchema = z.union([...STRATEGIES]).default('order')
+export const strategySchema = z.union([...STRATEGIES]).default(DEFAULT_STRATEGY)
   .description('从哪条渠道开始：按顺序 / 按权重随机 / 轮询')
 
 export const candidateSchema = z.object({
   provider: z.string().required().description('provider 标识，例如 deepseek-official'),
   model: z.string().required().description('模型 ID，例如 deepseek-v4-flash'),
-  maxAttempts: z.number().step(1).min(1).max(5).default(1)
+  maxAttempts: z.number().step(1).min(1).max(5).default(DEFAULT_MAX_ATTEMPTS)
     .description('这条渠道最多真实调用多少次（切换前会有一次退避等待）'),
   weight: z.number().step(1).min(0).max(100).default(0)
     .description('权重；只有「按权重」策略会读它，其他策略下写多少都不影响'),
@@ -67,18 +80,18 @@ export const candidateSchema = z.object({
 
 /** Which failures move to the next candidate. Fixed set, Chinese labels. */
 export const switchOnSchema = z.object({
-  rateLimit: z.boolean().default(true).description('限流（RATE_LIMIT）'),
-  server: z.boolean().default(true).description('服务端错误（SERVER）'),
-  timeout: z.boolean().default(true).description('超时（TIMEOUT）'),
-  transport: z.boolean().default(true).description('网络传输失败（TRANSPORT）'),
-  emptyResponse: z.boolean().default(false).description('空回复（EMPTY_RESPONSE）'),
-  invalidRequest: z.boolean().default(false).description('请求被拒绝 / 能力不兼容（INVALID_REQUEST）；分类依赖 provider，不保证精确'),
+  rateLimit: z.boolean().default(DEFAULT_SWITCH_ON.rateLimit).description('限流（RATE_LIMIT）'),
+  server: z.boolean().default(DEFAULT_SWITCH_ON.server).description('服务端错误（SERVER）'),
+  timeout: z.boolean().default(DEFAULT_SWITCH_ON.timeout).description('超时（TIMEOUT）'),
+  transport: z.boolean().default(DEFAULT_SWITCH_ON.transport).description('网络传输失败（TRANSPORT）'),
+  emptyResponse: z.boolean().default(DEFAULT_SWITCH_ON.emptyResponse).description('空回复（EMPTY_RESPONSE）'),
+  invalidRequest: z.boolean().default(DEFAULT_SWITCH_ON.invalidRequest).description('请求被拒绝 / 能力不兼容（INVALID_REQUEST）；分类依赖 provider，不保证精确'),
   // 凭证与额度是"渠道自己的毛病"，换一条渠道往往立刻就能救——另一条渠道有自己的
   // 密钥和额度。2026-10-16 修订：此前把它们列为"配置坏了，切换只会把问题藏起来"而
   // 不切换，但熔断本来就会让后续请求跳过死渠道，那条理由只把第一次请求也搭进去；
   // 而切换从不是静默的（中文 notice 点名失败路由与码 + 熔断冷却），比干失败更响。
-  auth: z.boolean().default(true).description('凭证或权限被拒（AUTH）：换一条渠道通常立刻能救，另一条渠道有自己的密钥'),
-  quota: z.boolean().default(true).description('额度用尽（QUOTA）：同上，换渠道可继续；熔断会让后续请求先跳过这条'),
+  auth: z.boolean().default(DEFAULT_SWITCH_ON.auth).description('凭证或权限被拒（AUTH）：换一条渠道通常立刻能救，另一条渠道有自己的密钥'),
+  quota: z.boolean().default(DEFAULT_SWITCH_ON.quota).description('额度用尽（QUOTA）：同上，换渠道可继续；熔断会让后续请求先跳过这条'),
 })
 
 /** One backup chain for the exact provider/model the user picks. */
@@ -91,9 +104,9 @@ export const profileSchema = z.object({
   candidates: z.array(candidateSchema).required()
     .description('按顺序尝试的候选渠道；第一个必须就是 when 模型（钉死，但权重/轮询策略下不一定是第一跳）'),
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
-  maxTotalAttempts: z.number().step(1).min(1).default(6)
+  maxTotalAttempts: z.number().step(1).min(1).default(DEFAULT_MAX_TOTAL_ATTEMPTS)
     .description('这个请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
-  stickyTurns: z.number().step(1).min(0).max(99).default(0)
+  stickyTurns: z.number().step(1).min(0).max(99).default(DEFAULT_STICKY_TURNS)
     .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）。追问刚发过的图片时设 2~3，识图模型多粘几轮'),
   strategy: strategySchema,
 })
@@ -104,9 +117,9 @@ export const defaultSchema = z.object({
   candidates: z.array(candidateSchema).default([])
     .description('通用降级池；用户当前选中的模型永远是第一跳，本池是纯备用'),
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
-  maxTotalAttempts: z.number().step(1).min(1).default(3)
+  maxTotalAttempts: z.number().step(1).min(1).default(DEFAULT_POOL_MAX_TOTAL_ATTEMPTS)
     .description('接管时单请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
-  stickyTurns: z.number().step(1).min(0).max(99).default(0)
+  stickyTurns: z.number().step(1).min(0).max(99).default(DEFAULT_STICKY_TURNS)
     .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）'),
   strategy: strategySchema,
 })
@@ -120,7 +133,7 @@ export const defaultSchema = z.object({
  */
 export const discoverSchema = z.object({
   enabled: z.boolean().default(true).description('定时连通性检查：到点向渠道要一份模型清单，不生成内容、不花 Token'),
-  intervalSeconds: z.number().step(1).min(0).max(86400).default(0)
+  intervalSeconds: z.number().step(1).min(0).max(86400).default(DEFAULT_INTERVAL_SECONDS)
     .description('定时检查周期（秒；0 表示只手动跑，不后台轮询）。限流是每个渠道各自的，按你自己渠道的承受能力设'),
 })
 
@@ -135,15 +148,15 @@ export const discoverSchema = z.object({
  */
 export const probeSchema = z.object({
   enabled: z.boolean().default(false).description('定时真探测：真的发一条最小消息，唯一能证明模型能出字，但会花 Token'),
-  intervalSeconds: z.number().step(1).min(0).max(86400).default(0)
+  intervalSeconds: z.number().step(1).min(0).max(86400).default(DEFAULT_INTERVAL_SECONDS)
     .description('定时真探测周期（秒；0 表示只手动跑）'),
-  prompt: z.string().default('1')
+  prompt: z.string().default(DEFAULT_PROBE_PROMPT)
     .description('探测发什么内容；默认单个字符最不容易触发渠道内容过滤'),
   prompts: z.array(z.object({
     route: z.string().required().description('渠道，格式 provider/model'),
     prompt: z.string().required().description('这个渠道专用探测内容，覆盖全局默认'),
   })).default([]).description('按渠道覆盖探测内容：不同渠道违禁词不同，被拦的就单独写一个'),
-  timeoutSeconds: z.number().step(1).min(2).max(60).default(8)
+  timeoutSeconds: z.number().step(1).min(2).max(60).default(DEFAULT_PROBE_TIMEOUT_SECONDS)
     .description('单次探测超时时间（秒）'),
 })
 
@@ -157,9 +170,9 @@ export const probeSchema = z.object({
 export const breakRuleSchema = z.object({
   code: z.string().default('').description('错误码，精确匹配；留空表示这一条不按码匹配'),
   message: z.string().default('').description('错误信息包含这个字符串就命中；留空表示不按信息匹配'),
-  cooldownSeconds: z.number().step(1).min(1).max(86400).default(300)
+  cooldownSeconds: z.number().step(1).min(1).max(86400).default(DEFAULT_BREAKER_COOLDOWN_SECONDS)
     .description('命中后禁用多少秒；冷却到了自动放行重试，不是永久拉黑'),
-  scope: z.union(['route', 'channel']).default('route')
+  scope: z.union(['route', 'channel']).default(DEFAULT_BREAKER_SCOPE)
     .description('禁用范围：仅此模型 = 只禁这条 provider/model；整条渠道 = 该 provider 下所有模型一起禁（密钥失效、网关整体故障时用）'),
 })
 
@@ -315,35 +328,6 @@ export interface Config {
 /** The plain config value shape, for validating a hot update before it applies. */
 export type RouterOptions = { [K in keyof Config]?: Config[K] extends Volatile<infer T> ? T : never }
 
-/** The failure codes `switchOn` can name, and the config key each maps to. */
-export const SWITCH_ON_KEYS = [
-  'rateLimit',
-  'server',
-  'timeout',
-  'transport',
-  'emptyResponse',
-  'invalidRequest',
-  'auth',
-  'quota',
-] as const
-
-/** Map a normalized `LlmFailure.code` to its `switchOn` key; undefined = never a Router concern. */
-export function switchOnKeyOf(code: string): (typeof SWITCH_ON_KEYS)[number] | undefined {
-  switch (code) {
-    case 'RATE_LIMIT': return 'rateLimit'
-    case 'SERVER': return 'server'
-    case 'TIMEOUT': return 'timeout'
-    case 'TRANSPORT': return 'transport'
-    case 'EMPTY_RESPONSE': return 'emptyResponse'
-    case 'INVALID_REQUEST': return 'invalidRequest'
-    // 渠道自身的凭证/额度问题：另一条渠道有自己的密钥和额度，切换通常立刻能救。
-    // 修订依据见 .agents/notes/implemented/2026-10-16-switch-on-auth-and-quota.md。
-    case 'AUTH': return 'auth'
-    case 'QUOTA': return 'quota'
-    default: return undefined
-  }
-}
-
 /** Reject one chain naming the same physical route twice. */
 function assertNoDuplicateRoutes(candidates: readonly Candidate[], where: string): void {
   const seen = new Set<string>()
@@ -357,11 +341,22 @@ function assertNoDuplicateRoutes(candidates: readonly Candidate[], where: string
 }
 
 /**
- * Structural cross-field validation, run before a config update restarts the
- * plugin fiber. Deliberately narrow: only errors that are wrong in every
- * environment. A candidate whose provider is not registered is environmental
- * drift (the user may uninstall a provider later), so it degrades that profile
- * to disabled with a warning instead of failing the whole plugin — see
+ * Structural CROSS-FIELD validation, run before a config update restarts the
+ * plugin fiber. Single-field bounds (a negative number, an empty string) are
+ * the schema's job — both production call paths run the schema first
+ * (`index.ts:117` reads a Cordis-validated Config, `index.ts:126` runs
+ * `Config(raw)` itself), so a guard repeated here is dead code that only
+ * starts lying when the schema tightens. What is left is what no single field
+ * can know: duplicate ids, an unpinned primary, a repeated route, a weight
+ * strategy with nothing to draw, a breaker rule that matches nothing.
+ *
+ * Note: 为何删掉 8 个数值 guard（实测全被 schema 挡在前面）—— 见
+ * .agents/notes/implemented/2026-10-17-finish-the-shared-modules.md
+ *
+ * Deliberately narrow: only errors that are wrong in every environment. A
+ * candidate whose provider is not registered is environmental drift (the user
+ * may uninstall a provider later), so it degrades that profile to disabled
+ * with a warning instead of failing the whole plugin — see
  * .agents/notes and docs/design/product-plan.md section 9.
  */
 export function assertStructural(config: {
@@ -382,30 +377,13 @@ export function assertStructural(config: {
     if (head.provider !== profile.when.provider || head.model !== profile.when.model) {
       throw new Error(
         `model-router: profile "${profile.id}" candidates[0] must be the when model `
-        + `(${profile.when.provider}/${profile.when.model}), got ${head.provider}/${head.model}`,
+        + `(${routeKeyOf(profile.when.provider, profile.when.model)}), got ${routeKeyOf(head.provider, head.model)}`,
       )
-    }
-    for (const candidate of profile.candidates) {
-      if (candidate.maxAttempts < 1) {
-        throw new Error(`model-router: profile "${profile.id}" candidate maxAttempts must be >= 1`)
-      }
     }
     // 同一条链上重复的 provider/model 没有意义：它会被各打一遍（各含一次退避等待），
     // 白吃 attempt 预算，而用户看到的是"我配了两条备用"。目录选择和多条目手录都可能
     // 录出重复，所以在结构校验就挡住，和 ID 重复同级。
     assertNoDuplicateRoutes(profile.candidates, `profile "${profile.id}"`)
-    if (profile.maxTotalAttempts < 1) {
-      throw new Error(`model-router: profile "${profile.id}" maxTotalAttempts must be >= 1`)
-    }
-    if (profile.stickyTurns < 0) {
-      throw new Error(`model-router: profile "${profile.id}" stickyTurns must be >= 0`)
-    }
-  }
-  if (config.default.maxTotalAttempts < 1) {
-    throw new Error('model-router: default.maxTotalAttempts must be >= 1')
-  }
-  if (config.default.stickyTurns < 0) {
-    throw new Error('model-router: default.stickyTurns must be >= 0')
   }
   assertNoDuplicateRoutes(config.default.candidates, 'default pool')
   // A weight strategy with no positive weight has nothing to draw from, and the
@@ -416,19 +394,6 @@ export function assertStructural(config: {
       if (entry.candidates.every(candidate => candidate.weight <= 0)) {
         throw new Error(`model-router: ${where} uses the weight strategy but no candidate has a positive weight`)
       }
-    }
-  }
-  if (config.health !== undefined) {
-    for (const [where, seconds] of [
-      ['health.discover.intervalSeconds', config.health.discover?.intervalSeconds],
-      ['health.probe.intervalSeconds', config.health.probe?.intervalSeconds],
-    ] as const) {
-      if (seconds !== undefined && seconds < 0) {
-        throw new Error(`model-router: ${where} must be >= 0`)
-      }
-    }
-    if (config.health.probe !== undefined && config.health.probe.timeoutSeconds < 1) {
-      throw new Error('model-router: health.probe.timeoutSeconds must be >= 1')
     }
   }
   // 一条两个字段都空白的规则永远命中不了任何东西，留着只会让人以为配过了。

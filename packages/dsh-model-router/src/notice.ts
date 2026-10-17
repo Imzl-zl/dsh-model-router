@@ -16,6 +16,7 @@
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { BreakerScope } from './config.ts'
+import type { SwitchOnCode } from './defaults.ts'
 import { routeKeyOf, routeLabel } from './routes.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -24,8 +25,14 @@ declare module '@deepseek-ai/dsh-llm' {
   }
 }
 
-/** Chinese labels for the failure codes `switchOn` can name. */
-const CODE_LABELS: Readonly<Record<string, string>> = {
+/**
+ * Chinese labels for the codes the switch-on table names. Keyed by that
+ * table's own code union, so a code added there without a label is a compile
+ * error — the label map cannot drift from the list of codes that switch.
+ * `codeLabel` still answers for any code (a breaker rule may name one the
+ * chain never switches on), falling back to the raw code.
+ */
+const CODE_LABELS: Readonly<Record<SwitchOnCode, string>> = {
   RATE_LIMIT: '限流',
   SERVER: '服务端错误',
   TIMEOUT: '超时',
@@ -37,12 +44,7 @@ const CODE_LABELS: Readonly<Record<string, string>> = {
 }
 
 export function codeLabel(code: string): string {
-  return CODE_LABELS[code] ?? code
-}
-
-/** One route label: bare model inside one provider, `provider/model` across providers. */
-function label(provider: string, model: string, otherProvider: string): string {
-  return provider === otherProvider ? model : `${provider}/${model}`
+  return Object.hasOwn(CODE_LABELS, code) ? CODE_LABELS[code as SwitchOnCode] : code
 }
 
 function notice(text: string): UserMessage {

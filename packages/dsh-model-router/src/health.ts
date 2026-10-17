@@ -26,7 +26,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { z } from 'zod'
 import { failureCodeOfStream } from './lineage.ts'
 import { capTimeline, MAX_TIMELINE_POINTS } from './timeline.ts'
-import { routeKeyOf } from './routes.ts'
+import { routeKeyOf, routeParts } from './routes.ts'
 
 // The route-key rule lives in ./routes.ts because the browser half builds the
 // same key; re-exported here so existing importers keep one path.
@@ -63,16 +63,6 @@ export interface ChannelHealthRecord {
   lastError?: string
   lastCheckedAt: number
   timeline: ChannelTimelinePoint[]
-}
-
-/**
- * Split a stored route back into its halves. A model id containing `/` makes
- * this ambiguous, which is why the router keeps the two halves wherever it can
- * and only pays for this when folding an event that carries just the route.
- */
-function splitRoute(route: string): { provider: string; model: string } {
-  const slash = route.indexOf('/')
-  return slash < 0 ? { provider: route, model: '' } : { provider: route.slice(0, slash), model: route.slice(slash + 1) }
 }
 
 /**
@@ -185,7 +175,7 @@ export const channelHealthProjection = {
         const status = classifyHealth(code)
         // A failure that says nothing about the channel leaves the record alone.
         if (status === undefined) return state
-        const { provider, model } = splitRoute(route)
+        const { provider, model } = routeParts(route)
         const existing = state.records[route]
         const latencyMs = elapsedSince(state, event.time)
         const record: ChannelHealthRecord = {
@@ -203,7 +193,7 @@ export const channelHealthProjection = {
       case 'assistant/message': {
         const route = state.currentRoute
         if (route === undefined) return state
-        const { provider, model } = splitRoute(route)
+        const { provider, model } = routeParts(route)
         const latencyMs = elapsedSince(state, event.time)
         // Usage sits beside `message` on the event data, never inside it.
         const outputTokens = event.data.usage?.outputTokens

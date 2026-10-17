@@ -1022,5 +1022,20 @@ test('semantic tone colour has one source and never paints badge text', async ()
     `every toneDot must be handed its colour by healthToneStyle: ${dots.length} dot(s), ${colored.length} coloured`)
 })
 
+// 时间线窗口只有一个常数（../timeline.ts 的 MAX_TIMELINE_POINTS）：投影按它截断，
+// 仪表盘按它画柱子。浏览器半包曾经自己写 24——窗口一调，柱子数和存下来的观测数
+// 就对不上，而可用率算的是投影那一套，用户看到的是"柱子比记录少"。
+test('the timeline window is one constant: the dashboard reads it, never a bare 24', async () => {
+  const source = sourceOf('health-ui.ts')
+  assert.ok(source.includes('MAX_TIMELINE_POINTS'),
+    'the dashboard must read the shared window constant')
+  assert.ok(!/Math\.max\(0, 24\b/.test(source) && !/slice\(-24\)/.test(source) && !/> 24 \?/.test(source),
+    'no bare 24 may size the slot math — the bars would drift from the projection\'s own window')
+  // 控制器侧同一件事：合并去重也按共享常量截断（它 import 的是同一个符号）。
+  const controller = sourceOf('controller.ts')
+  assert.ok(/points\.length > MAX_TIMELINE_POINTS/.test(controller),
+    'the browser-side merge must cap by the same constant')
+})
+
 await Promise.all(pending)
 console.log(`${passed} client-controller test(s) passed`)

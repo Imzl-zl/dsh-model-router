@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { h } from './dom.ts'
+import { routeKeyOf, routeParts } from '../routes.ts'
 import { S } from './styles.ts'
 import { fill, formatLatency, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
 import { ChannelMetricsDashboard } from './health-ui.ts'
@@ -83,7 +84,7 @@ export function GlobalHealthWorkspace(props) {
     var map = {}
     var ensure = function (provider, model) {
       if (!provider || !model) return null
-      var key = provider + '/' + model
+      var key = routeKeyOf(provider, model)
       if (!map[key]) {
         map[key] = {
           route: key,
@@ -119,22 +120,22 @@ export function GlobalHealthWorkspace(props) {
 
     if (passive) {
       Object.keys(passive).forEach(function (key) {
-        var slash = key.indexOf('/')
-        if (slash > 0) ensure(key.slice(0, slash), key.slice(slash + 1))
+        var parts = routeParts(key)
+        ensure(parts.provider, parts.model)
       })
     }
 
     if (discover) {
       Object.keys(discover).forEach(function (key) {
-        var slash = key.indexOf('/')
-        if (slash > 0) ensure(key.slice(0, slash), key.slice(slash + 1))
+        var parts = routeParts(key)
+        ensure(parts.provider, parts.model)
       })
     }
 
     if (probe) {
       Object.keys(probe).forEach(function (key) {
-        var slash = key.indexOf('/')
-        if (slash > 0) ensure(key.slice(0, slash), key.slice(slash + 1))
+        var parts = routeParts(key)
+        ensure(parts.provider, parts.model)
       })
     }
 

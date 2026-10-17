@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, healthToneBadge, healthToneStyle, routeOf, routeStatus } from './format.ts'
-import { configuredRoutes } from '../routes.ts'
+import { fill, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
+import { configuredRoutes, routeKeyOf } from '../routes.ts'
 import { ChainView } from './chain.ts'
 import { AddCandidateModal, HealthSettingsModal, NewProfileModal } from './modals.ts'
 import { FailoverDrawer } from './pipeline.ts'
@@ -58,12 +58,12 @@ export function RouterPage(props) {
     var set = new Set()
     draft.profiles.forEach(function (p) {
       (p.candidates || []).forEach(function (c) {
-        if (c.provider && c.model) set.add(c.provider + '/' + c.model)
+        if (c.provider && c.model) set.add(routeKeyOf(c.provider, c.model))
       })
     })
     if (draft.default && draft.default.candidates) {
       draft.default.candidates.forEach(function (c) {
-        if (c.provider && c.model) set.add(c.provider + '/' + c.model)
+        if (c.provider && c.model) set.add(routeKeyOf(c.provider, c.model))
       })
     }
     if (state.ui.passive) {
@@ -231,7 +231,7 @@ export function RouterPage(props) {
                     var hasImages = profile.candidates.some(function (c) { return c.needs && c.needs.images !== undefined })
                     var worstCandStatus = 'unknown'
                     profile.candidates.forEach(function (c) {
-                      var st = routeStatus(state.ui.passive, state.ui.discover, state.ui.probe, c.provider + '/' + c.model)
+                      var st = routeStatus(state.ui.passive, state.ui.discover, state.ui.probe, routeKeyOf(c.provider, c.model))
                       if (st === 'unhealthy') worstCandStatus = 'unhealthy'
                       else if (st === 'degraded' && worstCandStatus !== 'unhealthy') worstCandStatus = 'degraded'
                       else if (st === 'healthy' && worstCandStatus === 'unknown') worstCandStatus = 'healthy'
@@ -373,7 +373,7 @@ export function RouterPage(props) {
       catalog: state.ui.catalog,
       catalogLoading: state.ui.catalogLoading,
       profiles: draft.profiles,
-      configured: draft.profiles.map(function (profile) { return profile.when.provider + '/' + profile.when.model }),
+      configured: draft.profiles.map(function (profile) { return routeKeyOf(profile.when.provider, profile.when.model) }),
       onClose: props.onCloseModal,
       onCreate: props.onCreateProfile,
     }) : null,
