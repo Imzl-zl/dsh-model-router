@@ -197,6 +197,54 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'precheck-failure-tiers',
+    note: '预检抛出按「用户该去哪儿修」分三档：请求形状 / 路由不存在 / 适配器违约，文案可区分',
+    router: { enabled: true, profiles: [profile([
+      C('stub-primary', 1),
+      C('stub-no-reasoning', 1),
+      C('stub-unregistered', 1),
+      C('stub-backup', 1),
+      C('stub-third', 1),
+    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 } },
+    selection: { reasoningEffort: 'high' },
+    script: {
+      // maxRetries 0：RATE_LIMIT 直接委派，链的行进是确定性的。
+      policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT'], model: { reasoning: { efforts: [{ id: 'high', name: '高' }] } } },
+      // 档一：这个模型不声明推理档位，而本次选择要求 high。
+      'stub-no-reasoning': { outcomes: ['ok'], model: {} },
+      // 档二：provider 没有注册适配器（stub-adapter 只注册另外四个），
+      // `registration()` 抛 NO_ADAPTER（llm/src/index.ts:995）。
+      // 档三：resolveModel 返回的 id 与请求的模型不符，`normalizeModelInfo`
+      // 抛 INVALID_MODEL_INFO（llm/src/index.ts:760-769）。
+      'stub-backup': { outcomes: ['ok'], model: { id: 'not-stub-model', reasoning: { efforts: [{ id: 'high', name: '高' }] } } },
+      'stub-third': { outcomes: ['ok'], model: { reasoning: { efforts: [{ id: 'high', name: '高' }] } } },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-third/stub-model'])
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT'])
+      const texts = notices(events).map(n => n.text)
+      // 一条切换通知 + 三档跳过各一条。
+      eq('notice count', texts.length, 4)
+      ok('failover notice names the route that answered', texts.some(t => t.includes('候选 5/5') && t.includes('stub-third')))
+      const tier1 = texts.find(t => t.includes('stub-no-reasoning'))
+      const tier2 = texts.find(t => t.includes('stub-unregistered'))
+      const tier3 = texts.find(t => t.includes('stub-backup'))
+      ok('tier 1 keeps the request-shape wording', tier1 !== undefined && tier1.includes('不支持当前请求参数') && tier1.includes('已跳过'))
+      // 档二必须把人指向「模型」页，而不是指向这条链。
+      ok('tier 2 points at the Models page', tier2 !== undefined && tier2.includes('无法路由') && tier2.includes('NO_ADAPTER') && tier2.includes('模型'))
+      // 档三必须明说这是适配器缺陷。
+      ok('tier 3 says the adapter broke its contract', tier3 !== undefined && tier3.includes('INVALID_MODEL_INFO') && tier3.includes('适配器'))
+      // 三档文案措辞不同：只靠路由名不同的"可区分"是假的，档二/档三也不许
+      // 借用档一的"不支持当前请求参数"——那正是本轮修掉的那句压平的话。
+      ok('the three tiers read differently', new Set([tier1, tier2, tier3]).size === 3)
+      ok('tier 2 does not borrow the request-shape wording', tier2 !== undefined && !tier2.includes('不支持当前请求参数'))
+      ok('tier 3 does not borrow the request-shape wording', tier3 !== undefined && !tier3.includes('不支持当前请求参数'))
+      eq('final route', finalRoute(events), 'stub-third/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'condition-skip',
     note: '候选条件不满足（预估上下文未达门槛）被跳过，链条继续且留痕',
     router: { enabled: true, profiles: [profile([

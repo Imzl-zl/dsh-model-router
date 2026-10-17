@@ -35,6 +35,7 @@ import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
 import { checkConnectivity } from '../src/connectivity.ts'
 import { routeParts } from '../src/routes.ts'
+import { precheckTierOf } from '../src/precheck.ts'
 
 let passed = 0
 const pending = []
@@ -1110,12 +1111,23 @@ function fakeLlm({ makeStream, prepareError } = {}) {
   }
 }
 
-/** A stream that never produces and never ends until the signal aborts it. */
+/**
+ * A stream that never produces and never ends until the signal aborts it.
+ *
+ * The shape follows the REAL adapter, not this plugin's reader: on abort the
+ * adapter throws, `adapterStream` catches it (llm/src/index.ts:1111-1114) and
+ * yields `adapterFailureChunk` — an in-band `kind:'aborted'` finish
+ * (llm/src/index.ts:1161-1169) — rather than rejecting the iterator. DSH's own
+ * spec for that is llm-pi-ai/tests/adapter.spec.ts:1052-1067. A fake that
+ * rejects here instead exercises only the catch branch and leaves the finish
+ * branch untested — which is how the timeout path stayed broken.
+ */
 const neverEnding = (signal) => (async function* () {
-  await new Promise((_resolve, reject) => {
-    if (signal?.aborted === true) reject(signal.reason)
-    else signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+  await new Promise((resolve) => {
+    if (signal?.aborted === true) resolve()
+    else signal?.addEventListener('abort', () => resolve(), { once: true })
   })
+  yield { type: 'finish', reason: { kind: 'aborted', failure: { code: 'ABORTED', message: 'aborted' } } }
 })()
 
 const reachableStream = () => (async function* () {
@@ -1237,6 +1249,30 @@ test('probeRoute stops when the caller cancels, and says so', async () => {
   assert.equal(result.error, 'cancelled')
 })
 
+test('an in-band aborted finish is classified by who aborted, not by its code', async () => {
+  // 真实适配器在 abort 时 yield 一个 kind:'aborted' 的 finish，failure.code 是
+  // 适配器自己规范化出来的（llm-deepseek 把它映射成 ABORTED，别的适配器可能给
+  // 别的码）——所以分类必须看"谁按的"：探针自己的 deadline 是渠道事实
+  // （unreachable/TIMEOUT），调用方取消是调用方的事（unavailable/cancelled）。
+  // 按码分会把超时判成 cancelled，也会把取消判成一次失败的调用。
+  const aborting = (code) => (signal) => (async function* () {
+    await new Promise((resolve) => {
+      if (signal?.aborted === true) resolve()
+      else signal?.addEventListener('abort', () => resolve(), { once: true })
+    })
+    yield { type: 'finish', reason: { kind: 'aborted', failure: { code, message: 'aborted' } } }
+  })()
+  const timedOut = await probeRoute(fakeLlm({ makeStream: aborting('UNKNOWN') }), route, 'ping', 1)
+  assert.equal(timedOut.kind, 'unreachable')
+  assert.equal(timedOut.error, 'TIMEOUT')
+  const controller = new AbortController()
+  const running = probeRoute(fakeLlm({ makeStream: aborting('UNKNOWN') }), route, 'ping', 8, controller.signal)
+  controller.abort()
+  const cancelled = await running
+  assert.equal(cancelled.kind, 'unavailable')
+  assert.equal(cancelled.error, 'cancelled')
+})
+
 test('probeRoute reports a stream that ends empty as unavailable, not as a fault', async () => {
   const empty = (async function* () {
     yield { type: 'finish', reason: { kind: 'stop' } }
@@ -1251,6 +1287,26 @@ test('probePromptFor uses the per-route override, else the shared default', () =
   assert.equal(probePromptFor(route, '1', overrides), 'hi there')
   assert.equal(probePromptFor({ provider: 'p', model: 'other' }, '1', overrides), '1')
   assert.equal(probePromptFor(route, '1', []), '1')
+})
+
+// ---- the capability pre-check's three tiers ----
+
+test('a pre-check failure is tiered by who can fix it, and an unknown code gets no tier', () => {
+  // 定案依据 docs/design/open-questions.md 第五节第 3 项：压成一句"不支持当前
+  // 请求参数"会把一个配错的 provider 说成这条链的问题——而这条 notice 是
+  // durable 的，指错了就一直在会话历史里。
+  assert.equal(precheckTierOf('UNSUPPORTED_REASONING_EFFORT'), 'request-shape')
+  for (const code of ['NO_ADAPTER', 'INVALID_CONFIG', 'UNKNOWN_MODEL']) {
+    assert.equal(precheckTierOf(code), 'route-missing', `${code} is fixed on the Models page, not in the chain`)
+  }
+  // normalizeModelInfo 全家：同一个校验器为"适配器返回的元数据不合形状"抛的四个码。
+  for (const code of ['INVALID_MODEL_INFO', 'INVALID_MODEL_CONTEXT', 'INVALID_MODEL_MAX_TOKENS', 'INVALID_MODEL_REASONING']) {
+    assert.equal(precheckTierOf(code), 'adapter-defect', `${code} is the adapter breaking its own contract`)
+  }
+  // 认不出的码不编档：插件不知道谁能修它，编一档就是换一种说法的谎。
+  for (const code of ['PI_AI_ERROR', 'AUTH', 'TRANSPORT', 'ABORTED']) {
+    assert.equal(precheckTierOf(code), undefined, `${code} must keep the generic notice`)
+  }
 })
 
 // ---- the connectivity check's classification (the Host side) ----

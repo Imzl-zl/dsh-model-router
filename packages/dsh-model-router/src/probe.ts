@@ -21,6 +21,8 @@
  *
  * Note: 取舍与被否方案（为何 TTFT 即停、为何不测算吞吐、定时器归属、为何不进
  * 会话投影）—— 见 .agents/notes/implemented/2026-10-15-plugin-remote-probe.md
+ * Note: finish 分支为何必须放开 aborted、分类为何按"谁按的"—— 见
+ * .agents/notes/implemented/2026-10-17-failure-classification-tiers.md
  */
 
 import type { GenerateOptions, LlmCallConfig, PreparedLlmCall, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -133,12 +135,32 @@ export async function probeRoute(
       if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') {
         return { provider: route.provider, model: route.model, kind: 'reachable', latencyMs: Date.now() - started, at: now }
       }
-      if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
-        // A failure the adapter hit while *building* the request arrives here
-        // rather than as a throw: `adapterStream` converts it into an in-band
-        // error finish (llm/src/index.ts:1113,1161). A missing credential never
-        // reaches the wire, so it must not read as the channel refusing a call.
+      if (chunk.type === 'finish' && (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted')) {
+        // Both delivery shapes land here: `adapterStream` converts an adapter
+        // throw into an in-band finish, and an abort produces `kind:'aborted'`
+        // — the probe's own deadline or the caller's cancellation, whichever
+        // fired (`llm/src/index.ts:1161-1169`). Classifying only
+        // `kind:'error'` sent the whole abort family to the "empty stream"
+        // branch below, so a hung endpoint read as "could not measure"
+        // instead of "did not answer".
+        //
+        // The order is the same one the catch branch below uses, and for the
+        // same reason: one fact must not be classified differently depending
+        // on which side of the adapter it arrives from.
+        // 1. The probe's own deadline: a fact about the channel.
+        if (controller.signal.aborted && controller.signal.reason instanceof TimeoutError) {
+          return { provider: route.provider, model: route.model, kind: 'unreachable', error: 'TIMEOUT', at: now }
+        }
+        // 2. The caller hanging up is not the channel's doing — and the
+        //    adapter normalizes a caller abort into the `ABORTED` code, so the
+        //    code alone cannot tell the two apart.
+        if (signal?.aborted === true) return unavailable(route, now, 'cancelled')
         const code = chunk.reason.failure.code
+        if (code === 'ABORTED') return unavailable(route, now, 'cancelled')
+        // 3. A failure the adapter hit while *building* the request arrives
+        //    here rather than as a throw (llm/src/index.ts:1113,1161). A
+        //    missing credential never reaches the wire, so it must not read
+        //    as the channel refusing a call.
         if (NEVER_CALLED_CODES.has(code)) return unavailable(route, now, code)
         return { provider: route.provider, model: route.model, kind: 'unreachable', error: code, at: now }
       }

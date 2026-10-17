@@ -44,7 +44,8 @@ import { decideRecovery, hasImageContent, isSwitchOnEligible, planFire, resolveC
 import { configuredRoutes, routeKeyOf, routeParts } from './routes.ts'
 import { DEFAULT_PROBE_PROMPT, DEFAULT_PROBE_TIMEOUT_SECONDS } from './defaults.ts'
 import { RouterState, candidateConfig, emptyConditions, type StepChain, type StepConditions } from './state.ts'
-import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice } from './notice.ts'
+import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice, routeMissingNotice, adapterDefectNotice } from './notice.ts'
+import { precheckTierOf, type PrecheckTier } from './precheck.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
 import { channelHealthProjection } from './health.ts'
 import { CircuitBreaker, type RouteBlock } from './breaker.ts'
@@ -223,7 +224,7 @@ export default class ModelRouter extends TypertRemoteService {
           // is the automatic machinery: breaker cooldowns and capability
           // pre-validation, which DSH already settled when the selection was made.
           let index = plan.state.index
-          const skipped: Candidate[] = []
+          const skipped: { candidate: Candidate; tier: PrecheckTier | undefined; code: string | undefined }[] = []
           const conditionSkipped: { candidate: Candidate; reason: string }[] = []
           const blocked: { candidate: Candidate; block: RouteBlock }[] = []
           let outgoing: LlmCallConfig | undefined
@@ -253,10 +254,23 @@ export default class ModelRouter extends TypertRemoteService {
               outgoing = await ctx.llm.resolveCallConfig(candidateConfig(resolved, candidate), signal)
               break
             } catch (error) {
-              ctx.logger.warn(
-                `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} cannot serve this request, skipping: ${String(error)}`,
-              )
-              skipped.push(candidate)
+              // 预检的抛出按「用户该去哪儿修」分三档（./precheck.ts）：请求形状 /
+              // 路由不存在 / 适配器违约。压成一句"不支持当前请求参数"会把一个配错
+              // 的 provider 说成链的问题——而这条 notice 是 durable 的，错了就
+              // 一直在历史里。分不出档的码保留原通用文案：插件不知道谁能修它，
+              // 编一档就是换一种说法的谎。
+              const code = (error as { code?: unknown }).code
+              const tier = typeof code === 'string' ? precheckTierOf(code) : undefined
+              if (tier === 'adapter-defect') {
+                ctx.logger.error(
+                  `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} adapter broke its contract (${String(code)}): ${String(error)}`,
+                )
+              } else {
+                ctx.logger.warn(
+                  `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} cannot serve this request, skipping: ${String(error)}`,
+                )
+              }
+              skipped.push({ candidate, tier, code: typeof code === 'string' ? code : undefined })
               index += 1
             }
           }
@@ -269,9 +283,16 @@ export default class ModelRouter extends TypertRemoteService {
               agent.session.append('user/message', conditionSkipNotice(entry.candidate, entry.reason), { surfaceOp: 'append' })
             }
           }
-          for (const candidate of skipped) {
-            if (!states.shouldNoteSkip(agent, turn, `capability:${routeKeyOf(candidate.provider, candidate.model)}`)) continue
-            agent.session.append('user/message', skipNotice(candidate), { surfaceOp: 'append' })
+          for (const entry of skipped) {
+            if (!states.shouldNoteSkip(agent, turn, `capability:${routeKeyOf(entry.candidate.provider, entry.candidate.model)}`)) continue
+            // 档二/档三各有自己的文案与指向（./precheck.ts 的三档）；同一档内
+            // 每轮每路由只发一次，去重键与档一共用——那是同一次"调用前跳过"事件。
+            const built = entry.tier === 'route-missing' && entry.code !== undefined
+              ? routeMissingNotice(entry.candidate, entry.code)
+              : entry.tier === 'adapter-defect' && entry.code !== undefined
+                ? adapterDefectNotice(entry.candidate, entry.code)
+                : skipNotice(entry.candidate)
+            agent.session.append('user/message', built, { surfaceOp: 'append' })
           }
           for (const entry of blocked) {
             if (!states.shouldNoteSkip(agent, turn, `breaker:${routeKeyOf(entry.candidate.provider, entry.candidate.model)}`)) continue

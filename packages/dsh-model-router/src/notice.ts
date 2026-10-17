@@ -77,6 +77,37 @@ export function skipNotice(candidate: { provider: string; model: string }): User
 }
 
 /**
+ * A candidate the router could not even address: the provider has no adapter
+ * registered here, or the model is not in its catalog. The wording points at
+ * the Models page rather than at this chain — nothing in the chain is wrong,
+ * and the previous catch-all notice sent users to edit the wrong thing.
+ */
+export function routeMissingNotice(
+  candidate: { provider: string; model: string },
+  code: string,
+): UserMessage {
+  return notice(
+    `[路由切换] 候选 ${routeKeyOf(candidate.provider, candidate.model)} 无法路由（${code}）：该 provider 未注册或模型不在目录里，请到「模型」页确认这条渠道；已跳过`,
+  )
+}
+
+/**
+ * A candidate whose adapter broke its own contract: it returned exact-model
+ * metadata that fails the runtime's shape check. Not rethrown — one broken
+ * adapter must not take the whole chain down, which is the opposite of what
+ * this plugin is for — but it is loud: `ctx.logger.error` on the Host and a
+ * notice that says outright this is an adapter defect, not a chain problem.
+ */
+export function adapterDefectNotice(
+  candidate: { provider: string; model: string },
+  code: string,
+): UserMessage {
+  return notice(
+    `[路由切换] 候选 ${routeKeyOf(candidate.provider, candidate.model)} 的适配器返回了无效的模型元数据（${code}）：这是适配器缺陷，不是这条链的问题，请向该 provider 的适配器反馈；已跳过`,
+  )
+}
+
+/**
  * A candidate was skipped because its `needs` condition is not met. This is
  * not a failure — the candidate is servable, just not for this request's
  * shape — but the chain visibly jumped over it, so the reason is recorded.

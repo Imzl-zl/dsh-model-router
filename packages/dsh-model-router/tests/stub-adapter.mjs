@@ -122,5 +122,5 @@ export const inject = ['llm']
  * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context carrying the LLM service.
  */
 export function apply(ctx) {
-  ctx.llm.registerAdapter(['stub-primary', 'stub-backup', 'stub-third'], new StubAdapter())
+  ctx.llm.registerAdapter(['stub-primary', 'stub-backup', 'stub-third', 'stub-no-reasoning'], new StubAdapter())
 }
