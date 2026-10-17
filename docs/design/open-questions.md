@@ -1,15 +1,20 @@
 ---
 title: "DSH Model Router — 决策登记簿"
-status: "closed"
+status: "open"
 kind: "decision-register"
-last_updated: "2026-10-14"
+last_updated: "2026-10-17"
 ---
 
 # DSH Model Router — 决策登记簿
 
 ## 摘要
 
-历史未决事项已全部关闭。每条裁定注明落点文档；源码证据见[能力边界](dsh-capability-boundary.md)，产品边界见[product-plan.md](product-plan.md)，UI 规范见[ui-design.md](ui-design.md)，取舍理由见 `.agents/notes/`。本文件不重复上述文档的现状描述。
+第一至四节为历史裁定，均已关闭并注明落点。**第五节是 2026-10-17 实现层审查复核后
+新开的 5 项待决**——它们不是缺陷，是「修法取向」分歧，未定之前不动对应代码；
+排序与依赖见 `.agents/notes/proposed/2026-10-17-finish-the-abstractions.md`。
+每条裁定注明落点文档；源码证据见[能力边界](dsh-capability-boundary.md)，产品边界见
+[product-plan.md](product-plan.md)，UI 规范见[ui-design.md](ui-design.md)，取舍理由见
+`.agents/notes/`。本文件不重复上述文档的现状描述。
 
 ## 一、基础决策（已关闭）
 
@@ -64,3 +69,24 @@ last_updated: "2026-10-14"
 | 9 | 已知限制 | 历史残留 retained 图片的纯文本后续轮会撞 API 报错（路由器在路由时机看不到请求历史：`agent/request` payload 不带 messages、`pre-step` 只给 claimed 输入）；DSH offload 最终把老图转文本，报错暂时；聊图开新会话可规避。不藏，写进文档 | product-plan §2.4 |
 | 10 | 落回原路由的空转 bug | 修复：链上无可服务候选落回用户原路由时记 `exhausted`，否则 recovery 永远得到"继续"、turn 无限空转（实测 33716 次尝试） | 决策笔记 |
 | 11 | DSH 上游诉求（未提） | 准入门基于"选中模型"在路由插件时代过时；最合理诉求是"选择回退从 header 改成记住最后一次显式 pick"——该改动能让勾选识图也不再必要。等用户决定何时提，不作为实现前置 | — |
+
+## 五、实现层审查复核后新开（2026-10-17）
+
+背景：四路只读审查 + 主代理逐条执行级复核（改回去看测试转红、构造可复现事件序列），
+4 Critical / 11 Important / 22 Minor / 8 Nit 全部有处置。本节 5 项**修法取向已全部定案**
+（无业务分歧，按 DSH 源码支持度与成熟方案裁定；其中 C2 与 I1 的修法已实改实测通过）。
+现象本身都已验证，不重复列。
+
+| # | 定案 | 依据与实测 | 影响面 |
+|---|---|---|---|
+| 1 | **C2：可服务性提成独立谓词，由 `decideRecovery` 在授权下一次发火之前判**（已实测通过） | 根因：可服务性判断藏在 `planFire` 的"顺带前进"里（`router.ts:135-142`），只在**发火当时**算一次；第一个能阻止这次发火的决策点 `decideRecovery` 在**下一次失败后**才跑，等它看到 `exhausted` 时多打的那一次已经打完。`agent/request` 必须返回一个 config，所以"在 handler 里拦"只能 redirect 不能 cancel——原文最小修法实测把多打的那次从末位候选搬到 primary，**总数仍是 4**。修法：`canFireAgain(state)`（当前候选还有预算，或还有下一个候选），`decideRecovery` 在 `return 'retry'` 之前判它。实测：3 次真实调用、health fold 每候选恰好一次、unit 99 / run.mjs 18 / client-controller 37 全绿。附带：不需要 notice（没有隐藏的调用）、`totalAttempts` 不被污染、`maxAttempts` 成为真不变量。**遗留清理**：`planFire` 的 `exhausted` 标记与 `decideRecovery` 的 `state.exhausted` 守卫都要留——后者还服务 `outgoing === undefined` 的落回路径，两者不可互相取代；同一次提交里写明分工 | `router.ts` 的 `planFire`/`decideRecovery` |
+| 2 | **I1：留外层 + 本候选配额已尽时不让 llm-retry 插手**（第三选项，已实测通过，两者都要到） | 留外层是硬前提：删 `prepend` 后 `run.mjs:372` 打 7 次（上限 2）。但外层不必付内层的代价——在 `agent/request-error` 里、`await next()` **之前**判"本候选配额已尽 && 这个错该切换"，成立就直接决定（换得动返回 `{kind:'retry'}` 让 `planFire` 前进，换不动返回 `undefined` 终态），**根本不进 llm-retry**。实测：budget-cap 场景 boot **8547ms → 2227ms**、`llm/retry` **2 → 0**、`llm/retry-started` **2 → 0**、真实调用仍 2、18 场景 + 99 单测 + 37 client 全绿。语义依据：`maxAttempts` 的文案是"这条渠道最多真实调用多少次"，候选配额已尽时 llm-retry 想给同一条路由第二次本身就是越权——不让它做是执行分层不是破坏分层。附带修掉一个既有谎报：当前实现里 `llm/retry`/`llm/retry-started` 记录的 provider 往往不是真正被打的那一条（llm-retry 记"重试 primary"而 `planFire` 把这次重试改道到了 backup）。**实现陷阱（第一次 patch 实测踩到）**：熔断记录原本只在"内层放弃"分支，提前返回会跳过它 → `breaker-channel-scope-skips-sibling-models` 打红；修为提 `noteBreaker()` 闭包两分支共用，复验全绿 | `index.ts:325-362`、`run.mjs:372` |
+| 3 | **I10：分三档，不是两档**（定案；验收用例需先扩 stub） | 可达性已核：`resolveCallConfig`（`llm/src/index.ts:871-872`）→ `registration()`(:940→995) → `resolveModelInfoFor`(:880 → pi-ai `adapter.ts:268`/`:271` → `normalizeModelInfo` :766/:773) → `resolveCallWithInfo`(:881→:897)，五类全可达。DSH 自己的分层支持三档：`agent.ts:603-610` 只吞 `NO_ADAPTER`、其余 preparation error 直接终态；`resolveCallConfig` 的 JSDoc(:864-866)把它定义为"对确切模型能力的校验"。① **请求形状不匹配** `UNSUPPORTED_REASONING_EFFORT` → 现有 `skipped` notice；② **路由不存在/配错** `UNKNOWN_MODEL`/`INVALID_CONFIG`/`NO_ADAPTER` → 独立 notice，措辞指向"去 Models 页 / 装 provider"而不是"改这条链"；③ **适配器契约违规** `INVALID_MODEL_INFO`/`INVALID_MODEL_CONTEXT` → `ctx.logger.error` + 明说"这是适配器缺陷"的 notice。**不 rethrow**：一个坏 adapter 会掀掉整条链，与插件目的相反；`logger.error` + durable notice 已经响，不构成静默兜底。验收：stub 的 `script[route].model` 返回不匹配的 `id` 即可触发 `INVALID_MODEL_INFO`（`normalizeModelInfo` 校验 `resolved.id === model`），新增组合场景断言三档文案可区分 | `index.ts:254-263`、`notice.ts`、`tests/stub-adapter.mjs` |
+| 4 | **I7 滚动钩子：插件自己当滚动容器，零类名猜测**（定案） | 现状是两层猜测叠加：注入 `[class*="body"]{overflow-y:auto}` 把 DSH 的 body 改成滚动容器，再用 `closest('[class*="body"]')` 去找它。定案：删 `styles.ts:234-249` 的 `[class*="body"]` 整块；插件自己的 `#dsh-router-health-modal-body` 升级成滚动容器（`flex:1; min-height:0; overflow-y:auto`，它本来就是 flex 列的孩子）；`contentClassName` 用在 DSH 的 `css.content` 上给它 `flex:1; min-height:0`，让插件容器拿到有界高度；effect 改读自己的 id。依据：项目自己的教训（`tools.md`「别猜 DSH 的 CSS-modules 类名——猜类名的失败模式是静默的」）；`[hash]_[local]` 虽受构建保证（`tsdown.client.ts:562`），但 hash 随内容变，猜具体类名仍然脆。同时把四重变体收敛：`div[class*="dialog"]` 前缀是冗余的——插件传的 `className` 与 `css.dialog` 落在同一元素上（`Modal.tsx:64` `clsx(css.dialog, className)`），`.dsh-router-settings-modal` 单选择器即可 | `modals.ts:40-50`、`styles.ts:211-249` |
+| 5 | **I7/M20 常数：内容链零 vh 算术；z-index 值本来就对，缺的是引用**（定案） | **70px 删掉**：`.content` 变成正规 flex 孩子后，内容链高度全部由容器链推导，`calc(84vh - 70px)` 连同魔数一起消失（实测 DSH 头高 22+28+12=62px，`Modal.module.css:71-77`，且两个弹窗的 `footer` prop 与 `.dialog` 的 `gap:20px` 完全没被 70px 考虑）。全文件只保留 `max-height: 84vh` 一个 vh 常数在 dialog 根上——"载体本身不超过视口 84%"是合法常数。守卫随之从 `calc\(100vh[^)]*\)` 改成"内容链（content/body/masterList/detailWorkspace/workspaceScroll/modalContentArea/modalRoot）不允许任何 vh 算术"，不再匹配过去那条 bug 的字面量。**z-index 值不用改**：DSH 自己没有 z-index token 量表（`ui-dockkit/src/components/dockkit.module.css:544` 明写 "No z-index token layer exists to draw from"），而 **1100 是 DSH 自己"压在 Modal(1000) 之上一层"的既定值**——`Tooltip.module.css:25`、`Toast.module.css:12`、`Menu.module.css:45`、`ContextMeter.module.css:48`、`ModelSelect.module.css:93`、`PluginManagerPage.module.css:786`、`PickerPopover.module.css:8`、`TaskMenu.module.css:46`、`stat-dialog.module.css:12` 共 9 处。缺的只是引用：加注释点名 `Modal.module.css:10`=1000 与那 9 处先例，并把 1100/1101 提成命名常量（overlay/panel 一对） | `styles.ts:217,230,1259-1260`、`client-controller.mjs` 的 vh 守卫 |
+
+**前置说明**：第 1、2 项改同一段代码（`index.ts:317-362`、`router.ts`），同一次提交落地；
+第 3、4、5 项互相独立，可并行。
+
+**前置说明**：上表第 1、2 项会改同一段代码（`index.ts:317-362`、`router.ts`），
+建议同一次会话里一起定；第 3、4、5 项互相独立，可并行。
