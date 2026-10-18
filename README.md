@@ -9,7 +9,8 @@
 <p align="center">
   <a href="https://github.com/Imzl-zl/dsh-model-router/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-4A65E8.svg" alt="License: MIT"></a>
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DSH-0.2.0--rc.2-4A65E8.svg" alt="DSH 0.2.0-rc.2"></a>
-  <img src="https://img.shields.io/badge/tests-23%20unit%20%C2%B7%209%20composition-4A65E8.svg" alt="Tests">
+  <a href="https://github.com/Imzl-zl/dsh-model-router/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/version-0.1.0-4A65E8.svg" alt="Version 0.1.0"></a>
+  <img src="https://img.shields.io/badge/tests-121%20unit%20%C2%B7%2021%20composition%20%C2%B7%2048%20client-4A65E8.svg" alt="Tests">
 </p>
 
 ---
@@ -22,14 +23,19 @@ configured rule behave exactly as they do without the plugin.
 
 ## Install
 
+Requires DSH `0.2.0-rc.2`. The package is distributed as source through this
+repository — it is **not** on npm (`dsh-model-router` on the public registry is
+an unrelated package by another author).
+
 ```sh
 git clone https://github.com/Imzl-zl/dsh-model-router.git
 cd dsh-model-router
 npm install                                       # DSH CLI + peers
+npm run bundle --prefix packages/dsh-model-router # build lib/ from src/
 dsh plugin --profile web add packages/dsh-model-router
 ```
 
-Then open **Plugins → dsh-model-router** in the web UI to configure chains per
+Then click **dsh-model-router** in the sidebar footer to configure chains per
 model. Config lives in the profile's patch layer and hot-reloads on save.
 
 ## Configure
@@ -108,7 +114,11 @@ installing the bundle and driving the Plugins page in a browser.
 - **Notices are trajectory-first.** Failover notices ride the durable log and
   render in the trajectory view; the chat conversation does not surface context
   rows in this DSH build.
-- **No channel health view.** The drawer shows failover history only.
+- **Channel health is a sidebar workspace, not a page.** Health lives in the
+  sidebar footer entry's dialog: per-channel passive latency, opt-in 1-token
+  probes, circuit breakers, and the failover-history drawer. There is no
+  separate `plugins.bundle.config` page — that registration was removed on
+  2026-10-16 after measurement showed a page cannot fit DSH's settings column.
 
 Design rationale, source-verified capability boundaries, and the decision
 register live in [`docs/design/`](docs/design/).

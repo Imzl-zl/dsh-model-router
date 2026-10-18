@@ -11,7 +11,7 @@ last_updated: "2026-10-17"
 
 第一至四节为历史裁定，均已关闭并注明落点。**第五节是 2026-10-17 实现层审查复核后
 新开的 5 项待决**——它们不是缺陷，是「修法取向」分歧，未定之前不动对应代码；
-排序与依赖见 `.agents/notes/proposed/2026-10-17-finish-the-abstractions.md`。
+排序与依赖见 `.agents/notes/implemented/2026-10-17-finish-the-abstractions.md`。
 每条裁定注明落点文档；源码证据见[能力边界](dsh-capability-boundary.md)，产品边界见
 [product-plan.md](product-plan.md)，UI 规范见[ui-design.md](ui-design.md)，取舍理由见
 `.agents/notes/`。本文件不重复上述文档的现状描述。

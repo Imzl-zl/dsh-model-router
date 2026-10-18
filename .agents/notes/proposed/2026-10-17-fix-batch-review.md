@@ -5,7 +5,7 @@
 > 本篇是**只读复审**的产物，复审期间未改动任何产品代码（变异实验全部还原并重跑四套件确认绿）。
 >
 > - 复审范围：`git log --oneline 70e0af9~1..HEAD` = 10 提交，`HEAD = 432bfee`，工作树干净。
-> - 被复审的主张：`.agents/notes/proposed/2026-10-17-finish-the-abstractions.md` 的 9 条
+> - 被复审的主张：`.agents/notes/implemented/2026-10-17-finish-the-abstractions.md` 的 9 条
 >   结构线全部实施完毕，完成定义是「不变量只有一处表达 + 旧表达被删除」；四套件
 >   unit 107 / client-controller 41 / run 20 场景 / remote 14。
 > - 复审手段：读实现 → 读它的测试 → **独立变异复验**（4 条按其声称抽样 + 1 条它没抽到的）

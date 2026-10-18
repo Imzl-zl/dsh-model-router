@@ -1,8 +1,14 @@
 # Agent Note: 实现层审查的修复按「把抽象建完」排，不按条目清单排
 
-> 状态：**proposed / 待评审**。本篇定排序、完成定义与每条结构线的修法取向。
-> 5 项修法决策已全部定案并记在 `docs/design/open-questions.md` 第五节，其中 C2 与 I1
-> 已实改实测通过（数据在该节），本篇只引用不重复。**实施前先读那一节。**
+> 状态：**implemented**（2026-10-19 归档）。本笔记所定的排序、完成定义与 9 条结构线
+> **已全部落地**：阶段 1~3 完成、12 个 `_verify-*` 探针转正后删除，实现笔记在
+> `.agents/notes/implemented/2026-10-17-*` 十篇。归档前逐条核对（2026-10-19）：
+> `routes.ts` 的 `provider + '/'` 与 `split('/')` 均为 0 处、`precheck.ts:33` 三档
+> 分类在、`canFireAgain`/`decideRecovery` 在、`health.ts:192` 锚点已移 `step/start`、
+> `calc(vh)` 与 `[class*="body"]` 各 0 处、`BREAKER_CODE_PRESETS` 已改 `descKey`
+> （I9）、`--dsh-router-accent` 在 `styles.ts:17` 单点定义（I8）、退避文案已改实话
+> （I2）。组合测试 21/21 复证。下文是当时的**提案原貌**，保留不改写；实施时偏离定案
+> 的一处（I7 高度链补结构选择器）见 `implemented/2026-10-17-modal-height-chain.md`。
 
 ## Problem
 
