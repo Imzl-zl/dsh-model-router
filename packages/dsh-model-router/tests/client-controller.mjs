@@ -1021,6 +1021,29 @@ test('the configured-route list has one expression, shared by both halves', asyn
   }
 })
 
+test('configuration-state badges keep their text in label-primary, not the accent', async () => {
+  // 浏览器实测（2026-10-19）：accent 当文字色 —— 深色 2.61:1、浅色 4.28:1，
+  // 均低于 AA 的 4.5:1，深色主题下几乎读不出来。这不是审美取舍，是同一份
+  // 语义色纪律（文字永远不是色调色）漏到 accent 上。三处徽标（接管中 / 识图
+  // 路由 / 主模型固定首位）已改回 label-primary + accent 淡染底与描边。
+  const format = sourceOf('format.ts')
+  const badge = format.slice(format.indexOf('export function accentBadge'))
+  assert.ok(badge.includes("color: 'var(--dsw-alias-label-primary)'"),
+    'accentBadge must put the text in label-primary')
+  assert.ok(!/color:\s*'var\(--dsh-router-accent\)'/.test(badge.slice(0, badge.indexOf('}'))),
+    'accentBadge must not colour the text with the accent')
+
+  // 徽标类样式同样不得把 accent 放进 color（图标/头像包在外层，不在此列）。
+  const styles = sourceOf('styles.ts')
+  for (const name of ['workspaceStatePill', 'imageRouteBadge', 'primaryLockedBadge', 'needStatusBadgeActive']) {
+    const at = styles.indexOf(name + ':')
+    assert.ok(at !== -1, `fixture: ${name} exists in styles.ts`)
+    const block = styles.slice(at, styles.indexOf('},', at) === -1 ? at + 600 : styles.indexOf('},', at))
+    assert.ok(!/color:\s*'var\(--dsh-router-accent\)'/.test(block),
+      `${name} must not use the accent as its text colour`)
+  }
+})
+
 test('the health settings modal is handed the section’s writability', async () => {
   // M21：弹窗里的 SegmentedControl 读 props.disabled（熔断作用域），而 page 渲染
   // HealthSettingsModal 时没传——只读/保存中它仍然可点，与其余控件不一致。

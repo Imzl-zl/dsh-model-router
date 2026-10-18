@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
+import { accentBadge, fill, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
 import { configuredRouteList, routeKeyOf } from '../routes.ts'
 import { ChainView } from './chain.ts'
 import { AddCandidateModal, HealthSettingsModal, NewProfileModal } from './modals.ts'
@@ -216,7 +216,7 @@ export function RouterPage(props) {
                     h('div', { style: S.navItemTitleRow },
                       h('span', { style: S.navItemTitle }, t('defaultProfileTab')),
                       h('span', {
-                        style: draft.default.enabled ? Object.assign({}, S.navStatusActive, S.workspaceStatePill) : S.navStatusInactive,
+                        style: draft.default.enabled ? Object.assign({}, S.navStatusActive, accentBadge()) : S.navStatusInactive,
                       }, draft.default.enabled ? t('defaultPoolActiveBadge') : t('defaultPoolInactiveBadge'))),
                     h('div', { style: S.navItemSubText },
                       draft.default.enabled ? fill(t('candidateCountTag'), { n: draft.default.candidates.length }) : t('defaultProfileNotActive'))))),

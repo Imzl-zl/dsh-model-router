@@ -19,7 +19,8 @@ Status: implemented
 准入门槛（可机械判定）：
 
 1. **位置跟随语义**：`stickyTurns` 的输入框渲染在 `needImages` 卡片内，且只在 `imagesMode === 'require'` 时出现。判定：`grep stickyTurns` 在 `src/client/` 里不再出现于 `BudgetRow`，`chain.ts` 的 policies 分支不传它；`pipeline.ts` 的 `needImages` 卡片内有 `imagesMode === 'require'` 门。
-2. **颜色不跨语义**：配置状态一律用 `S.workspaceStatePill`（accent 文字 + 10% accent 底 + 22% accent 边）。判定：`chain.ts` 不再导入 `healthToneBadge`；健康状态（侧栏"全部正常"、节点 `HealthSignalDot`、渠道卡状态药丸）继续走 `healthTone*` 三函数，不受影响。
+2. **颜色不跨语义**：配置状态一律走 accent 系。判定：`chain.ts` 不再用 `healthToneBadge` 渲染配置状态；健康状态（侧栏"全部正常"、节点 `HealthSignalDot`、渠道卡状态药丸）继续走 `healthTone*` 三函数，不受影响。
+   - **2026-10-19 修订**：此处原本写的是「accent 文字 + 10%/22% 淡染」。浏览器实测发现 accent 当文字色深色仅 2.61:1，已改为 `accentBadge()`（accent 只做底与边、文字 `label-primary`）。结论不变（配置状态用 accent 系、绿色留给健康），变的是着色机制。见[实测笔记](2026-10-19-browser-verification-and-accent-contrast.md)。
 3. **词条含义单一**：`candidateCountTag` 只表示"备用数"，两个视图共用。判定：中英两个词条分别为 `{n} 条备用` / `{n} fallback candidates`；计数口径各自不同但含义一致。
 4. **同层级靠拢**：页头卡与子 Tab 栏之间 `gap: 10`、`marginBottom: 10`。
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill } from './format.ts'
+import { accentBadge, fill } from './format.ts'
 import { Icon, ICON_CLOSE, ICON_GLOBE, ICON_PLUS, ICON_ROUTE, ICON_SAVE, ICON_SHIELD, ICON_UNDO, ICON_WARN } from './icons.ts'
 import { BudgetRow, PipelineEditor, SwitchOnGrid } from './pipeline.ts'
 import { SegmentedTabs, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -61,7 +61,7 @@ export function ChainView(props) {
   var imageBadge = firstImageIndex === -1 ? null : h('button', {
     type: 'button',
     className: 'dsh-router-image-route-badge',
-    style: Object.assign({}, S.imageRouteBadge, imageFocus === firstImageIndex ? S.imageRouteBadgeActive : null),
+    style: Object.assign({}, S.imageRouteBadge, accentBadge(), imageFocus === firstImageIndex ? S.imageRouteBadgeActive : null),
     title: t('imageRouteBadgeHint'),
     'aria-pressed': imageFocus === firstImageIndex,
     onClick: function () {
@@ -80,9 +80,9 @@ export function ChainView(props) {
           h('h2', { style: S.workspaceModelName }, isDefault ? t('defaultProfileTab') : chain.when.model),
           isDefault
             ? h('span', {
-                style: chain.enabled ? S.workspaceStatePill : S.navStatusInactive,
+                style: chain.enabled ? Object.assign({}, S.workspaceStatePill, accentBadge()) : S.navStatusInactive,
               }, chain.enabled ? '● ' + t('defaultPoolActiveBadge') : '○ ' + t('defaultPoolInactiveBadge'))
-            : h('span', { style: S.workspaceStatePill }, '● ' + t('activeBadge')),
+            : h('span', { style: Object.assign({}, S.workspaceStatePill, accentBadge()) }, '● ' + t('activeBadge')),
           !isDefault && chain.when?.provider ? h('span', { style: S.providerBadge }, chain.when.provider) : null,
           h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: isDefault ? chain.candidates.length : Math.max(0, chain.candidates.length - 1) })),
           imageBadge))),

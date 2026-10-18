@@ -195,6 +195,27 @@ last_updated: "2026-10-18"
 
 **清单已全部关闭。**
 
-**验证（第二、三批之后复跑）**：`npm run bundle` 通过（含 `tsc -p tsconfig.json`）、组合测试 **21 场景 0 失败**、client-controller **46 条通过**。**浏览器实测仍未做**——DSH GUI `127.0.0.1:64703` 返回 401，需认证会话。
+**验证（第二、三批之后复跑）**：`npm run bundle` 通过（含 `tsc -p tsconfig.json`）、组合测试 **21 场景 0 失败**、client-controller **46 条通过**。
 
 **过程中被测试挡下的两处真实回归**（记录在此，避免以后重犯）：重构 `BreakerRulesModal` 时一度把规则写入改成读渲染期闭包的 `props.onChange(rules.concat(...))`，且没有把 `disabled` 透传给子弹窗——`client-controller` 的两条守卫用例当场打红。前者正是同 tick 双击丢规则的那个 bug，后者会让只读/保存中的熔断范围控件仍可点。两处都已改回更新器形式并补齐 `disabled`。
+
+---
+
+## 六、浏览器实测（2026-10-19）
+
+隔离 home（`.dshhome-view`，端口 3395，带 token URL）实测，12 条逐条点过：
+
+| 项 | 实测结果 |
+|---|---|
+| P0-1 | 「不限」态下 `识图粘滞` 不渲染；切「仅带图」当场出现，hint 文案正确 |
+| P0-2 | 页头徽标出现并可点；收起节点后点徽标能重新展开；`aria-pressed` 跟随 |
+| P0-3 | 点「全局兜底 #2」跳回默认池、侧栏高亮正确；用途徽标确为按钮 |
+| P1-1 | 改 stepper 后底部保存条出现；点它保存成功，`cordis.patch.yml` 的 `maxAttempts` 2→3 落盘 |
+| P1-2 | 页头无删除键；删除位于策略页底部危险区 |
+| P2-1 / P2-2 | 页头与侧栏均显示「2 条备用」；描述句已消失 |
+| P2-5 | 熔断 Tab 只剩开关+「已配置 2 条规则」+管理规则；子弹窗独立打开，2 条规则与预设 chips 正常；**Escape 只关最上层子弹窗**，健康设置与主弹窗保留 |
+| P2-6 / P2-7 | 按钮档位生效；摘要行显示「已勾选 6 / 8 类异常」 |
+
+**实测发现的新缺陷（已修）**：三处配置状态徽标把 accent 当文字色，深色主题下 `● 接管中` 2.61:1、`🖼️ 识图路由` 2.66:1、`主模型固定首位` 3.01:1，低于 AA 4.5:1。已改为 `accentBadge()`（accent 只做底与边、文字 `label-primary`），深色 **11.94:1** / 浅色 **16.18:1**。取舍见 `.agents/notes/implemented/2026-10-19-browser-verification-and-accent-contrast.md`。
+
+**遗留（未修，单独一轮）**：仍有四处 accent 文字低于 AA——`primaryCardTitle`（约 3.3:1）、`policySummaryBtn`、`guideToggleBtn`、`needsBtnActive`（约 3.4:1）。它们是品牌强调而非状态徽标，改掉会削弱页面强调层级，取舍需单独决定。

@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { routeKeyOf } from '../routes.ts'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill, healthToneBadge } from './format.ts'
+import { accentBadge, fill, healthToneBadge } from './format.ts'
 import { HealthSignalDot, reasoningLabelOf } from './health-ui.ts'
 import { Icon, ICON_ARROW_DOWN, ICON_BOLT, ICON_CLOSE, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_ROUTE, ICON_SHIELD, ICON_TRASH, ICON_UP, ICON_WARN } from './icons.ts'
 import { SegmentedTabs, Tag, useModalLayer } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -131,7 +131,7 @@ export function CandidateNode(props) {
                 h('span', { style: { whiteSpace: 'nowrap' } }, props.weightShare + '%')) : null),
             h('div', { style: S.nodeActions },
               isPrimary
-                ? h('span', { style: S.primaryLockedBadge, title: t('primaryPinnedHint') },
+                ? h('span', { style: Object.assign({}, S.primaryLockedBadge, accentBadge()), title: t('primaryPinnedHint') },
                     h(Icon, { d: ICON_SHIELD, size: 11 }),
                     t('primaryLockedBadge'))
                 : [

@@ -801,11 +801,10 @@ export var S = {
     whiteSpace: 'nowrap',
     flexShrink: 0,
   },
-  // 「接管中」是配置状态，不是渠道健康。它以前借 healthToneBadge('healthy')
-  // 的绿色，而绿色在这套面板里专指「渠道正常」，同一个绿在这里读成
-  // 「这条渠道健康」是误读。活动态用 accent，绿色留给健康 —— 见
-  // docs/design/ui-review.md P2-4；为何不是中性灰、
-  // Note: 配置状态色为何走 accent —— 见 .agents/notes/implemented/2026-10-18-vision-sticky-follows-image-condition.md
+  // 「接管中」是配置状态，不是渠道健康。颜色只进描边与底色，文字一律
+  // label-primary —— accent 当文字色实测深色 2.61:1、浅色 4.28:1，低于 AA。
+  // 上色由 format.ts 的 accentBadge() 提供（与 healthToneBadge 同形）。
+  // 见 docs/design/ui-review.md P2-4。
   workspaceStatePill: {
     fontSize: 10.5,
     fontWeight: 600,
@@ -816,9 +815,6 @@ export var S = {
     gap: 4,
     whiteSpace: 'nowrap',
     flexShrink: 0,
-    color: 'var(--dsh-router-accent)',
-    background: 'color-mix(in srgb, var(--dsh-router-accent) 10%, transparent)',
-    border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 22%, transparent)',
   },
   workspaceDesc: {
     fontSize: 12,
@@ -826,7 +822,7 @@ export var S = {
     margin: 0,
   },
   // 页头的识图路由徽标：可点，点开直接展开第一个配了图片条件的节点。
-  // 用 accent 系而不是健康色 —— 它同样是配置状态，见 P2-4 的同一条纪律。
+  // 几何与动作在这里，颜色由 accentBadge() 给（文字走 label-primary）。
   imageRouteBadge: {
     fontSize: 10.5,
     fontWeight: 600,
@@ -838,13 +834,13 @@ export var S = {
     whiteSpace: 'nowrap',
     flexShrink: 0,
     cursor: 'pointer',
-    border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 22%, transparent)',
-    background: 'color-mix(in srgb, var(--dsh-router-accent) 8%, transparent)',
-    color: 'var(--dsh-router-accent)',
+    // 只继承字族：`font: inherit` 会把 fontSize/fontWeight 一起重置回 UA 值，
+    // 徽标字号就会跟着父级变大（实测从 10.5px 跳到 16px）。
+    fontFamily: 'inherit',
     transition: 'background 0.15s, border-color 0.15s',
   },
   imageRouteBadgeActive: {
-    background: 'color-mix(in srgb, var(--dsh-router-accent) 16%, transparent)',
+    background: 'color-mix(in srgb, var(--dsh-router-accent) 20%, var(--dsw-alias-bg-layer-2))',
     borderColor: 'var(--dsh-router-accent)',
   },
   // 策略页底部的危险区：删除是配置生命周期动作，不再是页头主操作。
@@ -1158,6 +1154,8 @@ export var S = {
     fontSize: 11.5,
     color: 'var(--dsw-alias-label-tertiary)',
   },
+  // 与 workspaceStatePill / imageRouteBadge 同一条纪律：accent 只进底与边，
+  // 文字走 label-primary（accent 当文字实测深色 3.01:1，低于 AA）。
   primaryLockedBadge: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -1166,9 +1164,6 @@ export var S = {
     fontWeight: 500,
     padding: '3px 8px',
     borderRadius: 'var(--dsw-radius-sm, 6px)',
-    background: 'color-mix(in srgb, var(--dsh-router-accent) 8%, transparent)',
-    color: 'var(--dsh-router-accent)',
-    border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 20%, transparent)',
   },
   flowConnector: {
     display: 'flex',
@@ -1420,7 +1415,8 @@ export var S = {
   needCard: { background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-md, 10px)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, boxSizing: 'border-box' },
   needHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   needCardTitle: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-  needStatusBadgeActive: { fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'color-mix(in srgb, var(--dsh-router-accent) 12%, transparent)', color: 'var(--dsh-router-accent)', fontWeight: 600, whiteSpace: 'nowrap' },
+  // 同上：accent 只做底与边，文字走 label-primary（accent 当文字实测 ~2.7:1）。
+  needStatusBadgeActive: { fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'color-mix(in srgb, var(--dsh-router-accent) 12%, var(--dsw-alias-bg-layer-2))', color: 'var(--dsw-alias-label-primary)', border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 40%, transparent)', fontWeight: 600, whiteSpace: 'nowrap' },
   needStatusBadgeMuted: { fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' },
   needControlRow: { width: '100%', display: 'flex', alignItems: 'center' },
   needHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.45 },
