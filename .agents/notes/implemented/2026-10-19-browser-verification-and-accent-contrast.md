@@ -45,5 +45,22 @@ AA 对常规字号要求 4.5:1（10.5px/600 不算 large text，large 线在 14p
 ## Consequences
 
 - 收益：三处徽标从 2.61–3.01:1 提到深色 **11.94:1** / 浅色 **16.18:1**，深浅两个主题都稳过 AA；`accentBadge()` 与 `healthToneBadge()` 同形，以后加配置状态徽标只有一个正确形状可抄；守卫用例把「accent 不进文字」变成可执行约束。
-- 代价：accent 在徽标上只剩「淡底 + 描边 + 图标」三种较弱的存在感，`● 接管中` 的识别度比原来的彩色文字略低一档——这是合规换来的。另外**仍有四处 accent 文字没改**：`primaryCardTitle`（12.5px 标题，约 3.3:1）、`policySummaryBtn`、`guideToggleBtn`、`needsBtnActive`（约 3.4:1）。它们是品牌强调而非状态徽标，改掉会削弱页面的强调层级，取舍不同，已作为独立遗留记在 `docs/design/ui-review.md`。
+- 代价：accent 在徽标上只剩「淡底 + 描边 + 图标」三种较弱的存在感，`● 接管中` 的识别度比原来的彩色文字略低一档——这是合规换来的。
 - 附带修掉一个我引入的样式 bug：`imageRouteBadge` 里为重置按钮默认字体写了 `font: 'inherit'`，这个简写把同一对象里前面的 `fontSize: 10.5` 一并重置，实测字号从 10.5px 跳到 16px。改为只继承 `fontFamily`。
+
+## 第二批：非徽标的 accent 文字（同日，同一轮内补完）
+
+首轮只修了三处徽标，把另外四处留成了「品牌强调」的开放项。这个划分站不住：它们同样是文字，同样低于 AA。补的做法不是把它们也改成 `label-primary`（那会抹掉页面的强调层级），而是**新增一个按主题解析的 accent 文字 token**：
+
+```css
+:root                        { --dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 80%, black); }
+body[data-ds-dark-theme]     { --dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 60%, white); }
+```
+
+比例不是估的，是对着四个元素**实测的渲染背景**（深色 `rgb(44,44,46)`、`rgb(45,47,55)`、`rgb(46,49,61)`；浅色 `rgb(255,255,255)`、`rgb(246,247,254)`、`rgb(241,243,253)`）算出来的：深色混 40% 白 × 最亮背景 = 5.38:1，浅色混 20% 黑 × 最暗背景 = 6.06:1。色相仍来自同一个 accent token，没有第二个硬编码蓝。
+
+落地后实测四处：`primaryCardTitle` 深 5.78 / 浅 6.85、`policySummaryBtn` 5.78 / 6.85、`guideToggleBtn` 5.54 / 6.41、`needsBtnActive` 5.37 / 6.19（:1）。
+
+**同时修掉一个更要紧的既有 bug**：`.dsh-router-add-profile-btn:hover` 把 `color` 设成 accent，而这个按钮的底色本来就是 accent —— 悬停时加号变成 accent-on-accent（1:1），图标直接消失。改为悬停把底色压暗 12%（白字实测 5.96:1）并保住白色。抓手图标的悬停色也一并换成 `accent-text`。
+
+**为什么不是把 accent 本身调到达标**：它同时是白字按钮的底色。深色主题下要让它当文字达标就得显著提亮，白字压上去会掉到 AA 以下——问题只是从文字搬到按钮。分成「底色 accent」与「文字 accent-text」两个 token 是唯一不用二选一的解。

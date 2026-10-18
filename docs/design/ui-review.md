@@ -218,4 +218,8 @@ last_updated: "2026-10-18"
 
 **实测发现的新缺陷（已修）**：三处配置状态徽标把 accent 当文字色，深色主题下 `● 接管中` 2.61:1、`🖼️ 识图路由` 2.66:1、`主模型固定首位` 3.01:1，低于 AA 4.5:1。已改为 `accentBadge()`（accent 只做底与边、文字 `label-primary`），深色 **11.94:1** / 浅色 **16.18:1**。取舍见 `.agents/notes/implemented/2026-10-19-browser-verification-and-accent-contrast.md`。
 
-**遗留（未修，单独一轮）**：仍有四处 accent 文字低于 AA——`primaryCardTitle`（约 3.3:1）、`policySummaryBtn`、`guideToggleBtn`、`needsBtnActive`（约 3.4:1）。它们是品牌强调而非状态徽标，改掉会削弱页面强调层级，取舍需单独决定。
+**同轮补完（非徽标的 accent 文字）**：另四处 accent 文字同样低于 AA——`primaryCardTitle`、`policySummaryBtn`、`guideToggleBtn`、`needsBtnActive`。它们不该改成 `label-primary`（会抹掉强调层级），改为新增按主题解析的 `--dsh-router-accent-text`：浅色混 20% 黑、深色混 40% 白，比例由四个元素**实测背景**反推，落地后实测深色 5.37–5.78:1、浅色 6.19–6.85:1。
+
+**同时修掉一个既有 bug**：`.dsh-router-add-profile-btn:hover` 把图标色设成 accent，而按钮底色就是 accent，悬停时加号 accent-on-accent 消失（1:1）。改为悬停压暗底色 12%，白字实测 5.96:1。抓手图标悬停色一并换成 `accent-text`。
+
+**守卫**：`configuration-state badges…` 扩展为同时检查四处 `accent-text` 使用与两个主题的 token 定义；新增 `the sidebar add button keeps a visible glyph on hover`。两条都做过 revert 抽样（改坏即红）。

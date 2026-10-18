@@ -1042,6 +1042,35 @@ test('configuration-state badges keep their text in label-primary, not the accen
     assert.ok(!/color:\s*'var\(--dsh-router-accent\)'/.test(block),
       `${name} must not use the accent as its text colour`)
   }
+
+  // 非徽标的 accent 文字（卡片小标题、行内链接按钮）走 accent-text：按主题
+  // 混合到 AA。实测深色 5.37~5.78:1、浅色 6.19~6.85:1；原始 accent 只有
+  // 2.6:1 / 4.28:1。
+  for (const name of ['primaryCardTitle', 'policySummaryBtn', 'guideToggleBtn', 'needsBtnActive']) {
+    const at = styles.indexOf(name + ':')
+    assert.ok(at !== -1, `fixture: ${name} exists in styles.ts`)
+    const block = styles.slice(at, styles.indexOf('},', at) === -1 ? at + 600 : styles.indexOf('},', at))
+    assert.ok(block.includes('var(--dsh-router-accent-text)'),
+      `${name} must colour its text with --dsh-router-accent-text, not the raw accent`)
+  }
+  // 该 token 必须在两个主题里都有解析值，否则深色会退回一个不达标的中调。
+  const lightDef = styles.indexOf('--dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 80%, black)')
+  const darkDef = styles.indexOf('--dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 60%, white)')
+  assert.ok(lightDef !== -1 && darkDef !== -1,
+    'accent-text must be resolved per theme (light mixes towards black, dark towards white)')
+})
+
+test('the sidebar add button keeps a visible glyph on hover', async () => {
+  // hover 规则曾把 color 设成 accent，而这个按钮的底色本来就是 accent ——
+  // 悬停时图标变成 accent-on-accent（1:1），加号直接消失。修法是悬停变暗底色、
+  // 图标保持白色（实测 5.96:1）。
+  const styles = sourceOf('styles.ts')
+  const at = styles.indexOf('.dsh-router-add-profile-btn:hover')
+  assert.ok(at !== -1, 'fixture: the hover rule exists')
+  const block = styles.slice(at, styles.indexOf("'}", at) === -1 ? at + 300 : styles.indexOf("'}", at))
+  assert.ok(!block.includes('color: var(--dsh-router-accent)'),
+    'the hover rule must not paint the glyph with the accent over an accent surface')
+  assert.ok(block.includes('color: #fff'), 'the glyph stays white on the darkened surface')
 })
 
 test('the health settings modal is handed the section’s writability', async () => {
