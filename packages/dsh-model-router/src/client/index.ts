@@ -18,6 +18,10 @@
  * .agents/notes/implemented/2026-10-15-ui-ux-design-overhaul-and-copy-cleanup.md
  * Note: 单一载体（删页面、只留侧栏弹窗）、高度容器链、语义色单源与 Tab 圈禁 —— 见
  * .agents/notes/implemented/2026-10-16-single-surface-dialog-and-tone-system.md
+ * Note: 识图粘滞跟着图片条件走、配置状态色不再借用健康绿 —— 见
+ * .agents/notes/implemented/2026-10-18-vision-sticky-follows-image-condition.md
+ * Note: 识图徽标、用途跳回、就地保存、删除降权与熔断编辑器独立 —— 见
+ * .agents/notes/implemented/2026-10-18-surface-what-users-look-for-first.md
  */
 
 export { name, inject, apply } from './apply.ts'

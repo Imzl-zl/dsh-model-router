@@ -216,7 +216,7 @@ export function RouterPage(props) {
                     h('div', { style: S.navItemTitleRow },
                       h('span', { style: S.navItemTitle }, t('defaultProfileTab')),
                       h('span', {
-                        style: draft.default.enabled ? Object.assign({}, S.navStatusActive, healthToneBadge('healthy')) : S.navStatusInactive,
+                        style: draft.default.enabled ? Object.assign({}, S.navStatusActive, S.workspaceStatePill) : S.navStatusInactive,
                       }, draft.default.enabled ? t('defaultPoolActiveBadge') : t('defaultPoolInactiveBadge'))),
                     h('div', { style: S.navItemSubText },
                       draft.default.enabled ? fill(t('candidateCountTag'), { n: draft.default.candidates.length }) : t('defaultProfileNotActive'))))),
@@ -327,6 +327,11 @@ export function RouterPage(props) {
                   onOpenDrawer: props.onOpenDrawer,
                   onCheckRoute: props.onCheckRoute,
                   onProbeRoute: props.onProbeRoute,
+                  // 从健康页的用途徽标跳回它所在的链（默认池是 '__default__'）。
+                  onJumpProfile: function (id) {
+                    setFocusRoute(null)
+                    props.onActive(id === '__default__' ? '__default__' : id)
+                  },
                 }))
             : h('div', {
                 // Same containment as the health wrapper above: without it the
@@ -361,6 +366,13 @@ export function RouterPage(props) {
                   onDefaultEnabled: props.onDefaultEnabled,
                   onDeleteProfile: props.onDeleteProfile,
                   onJumpHealth: handleJumpHealth,
+                  // 保存条复用的是顶栏那一对动作，不新增状态源。
+                  dirty: state.dirty,
+                  saving: state.saving,
+                  writable: state.writable,
+                  invalid: state.invalid,
+                  onSave: props.onSave,
+                  onDiscard: props.onDiscard,
                 })))))),
 
     modal !== null && modal.kind === 'health' ? h(HealthSettingsModal, {

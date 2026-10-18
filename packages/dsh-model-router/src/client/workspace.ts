@@ -312,7 +312,17 @@ export function GlobalHealthWorkspace(props) {
                 ch.usages.length === 0
                   ? h('span', { style: S.channelUsageBadge }, t('channelNotUsed'))
                   : ch.usages.map(function (u, i) {
-                      return h('span', { key: i, style: S.channelUsageBadge, title: u.name }, u.label)
+                      // 跳回这条渠道被哪条链用：usages 里已经存了 profile id
+                      // （默认池是 '__default__'），此前只拿它当 tooltip。
+                      // 见 ui-review.md P0-3。
+                      return h('button', {
+                        key: i,
+                        type: 'button',
+                        className: 'dsh-router-usage-jump',
+                        style: S.channelUsageBadgeButton,
+                        title: t('channelUsedIn') + ' ' + u.name,
+                        onClick: function () { props.onJumpProfile(u.name) },
+                      }, u.label)
                     })),
 
               h('div', { style: S.channelActionGroup },

@@ -1,6 +1,6 @@
 /** The fallback pipeline editor: candidate nodes, connectors, switch-on grid, budget row and the failover drawer. */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { routeKeyOf } from '../routes.ts'
 import { h } from './dom.ts'
@@ -20,6 +20,12 @@ export function CandidateNode(props) {
   var expandedState = useState(false)
   var expanded = expandedState[0]
   var setExpanded = expandedState[1]
+  // 页头的识图路由徽标要求展开某个节点时，这个节点跟着打开。页头点的是
+  // 第一个配了条件的节点，但用户也可能手动关掉它，所以这里单向跟随：
+  // imageFocus 只在"点了徽标"时变化，不接管用户之后的开关。
+  useEffect(function () {
+    if (props.imageFocus === props.index) setExpanded(true)
+  }, [props.imageFocus])
   var needs = candidate.needs ?? {}
   var hasActiveNeeds = (needs.images !== undefined) || (needs.minContextTokens > 0)
   var imagesMode = needs.images === true ? 'require' : needs.images === false ? 'forbid' : 'any'
@@ -174,7 +180,26 @@ export function CandidateNode(props) {
                 value: imagesMode,
                 onChange: function (value) { props.onNeeds(index, { imagesMode: value }) },
               })),
-            h('span', { style: S.needHint }, t('needImagesHint'))),
+            h('span', { style: S.needHint }, t('needImagesHint')),
+            // 粘滞只在「预留了识图路」时才有意义：imagesMode 为 any/forbid 时
+            // 这个数永远不会被读到，摆在旁边只会让人以为设了就会生效。
+            // 它属于识图语义，不属于预算 —— 见 docs/design/ui-review.md P0-1；
+            // Note: 为何不在三种图片态下都显示 —— 见 .agents/notes/implemented/2026-10-18-vision-sticky-follows-image-condition.md
+            imagesMode === 'require' ? h('div', { style: S.needStickyRow },
+              h('span', { style: S.needCardTitle }, t('stickyTurns')),
+              h('div', { style: S.needStickyControl },
+                h('input', {
+                  style: Object.assign({}, S.needInput, { width: 52 }),
+                  type: 'text',
+                  inputMode: 'numeric',
+                  maxLength: 2,
+                  'aria-label': t('stickyTurns'),
+                  value: String(props.stickyTurns ?? 0),
+                  disabled: props.disabled,
+                  onChange: function (event) { props.onStickyTurns(event.target.value) },
+                }),
+                h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('turnsUnit'))),
+              h('span', { style: S.needHint }, t('stickyTurnsHint'))) : null),
           h('div', { style: S.needCard },
             h('div', { style: S.needHeader },
               h('span', { style: S.needCardTitle }, t('needContextTitle')),
@@ -354,6 +379,9 @@ export function PipelineEditor(props) {
         onMove: props.onMove,
         onRemove: props.onRemove,
         onNeeds: props.onNeeds,
+        stickyTurns: props.stickyTurns,
+        onStickyTurns: props.onStickyTurns,
+        imageFocus: props.imageFocus,
       })))
 
     // 2. Flow transition indicator
@@ -378,7 +406,7 @@ export function PipelineEditor(props) {
         h('button', {
           type: 'button',
           className: 'dsh-router-catalog-btn',
-          style: Object.assign({}, S.catalogBtn, { height: 32, padding: '0 14px', fontSize: 12.5, gap: 6 }),
+          style: S.catalogBtnSm,
           disabled: props.disabled,
           onClick: props.onOpenAddCandidate,
         }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addCandidateBtn'))))
@@ -414,6 +442,9 @@ export function PipelineEditor(props) {
           onMove: props.onMove,
           onRemove: props.onRemove,
           onNeeds: props.onNeeds,
+          stickyTurns: props.stickyTurns,
+          onStickyTurns: props.onStickyTurns,
+          imageFocus: props.imageFocus,
         }))
       })
     }
@@ -447,6 +478,9 @@ export function PipelineEditor(props) {
         onMove: props.onMove,
         onRemove: props.onRemove,
         onNeeds: props.onNeeds,
+        stickyTurns: props.stickyTurns,
+        onStickyTurns: props.onStickyTurns,
+        imageFocus: props.imageFocus,
       }))
     })
   }
@@ -485,7 +519,14 @@ export function PipelineEditor(props) {
 
 export function SwitchOnGrid(props) {
   var t = props.t
+  // 这个页签的真实任务是「我该勾哪几个」，而 6 张卡片各带一句场景说明、下面
+  // 还有一张安全说明卡，用户要先读 8 行字才能开始决定。一行实时摘要让勾选
+  // 的结果当场可见，而不是靠读描述在脑子里推。见 ui-review.md P2-7。
+  var checkedCount = SWITCH_ON_CODES.filter(function (entry) { return Boolean(props.value[entry.key]) }).length
   return h('div', null,
+    h('div', { style: S.triggerSummary },
+      h(Icon, { d: checkedCount > 0 ? ICON_SHIELD : ICON_WARN, size: 13, style: { color: checkedCount > 0 ? 'var(--dsh-router-accent)' : 'var(--dsh-router-tone-warn)' } }),
+      h('span', null, fill(t('triggerSummaryLine'), { n: checkedCount, total: SWITCH_ON_CODES.length }))),
     h('div', { style: S.triggerGrid },
       SWITCH_ON_CODES.map(function (entry) {
         var on = Boolean(props.value[entry.key])
@@ -534,22 +575,6 @@ export function BudgetRow(props) {
           onChange: function (event) { props.onMaxTotal(event.target.value) },
         }),
         h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('timesUnit')))),
-    props.stickyTurns === undefined ? null : h('div', { style: S.budgetItem },
-      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        h('span', { style: S.budgetTitle }, t('stickyTurns')),
-        h('span', { style: S.budgetHint }, t('stickyTurnsHint'))),
-      h('div', { style: S.budgetInput },
-        h('input', {
-          style: S.budgetInputField,
-          type: 'text',
-          inputMode: 'numeric',
-          maxLength: 2,
-          'aria-label': t('stickyTurns'),
-          value: String(props.stickyTurns),
-          disabled: props.disabled,
-          onChange: function (event) { props.onStickyTurns(event.target.value) },
-        }),
-        h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('turnsUnit')))),
     h('div', { style: S.budgetItem },
       h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
         h('span', { style: S.budgetTitle }, t('backoffTitle')),

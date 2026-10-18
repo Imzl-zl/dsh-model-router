@@ -711,7 +711,10 @@ export var S = {
     minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: 16,
+    // 页头卡与子 Tab 栏是同一层的两段（哪条链 / 哪个方面），10 让它们读起来是
+    // 一组；16 会把它们画成两块互不相关的内容，滚动区因此晚 30px 开始。
+    // 见 docs/design/ui-review.md P2-3。
+    gap: 10,
     // Fill the workbench row even though the row is `flex-start` (that is what
     // keeps the sidebar content-height): this column owns the leftover height
     // and hands it to its scroll region, so the dialog body never has to scroll.
@@ -798,10 +801,126 @@ export var S = {
     whiteSpace: 'nowrap',
     flexShrink: 0,
   },
+  // 「接管中」是配置状态，不是渠道健康。它以前借 healthToneBadge('healthy')
+  // 的绿色，而绿色在这套面板里专指「渠道正常」，同一个绿在这里读成
+  // 「这条渠道健康」是误读。活动态用 accent，绿色留给健康 —— 见
+  // docs/design/ui-review.md P2-4；为何不是中性灰、
+  // Note: 配置状态色为何走 accent —— 见 .agents/notes/implemented/2026-10-18-vision-sticky-follows-image-condition.md
+  workspaceStatePill: {
+    fontSize: 10.5,
+    fontWeight: 600,
+    padding: '1px 7px',
+    borderRadius: 10,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    color: 'var(--dsh-router-accent)',
+    background: 'color-mix(in srgb, var(--dsh-router-accent) 10%, transparent)',
+    border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 22%, transparent)',
+  },
   workspaceDesc: {
     fontSize: 12,
     color: 'var(--dsw-alias-label-tertiary)',
     margin: 0,
+  },
+  // 页头的识图路由徽标：可点，点开直接展开第一个配了图片条件的节点。
+  // 用 accent 系而不是健康色 —— 它同样是配置状态，见 P2-4 的同一条纪律。
+  imageRouteBadge: {
+    fontSize: 10.5,
+    fontWeight: 600,
+    padding: '2px 8px',
+    borderRadius: 10,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    cursor: 'pointer',
+    border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 22%, transparent)',
+    background: 'color-mix(in srgb, var(--dsh-router-accent) 8%, transparent)',
+    color: 'var(--dsh-router-accent)',
+    transition: 'background 0.15s, border-color 0.15s',
+  },
+  imageRouteBadgeActive: {
+    background: 'color-mix(in srgb, var(--dsh-router-accent) 16%, transparent)',
+    borderColor: 'var(--dsh-router-accent)',
+  },
+  // 策略页底部的危险区：删除是配置生命周期动作，不再是页头主操作。
+  dangerZone: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 14,
+    padding: '14px 18px',
+    borderRadius: 'var(--dsw-radius-lg, 12px)',
+    border: '0.5px solid color-mix(in srgb, var(--dsh-router-tone-bad) 28%, transparent)',
+    background: 'color-mix(in srgb, var(--dsh-router-tone-bad) 5%, transparent)',
+    boxSizing: 'border-box',
+  },
+  dangerZoneTitle: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
+  dangerZoneHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', marginTop: 3, lineHeight: 1.45 },
+  // 有改动时贴在工作区底部的保存/放弃条。它复制的是顶栏那一对动作，不是
+  // 第二个状态源 —— 见 ui-review.md P1-1。
+  dirtyBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '8px 14px',
+    marginTop: 4,
+    borderRadius: 'var(--dsw-radius-md, 10px)',
+    border: '0.5px solid var(--dsw-alias-border-l2)',
+    background: 'var(--dsw-alias-bg-layer-2)',
+    boxSizing: 'border-box',
+    flexShrink: 0,
+  },
+  dirtyBarText: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', fontWeight: 500 },
+  dirtyBarActions: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 },
+  dirtyBarDiscard: {
+    boxSizing: 'border-box',
+    height: 28,
+    padding: '0 12px',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-primary)',
+    fontSize: 12,
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dirtyBarSave: {
+    boxSizing: 'border-box',
+    height: 28,
+    padding: '0 14px',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    border: 'none',
+    background: 'var(--dsh-router-accent)',
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dirtyBarSaveDisabled: {
+    boxSizing: 'border-box',
+    height: 28,
+    padding: '0 14px',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    border: 'none',
+    background: 'var(--dsw-alias-bg-layer-3)',
+    color: 'var(--dsw-alias-label-tertiary)',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'not-allowed',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
   },
   // The dialog's content area is a flex column: the workbench fills it and its
   // own scroll region absorbs the height, so the body scrolls only when the
@@ -1246,11 +1365,29 @@ export var S = {
   connectorLine: { width: 2, alignSelf: 'stretch', minHeight: 22, background: 'linear-gradient(to bottom, var(--dsh-router-accent), var(--dsw-alias-border-l3))', borderRadius: 1 },
   failoverTag: { background: 'var(--dsw-alias-bg-layer-3)', border: '0.5px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', borderRadius: 'var(--dsw-radius-sm, 8px)', padding: '2px 10px', fontWeight: 600, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', flexShrink: 0 },
   addBar: { marginLeft: 48, display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' },
-  catalogBtn: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-primary)', padding: '0 14px', height: 34, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, transition: 'background 0.15s', whiteSpace: 'nowrap', flexShrink: 0 },
+  // 同一视觉角色的两个尺寸档：此前两处各自 Object.assign 覆盖高度与字号，
+  // 同一按钮在页底和空态里长成两个样子。尺寸档写在这里，调用点只选档 ——
+  // 见 ui-review.md P2-6。
+  catalogBtnLg: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-primary)', padding: '0 18px', height: 36, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, transition: 'background 0.15s', whiteSpace: 'nowrap', flexShrink: 0 },
+  catalogBtnSm: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-primary)', padding: '0 14px', height: 32, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 12.5, fontWeight: 500, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'background 0.15s', whiteSpace: 'nowrap', flexShrink: 0 },
   manualBtn: { boxSizing: 'border-box', background: 'transparent', border: '0.5px dashed var(--dsw-alias-border-l4)', color: 'var(--dsw-alias-label-secondary)', padding: '0 14px', height: 34, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0 },
   tabBar: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 },
-  addProfileBtn: { boxSizing: 'border-box', border: '0.5px dashed var(--dsw-alias-border-l4)', background: 'transparent', color: 'var(--dsw-alias-label-secondary)', padding: '0 14px', height: 30, borderRadius: 'var(--dsw-radius-md, 8px)', fontSize: 12.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', flexShrink: 0, transition: 'border-color 0.15s, color 0.15s' },
   triggerGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginTop: 8 },
+  // 策略页签的实时摘要：勾选结果当场可见，不用读完 6 张卡片的描述再推。
+  triggerSummary: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 10,
+    padding: '7px 12px',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-2)',
+    border: '0.5px solid var(--dsw-alias-border-l2)',
+    fontSize: 12.5,
+    color: 'var(--dsw-alias-label-secondary)',
+    lineHeight: 1.45,
+    boxSizing: 'border-box',
+  },
   triggerCard: { background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-lg, 12px)', padding: '14px 18px', display: 'flex', alignItems: 'flex-start', gap: 14, cursor: 'pointer', userSelect: 'none', transition: 'border-color 0.15s, background 0.15s, transform 0.12s', boxSizing: 'border-box' },
   triggerCardChecked: { borderColor: 'var(--dsh-router-accent)', background: 'color-mix(in srgb, var(--dsh-router-accent) 6%, transparent)' },
   triggerChk: { width: 17, height: 17, accentColor: 'var(--dsh-router-accent)', marginTop: 2, cursor: 'pointer', flexShrink: 0 },
@@ -1287,6 +1424,10 @@ export var S = {
   needStatusBadgeMuted: { fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' },
   needControlRow: { width: '100%', display: 'flex', alignItems: 'center' },
   needHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.45 },
+  // 识图粘滞嵌在「图像/多模态输入」卡片里，与图片三态用同一条分隔线隔开 ——
+  // 它是图片条件的后续语义，不是第二个独立条件。
+  needStickyRow: { display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 8, borderTop: '0.5px solid var(--dsw-alias-border-l2)' },
+  needStickyControl: { display: 'flex', alignItems: 'center', gap: 6 },
   needInput: { boxSizing: 'border-box', background: 'var(--dsw-alias-bg-layer-2)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-sm, 6px)', color: 'var(--dsw-alias-label-primary)', padding: '5px 10px', fontSize: 13, height: 32, outline: 'none', width: '100%', fontFamily: 'inherit' },
   drawerOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: Z_OVERLAY },
   drawerPanel: { position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, maxWidth: '92vw', background: 'var(--dsw-alias-bg-layer-1)', borderLeft: '0.5px solid var(--dsw-alias-border-l4)', boxShadow: '-8px 0 36px rgba(0,0,0,0.5)', zIndex: Z_PANEL, display: 'flex', flexDirection: 'column' },
@@ -1471,7 +1612,7 @@ export var S = {
     transition: 'all 0.15s ease',
     whiteSpace: 'nowrap',
   },
-  subNavBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' },
+  subNavBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 12, flexWrap: 'wrap' },
   subTabLabel: { fontSize: 13, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 6 },
   needsBtnActive: { borderColor: 'var(--dsh-router-accent)', color: 'var(--dsh-router-accent)', background: 'color-mix(in srgb, var(--dsh-router-accent) 8%, transparent)' },
   strategyHintTag: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginLeft: 8, lineHeight: 1.4 },
@@ -1653,6 +1794,19 @@ export var S = {
     background: 'var(--dsw-alias-bg-layer-2)',
     border: '0.5px solid var(--dsw-alias-border-l3)',
     color: 'var(--dsw-alias-label-secondary)',
+  },
+  // 用途徽标可点：从健康页跳回它在哪条链里的哪个位置。悬停时才给出可点的
+  // 视觉，避免一屏静态文本里突然出现一堆按钮 —— 见 ui-review.md P0-3。
+  channelUsageBadgeButton: {
+    fontSize: 10.5,
+    padding: '1px 7px',
+    borderRadius: 6,
+    background: 'var(--dsw-alias-bg-layer-2)',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    color: 'var(--dsw-alias-label-secondary)',
+    cursor: 'pointer',
+    font: 'inherit',
+    transition: 'border-color 0.15s, color 0.15s',
   },
   channelActionGroup: {
     display: 'flex',
