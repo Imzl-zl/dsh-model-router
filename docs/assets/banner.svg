@@ -1,0 +1,17 @@
+<svg width="760" height="200" viewBox="0 0 760 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="routerAccent" x1="10" y1="6" x2="38" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4A65E8"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(40,28) scale(3)">
+    <path d="M24 3.5L42 13.5V34.5L24 44.5L6 34.5V13.5L24 3.5Z" stroke="url(#routerAccent)" stroke-width="3" stroke-linejoin="round" fill="rgba(74,101,232,0.08)"/>
+    <path d="M24 14V24M24 24L15 32M24 24L33 32" stroke="url(#routerAccent)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="24" cy="12.5" r="3" fill="url(#routerAccent)"/>
+    <circle cx="13.5" cy="33.5" r="3.2" fill="#4A65E8"/>
+    <circle cx="34.5" cy="33.5" r="3.2" fill="#06B6D4"/>
+  </g>
+  <text x="200" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="46" font-weight="600" fill="#111827">dsh-model-router</text>
+  <text x="202" y="132" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="19" fill="#6B7280">Transparent cross-provider failover for DeepSeek Harness</text>
+</svg>
