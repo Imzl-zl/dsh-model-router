@@ -76,11 +76,10 @@ export function ChainView(props) {
           h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: chain.candidates.length })),
           imageBadge))),
     // 接管开关做成一行正常的设置行（左标签右开关），不再塞进标题栏：标题栏是单行
-    // 定高容器，塞进去只会互相挤。开关关着时下面一行说明"现在什么都不做"。
+    // 定高容器，塞进去只会互相挤。关着时下面那块说明卡说清"现在什么都不做"，
+    // 所以这一行只留标签本身——配置不复杂，不需要第二句解释。
     h('div', { style: S.takeoverRow },
-      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 } },
-        h('span', { style: { fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('takeoverSwitchLabel')),
-        h('span', { style: S.cardHint }, t('takeoverRowHint'))),
+      h('span', { style: { fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('takeoverSwitchLabel')),
       h('div', { style: { flexShrink: 0 } },
         h(Switch, {
           checked: props.enabled,

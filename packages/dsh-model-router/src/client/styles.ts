@@ -53,15 +53,18 @@ export var ROUTER_CSS = [
   '   alignment (matching DSH\'s own settings row above) only when it is the sole',
   '   occupant; with company it flexes inside the host\'s own row layout.',
   '   Anchors: ui-sidebar SidebarRoot.tsx:306 renders css.footerActions (display:flex),',
-  '   SidebarRoot.module.css:587-589. ownerProps only carries `wide`. */',
+  '   SidebarRoot.module.css:587-589. ownerProps only carries `wide`.',
+  '   有同伴时按内容定宽（0 1 auto：不长不胀，行不够才收缩）；独占一行时才满宽，',
+  '   对齐上方 DSH 自己的设置行。两条规则都带 !important——内联样式会压过样式表，',
+  '   曾经的 `flexShrink: 0` 就这样把 shrink 分量吃掉，实测按钮被同伴压到 125px。 */',
   '.dsh-router-footer-action {',
-  '  flex: 1 1 auto;',
-  '  min-width: 0;',
+  '  flex: 0 1 auto !important;',
+  '  min-width: 0 !important;',
   '}',
   '.dsh-router-footer-action.wide:only-child {',
-  '  flex: 0 0 auto;',
-  '  width: calc(100% + 4px);',
-  '  margin: 4px -2px;',
+  '  flex: 0 0 auto !important;',
+  '  width: calc(100% + 4px) !important;',
+  '  margin: 4px -2px !important;',
   '}',
   '/* Sidebar footer action button styles */',
   '.dsh-router-footer-action {',
@@ -1482,10 +1485,11 @@ export var S = {
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    // 满宽与负边距的"对齐待遇"在注入 CSS 的 `.wide:only-child` 规则里：宿主容器是
-    // 同 slot 所有注册者共享的，插件只样式化自己。有同伴时 flex:1 1 auto 让它在宿主
-    // 自带的 row 布局里分享宽度，不挤压别人。
-    flex: '1 1 auto',
+    // flex 不写在内联样式里：宿主容器是同 slot 所有注册者共享的一行
+    // （`display:flex`），插件只样式化自己。独占一行时 `.wide:only-child` 给
+    // 满宽对齐待遇，有同伴时 `flex: 1 1 auto` 分享宽度——两条规则都在注入 CSS
+    // 里，因为内联样式会压过样式表（曾经的 `flexShrink: 0` 就这样把
+    // `flex: 1 1 auto` 的 shrink 分量吃掉，实测按钮被同伴压到 125px）。
     minWidth: 0,
     height: 42,
     minHeight: 42,
@@ -1501,7 +1505,6 @@ export var S = {
     lineHeight: '22px',
     cursor: 'pointer',
     overflow: 'hidden',
-    flexShrink: 0,
     transition: 'background 0.15s ease',
   },
   // Rail row: DSH's `.trigger.rail` is 36x36 with the wrapper at
@@ -1529,6 +1532,56 @@ export var S = {
   sidebarLabel: { fontSize: 14, fontWeight: 400, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   sidebarCountBadge: { fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
   railDirtyDot: { position: 'absolute', top: 5, right: 5, width: 7, height: 7, borderRadius: '50%', background: 'var(--dsh-router-tone-warn)', boxShadow: '0 0 4px rgba(245, 158, 11, 0.8)' },
+
+  // ---- 主列面板（侧栏面板列表条目打开的那个 seat）----
+  // 宿主容器是 ui-layout 的 `.centerCol`（display:flex; flex-direction:column;
+  // overflow:hidden），所以这里同样用 flex 列 + min-height:0 把高度一路交接下去。
+  panelRoot: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    boxSizing: 'border-box',
+  },
+  panelHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    flexWrap: 'wrap',
+    flexShrink: 0,
+    padding: '12px 20px',
+    borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
+    background: 'var(--dsw-alias-bg-layer-2)',
+    boxSizing: 'border-box',
+  },
+  panelTitle: { fontSize: 16, fontWeight: 700, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap' },
+  panelBackBtn: {
+    boxSizing: 'border-box',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 32,
+    padding: '0 10px',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-2)',
+    color: 'var(--dsw-alias-label-secondary)',
+    fontSize: 12.5,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+  },
+  panelBody: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    overflowY: 'auto',
+    padding: '20px 24px',
+    boxSizing: 'border-box',
+  },
 
   // Modal window styles
   modalTopBar: {

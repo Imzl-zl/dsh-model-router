@@ -5,7 +5,7 @@
  * client.js is a Cordis client module in `window.__ModuleLoader__.load` factory
  * form, so these tests load the real file, hand the factory stub modules, run
  * `apply(ctx)` against a stub context, and drive the controller through the
- * exact seam the UI uses: the `sidebar.footer.action` slot registration's
+ * exact seam the UI uses: the `main` panel slot registration's
  * `inject()` actions plus the `routerPage` snapshot store. No component is
  * rendered, so no DOM is needed.
  *
@@ -272,12 +272,14 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
     slots: {
       // The real inject() runs its callback to register, then returns a disposer.
       inject: (_name, fn) => { fn(); return () => {} },
+      // 侧栏面板行的顺序不再写死：插件读已注册的同伴、排到他们后面。harness 要
+      // 提供这个读口，否则 apply 在挂载时就抛——真实宿主一定有它（ui-slots）。
+      entriesOfSlot: () => [],
       register: (options, component) => {
         registrations.push(options)
-        // The sidebar entry is this plugin's only surface: it renders the whole
-        // workbench inside the quick dialog, so it is the component the
-        // component-level tests mount.
-        if (options.name === 'sidebar.footer.action') capturedComponent = component
+        // The main panel is this plugin's only surface: it renders the whole
+        // workbench, so it is the component the component-level tests mount.
+        if (options.name === 'main') capturedComponent = component
         return () => {}
       },
     },
@@ -316,10 +318,10 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
     },
   }
   await loadClient().apply(ctx)
-  // The sidebar entry is this plugin's only surface: it renders the whole
-  // workbench inside the quick dialog. The Plugins-page carrier
-  // (`plugins.bundle.config`) was removed — one editor, one host.
-  const registration = registrations.find((entry) => entry.name === 'sidebar.footer.action')
+  // The main panel is this plugin's only surface: the sidebar's panel row opens
+  // it. The Plugins-page carrier (`plugins.bundle.config`) was removed — one
+  // editor, one host.
+  const registration = registrations.find((entry) => entry.name === 'main')
   const injected = registration.inject()
   const store = injected.hooks.routerPage
   return {
@@ -328,7 +330,7 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
     state: () => store.getSnapshot(),
     /** Unload the plugin fiber: run every effect cleanup, the way Cordis does. */
     unload: () => { for (const disposer of effectDisposers.slice()) disposer() },
-    // The registered sidebar-entry component, for the component-level tests.
+    // The registered panel component, for the component-level tests.
     component: capturedComponent,
     republish: (next) => { snapshot = { ...snapshot, ...next }; publish() },
     mutateCalls: calls,
@@ -731,7 +733,7 @@ test('the save command is registered with DSH\'s shortcuts service and gated by 
 
 /** The dictionary function the locale stub hands the components. */
 const t = (key) => key
-/** Render one component the way footer.ts renders it, with the store wired in. */
+/** Render one component the way panel.ts renders it, with the store wired in. */
 const propsFor = (h) => Object.assign({}, h.actions, {
   t,
   useRouterPage: (selector) => selector(h.store.getSnapshot()),
@@ -756,7 +758,7 @@ test('a dialog opened while the config scope is still loading does not throw, an
   })
   assert.equal(loading.state().available, false, 'fixture: the namespace is unavailable in the loading frame')
   pendingEffects.length = 0
-  // Render the page the way footer.ts does when the dialog is open, then run its
+  // Render the page the way panel.ts does when the panel is open, then run its
   // mount effects. A throw here is the bug: the tripwire must only fire for a
   // wrapper that EXISTS while its footer sibling moved.
   render(createEl(RouterPage, propsFor(loading)))
@@ -775,27 +777,22 @@ test('a dialog opened while the config scope is still loading does not throw, an
   assert.equal(footer.attributes.inert, '', 'and inert, for the same reason')
 })
 
-// I4：侧栏入口常驻，它一 retain 就让 surfaceActive() 恒真——Ctrl+S 被全局认领
-// （regions 覆盖输入框与终端），而 save() 在只读时只是空转，并不阻止认领。
-// 弹窗的挂载（page.ts）本来就独立 retain，footer 那一次是冗余的。
-test('the permanent sidebar entry alone does not claim the save key; the open dialog does', async () => {
+// I4：注册本身不能 retain——否则 Ctrl+S 被全局认领（regions 覆盖输入框与终端），
+// 而 save() 在只读时只是空转，并不阻止认领。载体换成主列面板之后这条更硬：
+// 侧栏那一行是 DSH 自己的 PanelRow，本插件只提供图标、根本不渲染它，所以能
+// retain 的只有面板页自己——没有任何"常驻但不该认领"的组件存在。
+// （harness 的 useEffect 只收集不回收，所以卸载分支无法在这里表达；上面那条
+// `nothing mounted` 就是它的反面。）
+test('the panel page claims the save key only while it is mounted', async () => {
   const { RouterPage } = loadClient()
   const h = await mount({ value: twoCandidates() })
   const command = h.shortcutCommands()[0]
   assert.deepEqual(command.resolve({}), { status: 'pass' }, 'nothing mounted: the key passes to its other owners')
 
-  // 只挂侧栏入口那一面（footer action 组件本体，常驻不卸载）。
-  pendingEffects.length = 0
-  render(createEl(h.component, propsFor(h)))
-  for (const effect of pendingEffects) effect()
-  assert.deepEqual(command.resolve({}), { status: 'pass' },
-    'the permanent sidebar entry alone must not claim the key')
-
-  // 弹窗开着（RouterPage 挂载）时才接键。
   pendingEffects.length = 0
   render(createEl(RouterPage, propsFor(h)))
   for (const effect of pendingEffects) effect()
-  assert.equal(command.resolve({}).status, 'handled', 'the open dialog claims the key')
+  assert.equal(command.resolve({}).status, 'handled', 'the open panel claims the key')
 })
 
 // 回归：checkAll 曾在内层回调里引用已被删除的 `routes` 对象（keys 改成字符串数组后
@@ -1208,10 +1205,39 @@ test('a legacy default pool is adopted as the chain', async () => {
 // `calc(100vh - 292px)` 上限。浏览器实测：768px 视口下页面比设置列宽 222px（min-content
 // 来自吸顶头的 nowrap 行），弹窗里则出现"弹窗体 + 工作区"两条滚动条。现在只有一个
 // 载体，这些常数连带消失。
-test('the browser half registers exactly one surface: the sidebar dialog', async () => {
+test('the sidebar panel row does not hardcode its order', () => {
+  // `order: 120` 是一个"别人不会用同一个数"的假设。两个插件选同一个数时，先后
+  // 只能靠注册顺序定，而注册顺序跨插件不确定——用户实测撞到过。改成读已注册的
+  // 同伴、排到他们后面；这条守卫让"再写死一个魔数"立刻转红。
+  // 注释里合法地提到那个旧魔数（说明为什么不那么写），所以先剥注释再查。
   const apply = sourceOf('apply.ts')
-  assert.ok(apply.includes("ctx.slots.inject('sidebar.footer.action'"),
-    'the sidebar entry must still be registered')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+  assert.ok(!/order:\s*\d/.test(apply), 'no literal order may be registered')
+  assert.ok(/entriesOfSlot\('sidebar\.panellist'\)/.test(apply),
+    'the order must be derived from the entries already registered in that slot')
+  assert.ok(/highestOrder \+ 1/.test(apply),
+    'the entry must sort after every peer, not merely tie with them')
+})
+
+test('the panel row and its main panel are registered as one pair', () => {
+  // DSH 的面板行自己接管点击并调 `layout.selectPanel(id)`，而那个调用对没有
+  // `main` 注册的 id 会抛（ui-layout service.ts:72-78）。所以两条注册必须成对、
+  // 用同一个 id——少任何一条，点侧栏那一行就是运行时抛错。
+  const apply = sourceOf('apply.ts')
+  assert.ok(/ctx\.slots\.inject\('main'/.test(apply), 'the main panel must be registered')
+  assert.ok(/ctx\.slots\.inject\('sidebar\.panellist'/.test(apply), 'the panel row must be registered')
+  assert.ok(/key: PANEL_ID/.test(apply) && /id: PANEL_ID/.test(apply),
+    'both registrations must address the same panel id')
+  // -footer-action 已不再是载体：那个槽位是多插件共享一行、没有分宽规则的。
+  assert.ok(!/ctx\.slots\.inject\('sidebar\.footer\.action'/.test(apply),
+    'the shared footer-action row must stay unused — two occupants squeeze each other')
+})
+
+test('the browser half registers exactly one surface: the main panel', async () => {
+  const apply = sourceOf('apply.ts')
+  assert.ok(apply.includes("ctx.slots.inject('main'"),
+    'the main panel must still be registered')
   // Assert on the registration itself, not on the word: the decision note and
   // the comments legitimately name the removed carrier.
   assert.ok(!/ctx\.slots\.inject\('plugins\.bundle\.config'/.test(apply),
@@ -1352,7 +1378,7 @@ test('semantic tone colour has one source and never paints badge text', async ()
     `every toneDot must be handed its colour by healthToneStyle: ${dots.length} dot(s), ${colored.length} coloured`)
   // 色点/色边的背景同理：DSH 的 state-* 是中间调（某个主题下看不见或刺眼），
   // 未保存点曾直接借 --dsw-alias-state-warn-primary 当背景（M18）。
-  for (const name of ['footer.ts', 'chain.ts', 'workspace.ts', 'modals.ts', 'pipeline.ts', 'page.ts', 'health-ui.ts']) {
+  for (const name of ['panel.ts', 'chain.ts', 'workspace.ts', 'modals.ts', 'pipeline.ts', 'page.ts', 'health-ui.ts']) {
     const toneAsBackground = sourceOf(name).match(/background:\s*'var\(--dsw-alias-state-(success|error|warn)-primary[^)]*\)'/g) ?? []
     assert.deepEqual(toneAsBackground, [],
       `${name} must paint points and edges from --dsh-router-tone-*, not DSH's mid-tone state aliases: ${toneAsBackground.join(', ')}`)
@@ -1365,7 +1391,7 @@ test('semantic tone colour has one source and never paints badge text', async ()
 // 里的 `#4A65E8` 回退永不生效，错得完全静默。手算的 `rgba(74,101,232,x)` 同理：
 // accent 一改，二十处淡染不会跟着改。两者都归 color-mix / 变量。
 test('the plugin accent has one source, and DSH brand ink is never borrowed', async () => {
-  const modules = ['styles.ts', 'footer.ts', 'modals.ts', 'pipeline.ts', 'icons.ts', 'format.ts', 'health-ui.ts', 'workspace.ts', 'chain.ts', 'controller.ts', 'page.ts']
+  const modules = ['styles.ts', 'panel.ts', 'modals.ts', 'pipeline.ts', 'icons.ts', 'format.ts', 'health-ui.ts', 'workspace.ts', 'chain.ts', 'controller.ts', 'page.ts']
   for (const name of modules) {
     const source = sourceOf(name)
     const borrowed = source.match(/--dsw-alias-brand-primary/g) ?? []

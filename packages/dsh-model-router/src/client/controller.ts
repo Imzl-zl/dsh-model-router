@@ -351,7 +351,7 @@ export function createController(ctx, scope, t) {
         saving = false
         failed = !accepted
         publish()
-      }, function () {
+      }, function (e) {
         saving = false
         failed = true
         publish()

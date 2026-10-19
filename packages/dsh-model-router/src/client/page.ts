@@ -251,6 +251,7 @@ export function RouterPage(props) {
                   chain: draft.chain,
                   disabled: disabled,
                   enabled: draft.enabled,
+                  onEnabled: props.onEnabled,
                   catalog: state.ui.catalog,
                   passive: state.ui.passive,
                   discover: state.ui.discover,

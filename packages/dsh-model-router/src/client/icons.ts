@@ -68,6 +68,9 @@ export var ICON_WARN = 'M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.77
 
 export var ICON_SAVE = 'M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5a.5.5 0 0 0-.146-.354l-2.5-2.5A.5.5 0 0 0 12 1H2zm0 1h9.293L13.5 4.207V14H2V2zm3 0v4h6V2H5zm1 1h4v2H6V3zM4 9h8v4H4V9z'
 
+/** Back / return arrow, for the panel header's "back to conversation". */
+export var ICON_ARROW_LEFT = 'M8 0a.5.5 0 0 1 .354.146l4 4a.5.5 0 0 1-.708.708L8.5 1.707V9.5a.5.5 0 0 1-1 0V1.707L3.354 4.854a.5.5 0 0 1-.708-.708l4-4A.5.5 0 0 1 8 0zM0 10.5a.5.5 0 0 1 1 0V14h12v-3.5a.5.5 0 0 1 1 0V15a.5.5 0 0 1-.5.5H.5a.5.5 0 0 1-.5-.5v-4.5z'
+
 export var ICON_CHECK = 'M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z'
 
 export var ICON_CLOCK = 'M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0-1A6 6 0 1 0 8 2a6 6 0 0 0 0 12zm.5-9a.5.5 0 0 0-1 0v4.293l2.854 1.712a.5.5 0 0 0 .515-.858L8.5 7.82V5z'

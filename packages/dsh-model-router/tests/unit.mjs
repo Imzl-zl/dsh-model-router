@@ -1742,8 +1742,8 @@ test('the save shortcut label follows the platform, and both keys exist in both 
 // 漂移过（en 从来没有 problemDuplicateRoute 键，字典覆盖测试当场抓到）。
 test('every takeover, chain and timeline key exists in both locales', () => {
   const keys = [
-    'takeoverSwitchLabel', 'takeoverRowHint', 'takeoverOffTitle', 'takeoverOffDesc',
-    'chainNavTitle', 'firstHopTitle', 'firstHopBadge', 'firstHopHint',
+    'takeoverSwitchLabel', 'takeoverOffTitle', 'takeoverOffDesc',
+    'chainNavTitle', 'firstHopTitle', 'firstHopBadge',
     'timelineWindowLabel', 'timelineNoData', 'timelineBucketEmpty', 'timelineBucketTip',
     'timelineLegend', 'timelineScopeLine', 'timelineBucketLabel', 'timelineBucketHint',
     'timelineBucketMinutes', 'timelineBucketWindow',

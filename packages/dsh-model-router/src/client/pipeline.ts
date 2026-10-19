@@ -15,8 +15,8 @@ import { DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STRATEGY, SWITCH_ON_CODES } from '.
 /**
  * The first hop is the model the user selected in DSH, so it cannot be a card
  * with a provider and a model — the plugin does not know which one it will be
- * until a request arrives. It is a statement of what the chain does instead:
- * your selection fires once, then the configured fallbacks take over.
+ * until a request arrives. It states what the chain does instead: your
+ * selection is the first hop, and the configured fallbacks follow it.
  */
 function FirstHopCard(props) {
   var t = props.t
@@ -28,8 +28,7 @@ function FirstHopCard(props) {
           h('div', { style: S.modelInfo },
             h('div', { style: S.modelNameRow },
               h('span', { style: S.modelName }, t('firstHopTitle')),
-              h('span', { style: S.firstHopBadge }, t('firstHopBadge'))),
-            h('span', { style: S.modelPath }, t('firstHopHint')))))))
+              h('span', { style: S.firstHopBadge }, t('firstHopBadge'))))))))
 }
 
 export function CandidateNode(props) {
@@ -400,8 +399,7 @@ export function PipelineEditor(props) {
     h('span', { style: S.fallbackSectionTitle },
       h(Icon, { d: ICON_ROUTE, size: 14 }),
       t('fallbackChainSection'),
-      h('span', { style: S.countBadge }, String(candidates.length))),
-    h('span', { style: S.cardHint }, t('fallbackChainHint'))))
+      h('span', { style: S.countBadge }, String(candidates.length)))))
 
   if (candidates.length === 0) {
     nodes.push(h('div', { key: 'fallback-empty', style: S.fallbackEmptyCard },
