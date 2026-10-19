@@ -1825,6 +1825,7 @@ import {
   TIMELINE_MAX_POINTS,
   TIMELINE_RETENTION_SECONDS,
   bucketTimeline,
+  windowSuccessRate,
   bucketTone,
   pruneTimeline,
 } from '../src/timeline.ts'
@@ -1888,6 +1889,69 @@ test('bucketTone bands the success rate: green at 99%, yellow at 90%, red below'
   assert.equal(bucketTone({ successRate: 0.98 }), 'degraded')
   assert.equal(bucketTone({ successRate: 0.9 }), 'degraded')
   assert.equal(bucketTone({ successRate: 0.89 }), 'unhealthy')
+})
+
+// 回归：窗口可用率曾在这两个界面里各写一遍，而且都多乘了一个 bar.count。
+// healthy 本身就是桶内计数，再乘 count 就是平方——一个桶里十次观测会印出
+// 1000%，用户实测 3578%。桶里只有一次观测时 1×1=1，所以手写用例完全看不出
+// 来（隔离浏览器实测就是这么漏过去的）：这个 bug 只在有真实流量的桶里现形。
+test('windowSuccessRate is a rate: a busy bucket cannot push it above 100%', () => {
+  const now = alignedNow(10)
+  // 一个桶里 50 次观测，全部成功。错公式给 50×50/50 = 50 → 5000%。
+  const busy = bucketTimeline(
+    Array.from({ length: 50 }, (_, i) => ({ time: now - MINUTE - i * 1000, status: 'healthy' })),
+    600, now,
+  )
+  assert.equal(windowSuccessRate(busy), 1)
+
+  // 一半降级：25 healthy + 25 degraded → (25 + 12.5) / 50 = 0.75。
+  const half = bucketTimeline(
+    Array.from({ length: 50 }, (_, i) => ({ time: now - MINUTE - i * 1000, status: i % 2 === 0 ? 'healthy' : 'degraded' })),
+    600, now,
+  )
+  assert.equal(windowSuccessRate(half), 0.75)
+
+  // 多个桶各自繁忙：每条渠道按自己的计数加权，不是把桶数也乘进去。
+  const manyBuckets = bucketTimeline([
+    ...Array.from({ length: 30 }, (_, i) => ({ time: now - MINUTE - i * 1000, status: 'healthy' })),
+    ...Array.from({ length: 10 }, (_, i) => ({ time: now - 10 * MINUTE - i * 1000, status: 'unhealthy' })),
+  ], 600, now)
+  // 30 healthy 与 10 unhealthy 分居两个桶 → 30 / 40 = 0.75。
+  assert.equal(windowSuccessRate(manyBuckets), 0.75)
+
+  // 全失败是 0，空窗口是 null（不是 0%）。
+  const allBad = bucketTimeline(
+    Array.from({ length: 20 }, (_, i) => ({ time: now - MINUTE - i * 1000, status: 'unhealthy' })),
+    600, now,
+  )
+  assert.equal(windowSuccessRate(allBad), 0)
+  assert.equal(windowSuccessRate(bucketTimeline([], 600, now)), null)
+})
+
+test('windowSuccessRate never exceeds 1 for any mixture of bucket loads', () => {
+  // 不变量：healthy ≤ count 恒成立，所以加权值 ≤ 观测数。随机枚举桶内负载与
+  // 状态组合，任何一条越过 1 都是公式又变成了平方。
+  const now = alignedNow(10)
+  const statuses = ['healthy', 'degraded', 'unhealthy']
+  for (let a = 0; a <= 6; a += 1) {
+    for (let b = 0; b <= 6; b += 1) {
+      for (let c = 0; c <= 6; c += 1) {
+        const points = []
+        let offset = 0
+        for (const [count, status] of [[a, 'healthy'], [b, 'degraded'], [c, 'unhealthy']]) {
+          for (let i = 0; i < count; i += 1) points.push({ time: now - MINUTE - (offset += 1000), status })
+        }
+        const rate = windowSuccessRate(bucketTimeline(points, 600, now))
+        const total = a + b + c
+        if (total === 0) {
+          assert.equal(rate, null, 'an empty window is null, not 0%')
+          continue
+        }
+        assert.ok(rate !== null && rate >= 0 && rate <= 1,
+          `rate must stay within [0,1] for healthy=${a} degraded=${b} unhealthy=${c}, got ${String(rate)}`)
+      }
+    }
+  }
 })
 
 test('bucketTimeline ignores an observation outside the drawn window', () => {

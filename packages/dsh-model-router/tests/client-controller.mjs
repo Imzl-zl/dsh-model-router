@@ -202,6 +202,31 @@ function find(node, predicate) {
   return find(node.children, predicate)
 }
 
+/**
+ * Every string a rendered tree would paint, joined.
+ *
+ * Walks `props.children` as well as the rendered `children`: the harness's
+ * `render` turns a raw string child into a node with no children of its own, so
+ * the text only survives in `props.children`. `title` is included because the
+ * timeline's per-bucket rate lives in the tooltip.
+ */
+function collectText(node, out = []) {
+  if (node === null || node === undefined || node === false || node === true) return out
+  if (typeof node === 'string' || typeof node === 'number') {
+    out.push(String(node))
+    return out
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) collectText(child, out)
+    return out
+  }
+  if (typeof node !== 'object') return out
+  if (typeof node.props?.title === 'string') out.push(node.props.title)
+  collectText(node.props?.children, out)
+  collectText(node.children, out)
+  return out
+}
+
 /** The one createElement alias every component module renders through. */
 const createEl = (type, props, ...children) => {
   const next = props ?? {}
@@ -679,6 +704,50 @@ test('re-reading the same passive record does not grow the timeline', async () =
   assert.equal(second.length, 2, 'the same record read again adds nothing')
   assert.deepEqual(second.map((p) => p.time), [1, 2])
   assert.equal(h.state().ui.passive['a/b']?.latencyMs, 12, 'scalars still come from the newest record')
+})
+
+// 回归（显示层，走真实构建产物）：窗口可用率曾在两个界面里各写一遍且都多乘了一个
+// bar.count——healthy 本身就是桶内计数，再乘就是平方。用户实测印出 3578%。纯函数
+// 那两条用例钉算法，这一条钉"渲染出来的字符串"：繁忙桶 + 真实 RouterPage。
+// 桶里只有一次观测时 1×1=1，所以隔离浏览器实测（一次调用）完全看不出来。
+test('a channel with real volume renders a rate that is still a percentage', async () => {
+  const { RouterPage } = loadClient()
+  const now = Date.now()
+  // 60 次观测，全部落在最近这一个 10 分钟桶里：错公式给 60×60/60 = 60 → 6000%。
+  const timeline = Array.from({ length: 60 }, (_, i) => ({ time: now - i * 900, status: 'healthy', latencyMs: 20 }))
+  const record = {
+    'a/b': {
+      route: 'a/b', provider: 'a', model: 'b', status: 'healthy', latencyMs: 20, throughputTps: 5, lastCheckedAt: now,
+      timeline,
+    },
+  }
+  const h = await mount({
+    value: config({ chain: chainValue([cand('a', 'b')]) }),
+    remote: {
+      session: {
+        list: () => Promise.resolve({ ok: true, value: { items: [{ sessionId: 's', updatedAt: 1 }] } }),
+        projections: () => Promise.resolve({ ok: true, value: { values: { 'router/channel-health': record } } }),
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  h.actions.onActive('__health__')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  const text = collectText(tree).join(' ')
+  // 树里每一个百分比都必须 ≤ 100。错公式在这里会渲染出 "6000%"。
+  const found = text.match(/(\d+(?:\.\d+)?)%/g) ?? []
+  assert.ok(found.length > 0, 'fixture: the rendered tree carries at least one percentage')
+  for (const value of found) {
+    assert.ok(parseFloat(value) <= 100, `a rendered percentage must stay ≤ 100, got ${value}`)
+  }
+  // 桩 t() 返回字典键本身，所以文案部分是 availabilityRate 而不是"可用率"；
+  // 要钉的是那个数字：60 次观测全部成功 → 卡片徽标与大盘表头都是 100%。
+  assert.ok(text.includes('availabilityRate 100%'), 'a fully healthy busy bucket reads 100% on the card')
+  assert.ok(text.includes('timelineWindowLabel'), 'fixture: the metrics header reached the tree')
 })
 
 // 回归：addCandidates 曾把用户在手录面板填的 maxAttempts 写死成 1（目录选择没有这个

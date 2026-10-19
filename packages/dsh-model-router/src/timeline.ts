@@ -76,6 +76,35 @@ export interface TimelineBucket {
 }
 
 /**
+ * The success rate over a whole window of bars, or `null` when the window holds
+ * no observation at all.
+ *
+ * One rule, one place. Both surfaces that print a window rate — the channel
+ * card's status pill and the metrics dashboard's header — used to recompute it
+ * inline, and both got it wrong the same way: they multiplied the bucket's
+ * healthy count by the bucket's observation count. `healthy` is already a count
+ * inside the bucket, so the product is quadratic in the bucket's traffic — one
+ * observation in a bucket reads 100%, ten read 1000%, and a channel with real
+ * volume printed 3578%. A bucket of one is exactly the case a test written by
+ * hand reaches, which is why it survived.
+ *
+ * Note: 错公式的形状、为何收编而不是各改各的、以及为何隔离浏览器实测抓不到 —— 见
+ * .agents/notes/implemented/2026-10-19-availability-rate-was-not-a-rate.md
+ *
+ * @param bars - the window's bars, from {@link bucketTimeline}.
+ */
+export function windowSuccessRate(bars: readonly TimelineBucket[]): number | null {
+  let observed = 0
+  let weighted = 0
+  for (const bar of bars) {
+    if (bar.count === 0) continue
+    observed += bar.count
+    weighted += bar.healthy + bar.degraded / 2
+  }
+  return observed === 0 ? null : weighted / observed
+}
+
+/**
  * The tone one bucket's bar is drawn in: `unknown` for a bucket with no
  * observation, so the UI renders it as "no data" rather than as a fault.
  */

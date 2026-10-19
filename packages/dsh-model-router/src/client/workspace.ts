@@ -6,7 +6,7 @@ import { routeKeyOf, routeParts } from '../routes.ts'
 import { S } from './styles.ts'
 import { fill, formatLatency, formatWindowHours, healthToneBadge, healthToneStyle, routeStatus, shortModelName } from './format.ts'
 import { ChannelMetricsDashboard } from './health-ui.ts'
-import { bucketTimeline } from '../timeline.ts'
+import { bucketTimeline, windowSuccessRate } from '../timeline.ts'
 import { Icon, ICON_BOLT, ICON_CHART, ICON_CLOCK, ICON_GEAR, ICON_SEARCH, ICON_SPINNER } from './icons.ts'
 
 /** What one route's last probe says, as the button's tooltip. */
@@ -283,18 +283,13 @@ export function GlobalHealthWorkspace(props) {
           var bucketSeconds = props.bucketSeconds ?? 600
           var timeline = record && Array.isArray(record.timeline) ? record.timeline : []
           var bars = bucketTimeline(timeline, bucketSeconds, Date.now())
-          var windowObserved = 0
-          var windowWeighted = 0
-          bars.forEach(function (bar) {
-            if (bar.count === 0) return
-            windowObserved += bar.count
-            windowWeighted += (bar.healthy + bar.degraded / 2) * bar.count
-          })
-          // 可用率与时间轴同一个窗口、同一套权重：两处各算一套就会出现"柱子全是绿、
-          // 旁边写着 62%"这种自相矛盾。没有观测时是 —，不是 0%。
-          var availRate = windowObserved === 0
-            ? null
-            : Math.round((windowWeighted / windowObserved) * 1000) / 10
+          // 可用率与时间轴同一个窗口、同一套权重，且只有一处算法（../timeline.ts 的
+          // windowSuccessRate）。它曾在这里内联算，多乘了一个 bar.count——healthy
+          // 本身就是桶内计数，再乘就是平方：一个桶十次观测印出 1000%，用户实测
+          // 3578%。两处各算一套正是这个错能同时出现在卡片徽标和大盘表头的原因。
+          var availRateRaw = windowSuccessRate(bars)
+          // 没有观测时是 —，不是 0%。
+          var availRate = availRateRaw === null ? null : Math.round(availRateRaw * 1000) / 10
 
           return h('div', {
             key: ch.route,
@@ -309,8 +304,7 @@ export function GlobalHealthWorkspace(props) {
                 h('span', { style: S.channelModelName, title: ch.model }, shortModelName(ch.model)),
                 h('span', { style: Object.assign({}, S.channelStatusPill, healthToneBadge(status)) },
                   status === 'healthy' ? t('healthStatusHealthy') : status === 'degraded' ? t('healthStatusDegraded') : status === 'unhealthy' ? t('healthStatusUnhealthy') : t('compactHealthIdle'),
-                  availRate === null ? null : ' · ' + t('availabilityRate') + ' ' + availRate + '%'),
-                // The probe verdict, on the card. It used to live only in the
+                  availRate === null ? null : ' · ' + t('availabilityRate') + ' ' + availRate + '%'),                // The probe verdict, on the card. It used to live only in the
                 // button's tooltip, so a user who clicked 测速 and did not hover
                 // saw nothing change — which reads as a dead button. The dot
                 // carries the colour and the text stays `label-primary`: a

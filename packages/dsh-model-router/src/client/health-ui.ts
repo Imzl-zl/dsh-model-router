@@ -3,7 +3,7 @@
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { fill, formatLatency, formatThroughput, formatTime, formatWindowHours, healthToneStyle, routeStatus } from './format.ts'
-import { bucketTimeline, bucketTone, DEFAULT_TIMELINE_BUCKET_SECONDS } from '../timeline.ts'
+import { bucketTimeline, bucketTone, DEFAULT_TIMELINE_BUCKET_SECONDS, windowSuccessRate } from '../timeline.ts'
 
 export function reasoningLabelOf(catalog, provider, model) {
   var group = (catalog?.groups ?? []).find(function (entry) { return entry.id === provider })
@@ -77,14 +77,10 @@ export function ChannelMetricsDashboard(props) {
   var timeline = (record && Array.isArray(record.timeline)) ? record.timeline : []
   var bucketSeconds = props.bucketSeconds ?? DEFAULT_TIMELINE_BUCKET_SECONDS
   var bars = bucketTimeline(timeline, bucketSeconds, Date.now())
-  var observed = 0
-  var weighted = 0
-  bars.forEach(function (bar) {
-    if (bar.count === 0) return
-    observed += bar.count
-    weighted += (bar.healthy + bar.degraded / 2) * bar.count
-  })
-  var windowRate = observed === 0 ? null : weighted / observed
+  // 窗口成功率只有一处算法（../timeline.ts）。它曾在这两个界面里各写一遍，而且
+  // 两处都多乘了一个 bar.count——healthy 本身就是桶内计数，再乘就是平方，一个
+  // 桶十次观测会印出 1000%。收编到单源之后这类错只剩一个能犯的地方。
+  var windowRate = windowSuccessRate(bars)
 
   // 每桶的平均延迟与错误码从原始观测点来（tooltip 用），不进柱子本身。一趟扫完：
   // 柱子是聚合结果，观测点才有延迟和错误码。
@@ -124,7 +120,7 @@ export function ChannelMetricsDashboard(props) {
         // 观测条数只说明"窗口里发生了多少次调用"；窗口本身由标签上的时长说，
         // 不再写一个看起来像上限的 /24。
         h('span', { style: S.metricsStatusValue },
-          observed === 0 ? t('timelineNoData') : Math.round((windowRate ?? 0) * 1000) / 10 + '%')),
+          windowRate === null ? t('timelineNoData') : Math.round(windowRate * 1000) / 10 + '%')),
       h('div', { style: S.timelineBarContainer }, barElements),
       h('span', { style: S.timelineLegend }, t('timelineLegend'))),
     h('div', { style: S.metricsColValue },
