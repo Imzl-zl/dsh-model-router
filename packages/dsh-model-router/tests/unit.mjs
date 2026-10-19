@@ -271,31 +271,6 @@ test('the record rule holds across the whole ruling table: only delegate and hon
 
 // ---- resolveChain ----
 
-const profile = (provider, model) => ({
-  id: 'p1',
-  when: { provider, model },
-  candidates: [{ provider, model, maxAttempts: 2, weight: 0 }],
-  switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
-  maxTotalAttempts: 6,
-  strategy: 'order',
-})
-
-test('resolveChain matches the exact route, else the enabled default pool with an implicit first hop', () => {
-  const resolved = { provider: 'a', model: 'x' }
-  assert.equal(resolveChain(resolved, [profile('a', 'x')], { enabled: false, candidates: [], switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }, maxTotalAttempts: 3 })?.candidates.length, 1)
-  assert.equal(resolveChain(resolved, [profile('b', 'y')], { enabled: false, candidates: [], switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }, maxTotalAttempts: 3 }), undefined)
-  const pooled = resolveChain(resolved, [], {
-    enabled: true,
-    candidates: [{ provider: 'c', model: 'z', maxAttempts: 1, weight: 0 }],
-    switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
-    maxTotalAttempts: 3,
-    strategy: 'order',
-  })
-  assert.equal(pooled?.candidates.length, 2)
-  assert.equal(pooled?.candidates[0].provider, 'a')
-  assert.equal(pooled?.candidates[0].maxAttempts, 1)
-})
-
 // ---- strategy: the start index ----
 
 test('resolveStartIndex always starts at the head for the order strategy', () => {
@@ -485,7 +460,7 @@ const hostConfig = raw => {
   const c = Config(raw)
   return {
     health: c.health.get(),
-    default: c.default.get(),
+    chain: c.chain.get(),
   }
 }
 
@@ -539,8 +514,7 @@ test('the client save shape lands where the host reads it', () => {
   // 默认值，整个功能静默失效。这条用例守住那个错误。
   const raw = {
     enabled: true,
-    profiles: [],
-    default: { enabled: false, candidates: [], switchOn: {}, maxTotalAttempts: 3, strategy: 'order' },
+    chain: { candidates: [], switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
     health: {
       passive: true,
       discover: { enabled: true, intervalSeconds: 5 },
@@ -553,13 +527,14 @@ test('the client save shape lands where the host reads it', () => {
   assert.equal(seen.health.breaker.rules.length, 1)
   assert.equal(seen.health.breaker.rules[0].code, 'AUTH')
   assert.equal(seen.health.discover.intervalSeconds, 5)
+  // 新形状：链在顶层 chain 下，客户端存进去的降级候选 Host 读得到。
+  assert.ok(Array.isArray(seen.chain.candidates))
 })
 
 test('a legacy flat health config keeps its schedule by converting minutes to seconds', () => {
   const seen = hostConfig({
     enabled: true,
-    profiles: [],
-    default: { enabled: false, candidates: [], switchOn: {}, maxTotalAttempts: 3, strategy: 'order' },
+    chain: { candidates: [], switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
     health: { enabled: true, prompt: 'hi', intervalMinutes: 5, timeoutSeconds: 8 },
   })
   // normalizeHealth 负责迁移；这里断言的是 Host 不会因为旧形状而丢字段或报错。
@@ -569,115 +544,71 @@ test('a legacy flat health config keeps its schedule by converting minutes to se
 
 test('assertStructural rejects a weight strategy with no positive weight', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  const base = { profiles: [], default: { enabled: false, candidates: [], switchOn: so, maxTotalAttempts: 3, strategy: 'weight' } }
+  const base = { chain: { candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 0 }], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'weight' } }
   assert.throws(() => assertStructural(base), /weight strategy but no candidate has a positive weight/)
   assert.doesNotThrow(() => assertStructural({
-    ...base,
-    default: { ...base.default, candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 5 }] },
+    chain: { ...base.chain, candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 5 }] },
   }))
 })
 
 test('assertStructural rejects a breaker rule that matches nothing', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  const emptyPool = { enabled: false, candidates: [], switchOn: so, maxTotalAttempts: 3, strategy: 'order' }
+  const emptyChain = { chain: { candidates: [], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' } }
   const health = (breaker) => ({ passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker })
   assert.throws(() => assertStructural({
-    profiles: [],
-    default: emptyPool,
+    ...emptyChain,
     health: health({ enabled: true, rules: [{ code: '', message: '', cooldownSeconds: 60 }] }),
   }), /matches nothing/)
   // 关着也校验：空规则在 breaker.ts 里命中每一次失败，"关着开关存下的空规则"会让
   // 所有候选被禁、failover 静默失效。规则可以留着（再开不用重填），空白规则不行。
   assert.throws(() => assertStructural({
-    profiles: [],
-    default: emptyPool,
+    ...emptyChain,
     health: health({ enabled: false, rules: [{ code: '', message: '', cooldownSeconds: 60 }] }),
   }), /matches nothing/)
   // 关着 + 正常规则照常放行。
   assert.doesNotThrow(() => assertStructural({
-    profiles: [],
-    default: emptyPool,
+    ...emptyChain,
     health: health({ enabled: false, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 60 }] }),
   }))
 })
 
 test('assertStructural rejects a chain that names the same route twice', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  const base = { enabled: false, candidates: [], switchOn: so, maxTotalAttempts: 3, strategy: 'order' }
   const twice = [
     { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
     { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
   ]
-  // 同链重复的渠道会被各打一遍（各含一次退避等待），白吃 attempt 预算——和 ID 重复同级，
-  // 结构校验就挡住。目录多选与多行手录都可能录出重复。
+  // 同链重复的渠道会被各打一遍（各含一次退避等待），白吃 attempt 预算，结构校验就挡住。
+  // 目录多选与多行手录都可能录出重复。
   assert.throws(() => assertStructural({
-    profiles: [{ id: 'p', when: { provider: 'stub-primary', model: 'stub-model' }, candidates: twice, switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' }],
-    default: base,
+    chain: { candidates: twice, switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
   }), /names stub-primary\/stub-model more than once/)
-  assert.throws(() => assertStructural({
-    profiles: [],
-    default: { ...base, candidates: twice },
-  }), /default pool names stub-primary\/stub-model more than once/)
-  // 同一个模型出现在不同规则里没问题：那是两个用户选择，各自成链。
-  assert.doesNotThrow(() => assertStructural({
-    profiles: [
-      { id: 'p1', when: { provider: 'stub-primary', model: 'stub-model' }, candidates: [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
-      { id: 'p2', when: { provider: 'stub-backup', model: 'stub-model' }, candidates: [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 0 }, { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
-    ],
-    default: base,
-  }))
 })
 
 // ---- the cross-field rules have one expression (host throws, browser formats) ----
 
 // 规则模块（../rules.ts）是唯一产出方：host 的 assertStructural 抛第一条，浏览器半包
 // 的 validate() 把全部格式化成问题列表。2026-10-17 之前两边各写一份、靠三句"与 host
-// 同步"的注释对齐，而且已经漂移——默认兜底池的重复渠道，host 从第一天就拒（上面既有
-// 用例钉着），浏览器漏检：用户存得下一个加载即被拒的配置，吃的还是一句英文错误。
+// 同步"的注释对齐，而且已经漂移——重复渠道 host 从第一天就拒，浏览器漏检：用户存得下
+// 一个加载即被拒的配置，吃的还是一句英文错误。
 
 const crossSo = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-const crossPool = (over = {}) => ({ enabled: true, candidates: [], switchOn: crossSo, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
-const crossProfile = (over = {}, candidates = [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }]) => ({
-  id: 'p1', when: { provider: 'stub-primary', model: 'stub-model' }, candidates, switchOn: crossSo, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over,
-})
-
+const crossChain = (over = {}) => ({ candidates: [], switchOn: crossSo, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
 const crossHealth = (rules) => ({ breaker: { enabled: true, rules } })
 
 // 每条跨字段规则一个形状；keys 是规则模块必须产出的违规键序列（顺序即 host 先抛哪条）。
 const crossCases = [
-  ['duplicate profile id', {
-    profiles: [crossProfile({ id: 'dup' }), crossProfile({ id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' }, candidates: [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 0 }] })],
-    default: crossPool(),
-  }, ['problemDuplicateId']],
-  ['an empty chain', { profiles: [crossProfile({}, [])], default: crossPool() }, ['problemEmptyChain']],
-  ['an unpinned primary', { profiles: [crossProfile({}, [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 0 }])], default: crossPool() }, ['problemUnpinnedPrimary']],
-  ['one route named twice in a profile', {
-    profiles: [crossProfile({}, [
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-    ])],
-    default: crossPool(),
-  }, ['problemDuplicateRoute']],
-  ['one route named twice in the default pool', {
-    profiles: [],
-    default: crossPool({ candidates: [
+  ['one route named twice in the chain', {
+    chain: crossChain({ candidates: [
       { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
       { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
     ] }),
-  }, ['problemDuplicateRouteInPool']],
-  ['a weight strategy with nothing to draw (profile)', {
-    profiles: [crossProfile({ strategy: 'weight' }, [
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1 },
-    ])],
-    default: crossPool(),
-  }, ['problemProfileWeightNoPositive']],
-  ['a weight strategy with nothing to draw (default pool)', {
-    profiles: [],
-    default: crossPool({ strategy: 'weight', candidates: [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }] }),
+  }, ['problemDuplicateRouteInChain']],
+  ['a weight strategy with nothing to draw', {
+    chain: crossChain({ strategy: 'weight', candidates: [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }] }),
   }, ['problemWeightNoPositive']],
   ['a breaker rule that matches nothing', {
-    profiles: [], default: crossPool(),
+    chain: crossChain(),
     health: crossHealth([{ code: '', message: '', cooldownSeconds: 60 }]),
   }, ['problemBreakerEmptyRule']],
 ]
@@ -692,20 +623,6 @@ test('the cross-field rules are one expression: the host throws the first, the b
     const problems = validate(config)
     for (const key of keys) assert.ok(problems.some(problem => problem.key === key), `${label}: the browser reports ${key}`)
   }
-})
-
-test('the default pool naming one route twice is reported on the browser side too', () => {
-  // 双源时期的真实漂移（本条在统一前是红的）：host 一直查兜底池的重复渠道，client 的
-  // validate() 只查了 profiles——用户能存下一个 host 会拒绝的配置。
-  const config = {
-    profiles: [],
-    default: crossPool({ candidates: [
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-    ] }),
-  }
-  assert.ok(validate(config).some(problem => problem.key === 'problemDuplicateRouteInPool'),
-    'the browser must report the pool\'s repeated route, not let the host refuse it in English')
 })
 
 test('every violation key the rules can emit has a dictionary entry in both locales', () => {
@@ -729,22 +646,18 @@ test('classifyHealth uses DSH own codes, not invented ones', () => {
 
 test('single-field bounds belong to the schema: it refuses each value the deleted guards used to catch', () => {
   // assertStructural 曾经自己拦这 8 个条件，而两条生产调用路径都先过 schema
-  // （index.ts:117 读 Cordis 已校验值、index.ts:126 的 Config(raw) 自己跑一遍），
-  // 那些 guard 全是死分支——只在 schema 收紧时变成"接不住"的谎言。删掉之后这条
-  // 用例钉住 schema 真的拥有它们：任何一个条件被 schema 放行就红。
+  // （index.ts 读 Cordis 已校验值、Config(raw) 自己跑一遍），那些 guard 全是死
+  // 分支——只在 schema 收紧时变成"接不住"的谎言。删掉之后这条用例钉住 schema
+  // 真的拥有它们：任何一个条件被 schema 放行就红。
   const candidate = (over = {}) => ({ provider: 'p', model: 'm', maxAttempts: 1, weight: 0, ...over })
-  const profile = (over = {}, candidates = [candidate()]) => ({
-    id: 'p1', when: { provider: 'p', model: 'm' }, candidates, switchOn: {},
-    maxTotalAttempts: 6, stickyTurns: 0, strategy: 'order', ...over,
+  const chain = (over = {}, candidates = [candidate()]) => ({
+    candidates, switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over,
   })
-  const pool = (over = {}) => ({ enabled: false, candidates: [], switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
-  const base = (over = {}) => ({ enabled: true, profiles: [profile()], default: pool(), ...over })
+  const base = (over = {}) => ({ enabled: true, chain: chain(), ...over })
   const cases = [
-    ['candidate.maxAttempts < 1', base({ profiles: [profile({}, [candidate({ maxAttempts: 0 })])] })],
-    ['profile.maxTotalAttempts < 1', base({ profiles: [profile({ maxTotalAttempts: 0 })] })],
-    ['profile.stickyTurns < 0', base({ profiles: [profile({ stickyTurns: -1 })] })],
-    ['default.maxTotalAttempts < 1', base({ default: pool({ maxTotalAttempts: 0 }) })],
-    ['default.stickyTurns < 0', base({ default: pool({ stickyTurns: -1 }) })],
+    ['candidate.maxAttempts < 1', base({ chain: chain({}, [candidate({ maxAttempts: 0 })]) })],
+    ['chain.maxTotalAttempts < 1', base({ chain: chain({ maxTotalAttempts: 0 }) })],
+    ['chain.stickyTurns < 0', base({ chain: chain({ stickyTurns: -1 }) })],
     ['health.discover.intervalSeconds < 0', base({ health: { discover: { intervalSeconds: -1 } } })],
     ['health.probe.intervalSeconds < 0', base({ health: { probe: { intervalSeconds: -1 } } })],
     // schema 是 .min(2)，比曾经的 `< 1` guard 还严：1 也过不去。
@@ -1358,33 +1271,29 @@ test('toolResultHasImage reads the nested tool-result content', () => {
 
 test('a negative stickyTurns is refused by the schema, not by a structural guard', () => {
   // 曾经 assertStructural 自己拦 stickyTurns < 0——而两条生产调用路径都先过
-  // schema（index.ts:117 读 Cordis 已校验值、index.ts:126 的 Config(raw) 自己
-  // 跑一遍），.min(0) 永远拦在前面，那个 guard 是死分支，只在 schema 收紧时
-  // 变成"接不住"的谎言。单字段边界归 schema：这里钉住它真的归 schema。
+  // schema（index.ts 读 Cordis 已校验值、Config(raw) 自己跑一遍），.min(0)
+  // 永远拦在前面，那个 guard 是死分支，只在 schema 收紧时变成"接不住"的谎言。
+  // 单字段边界归 schema：这里钉住它真的归 schema。
   assert.throws(() => Config({
-    profiles: [{
-      id: 'p1',
-      when: { provider: 'p', model: 'm' },
+    chain: {
       candidates: [{ provider: 'p', model: 'm', maxAttempts: 1, weight: 0 }],
       switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
       maxTotalAttempts: 6,
       stickyTurns: -1,
-    }],
-    default: { enabled: false, candidates: [], switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }, maxTotalAttempts: 3, stickyTurns: 0 },
+    },
   }), /stickyTurns/)
 })
 
 test('assertStructural accepts stickyTurns 0 and a positive value', () => {
-  const base = {
-    id: 'p1',
-    when: { provider: 'p', model: 'm' },
+  const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+  const chain = (stickyTurns) => ({
     candidates: [{ provider: 'p', model: 'm', maxAttempts: 1, weight: 0 }],
-    switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
+    switchOn: so,
     maxTotalAttempts: 6,
-  }
-  const fallback = { enabled: false, candidates: [], switchOn: base.switchOn, maxTotalAttempts: 3, stickyTurns: 0 }
-  assertStructural({ profiles: [{ ...base, stickyTurns: 0 }], default: fallback })
-  assertStructural({ profiles: [{ ...base, stickyTurns: 3 }], default: fallback })
+    stickyTurns,
+  })
+  assertStructural({ chain: chain(0) })
+  assertStructural({ chain: chain(3) })
 })
 
 // ---- the probe (pure paths the integration suite cannot reach) ----
@@ -1828,16 +1737,13 @@ test('the save shortcut label follows the platform, and both keys exist in both 
   }
 })
 
-// 接管开关、主模型同步与时间轴桶化新增的字典键：缺键时 DSH 的 locale 会把键名本身
+// 接管开关、时间轴桶化与单链结构新增的字典键：缺键时 DSH 的 locale 会把键名本身
 // 渲染给用户（"defaultModelSynced"），而英文用户看到的是空——两份字典各写各的已经
 // 漂移过（en 从来没有 problemDuplicateRoute 键，字典覆盖测试当场抓到）。
-test('every takeover, primary and timeline key exists in both locales', () => {
+test('every takeover, chain and timeline key exists in both locales', () => {
   const keys = [
-    'takeoverSwitchLabel', 'takeoverOffHint', 'defaultModelNoPrimary', 'defaultModelNoService',
-    'defaultModelSynced', 'defaultModelDrift', 'defaultModelSyncFailed',
-    'defaultModelResync', 'defaultModelRetry', 'defaultModelResyncHint', 'defaultModelRetryHint',
-    'primaryProfileBadge', 'primaryProfileBadgeHint', 'primaryProfileHint',
-    'setPrimaryProfileBtn', 'setPrimaryProfileHint',
+    'takeoverSwitchLabel', 'takeoverRowHint', 'takeoverOffTitle', 'takeoverOffDesc',
+    'chainNavTitle', 'firstHopTitle', 'firstHopBadge', 'firstHopHint',
     'timelineWindowLabel', 'timelineNoData', 'timelineBucketEmpty', 'timelineBucketTip',
     'timelineLegend', 'timelineScopeLine', 'timelineBucketLabel', 'timelineBucketHint',
     'timelineBucketMinutes', 'timelineBucketWindow',
@@ -1848,11 +1754,7 @@ test('every takeover, primary and timeline key exists in both locales', () => {
     assert.ok(typeof zh[key] === 'string' && zh[key].length > 0, `zh has ${key}`)
     assert.ok(typeof en[key] === 'string' && en[key].length > 0, `en has ${key}`)
   }
-  // 占位符两边必须一致：{model} 只在一边存在时，另一侧会把 "{model}" 原样印出来。
-  for (const key of ['defaultModelSynced', 'defaultModelDrift', 'defaultModelSyncFailed']) {
-    const placeholders = (text) => (text.match(/\{(\w+)\}/g) ?? []).sort().join(',')
-    assert.equal(placeholders(zh[key]), placeholders(en[key]), `${key} uses the same placeholders in both locales`)
-  }
+  // 占位符两边必须一致：{window} 只在一边存在时，另一侧会把 "{window}" 原样印出来。
   for (const key of ['timelineWindowLabel', 'timelineScopeLine', 'timelineBucketWindow', 'timelineBucketTip']) {
     const placeholders = (text) => (text.match(/\{(\w+)\}/g) ?? []).sort().join(',')
     assert.equal(placeholders(zh[key]), placeholders(en[key]), `${key} uses the same placeholders in both locales`)
@@ -2028,103 +1930,116 @@ test('every offered bucket length is a divisor-free option the dashboard can ren
   assert.equal(TIMELINE_BUCKET_SECONDS.length > 1, true)
 })
 
-// ---- 接管开关与主模型同步 ----
-// 接管开关（config.enabled）在 UI 里从来没有控件：apply.ts 的 onEnabled 是个死
-// 入口，所以"装完就直接接管"。主模型同步走 DSH 自己的 agentDefaultModel——
-// 它只在没有 request header、没有 pending pick 的会话里被读，所以写它影响的
-// 恰好只有新会话，旧会话留在自己的 header/pick 上。
+// ---- 单条全局降级链：迁移、选路、结构规则 ----
+// 产品口径（2026-10-19 用户决定）：不分主次、不按模型分规则。第一跳永远是用户
+// 当前选中的模型（只打一次），失败后按配置的降级候选走。旧配置里的 profiles 是
+// 按模型分规则 + 钉死 primary 的形态，加载时迁成一条链：丢掉被钉死的第一个候选
+// （它就是"选中模型"本身），其余成为降级候选。
 
-import {
-  primaryRouteOf,
-  resolvePrimaryProfile,
-  sameRoute,
-  syncDefaultModel,
-} from '../src/default-model.ts'
+import { effectiveChain, emptyChain } from '../src/chain.ts'
+import { failoverNotice } from '../src/notice.ts'
 
-const modelProfile = (id, provider, model) => ({
-  id,
-  when: { provider, model },
-  candidates: [{ provider, model, maxAttempts: 1, weight: 0 }],
-  switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true },
-  maxTotalAttempts: 6,
-  stickyTurns: 0,
-  strategy: 'order',
+const switchOnAll = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true }
+const chainValue = (over = {}) => ({ candidates: [], switchOn: switchOnAll, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
+const cand = (provider, model = 'm', over = {}) => ({ provider, model, maxAttempts: 1, weight: 0, ...over })
+
+test('effectiveChain uses the configured chain when it has fallbacks', () => {
+  const chain = chainValue({ candidates: [cand('a'), cand('b')] })
+  const result = effectiveChain({ enabled: true, chain })
+  assert.deepEqual(result.chain.candidates, chain.candidates)
+  assert.equal(result.source, 'chain')
+  assert.equal(result.ignoredProfiles, 0)
 })
 
-test('resolvePrimaryProfile picks the marked profile, and the first when the marker is empty or stale', () => {
-  const profiles = [modelProfile('a', 'p', 'm1'), modelProfile('b', 'p', 'm2')]
-  assert.equal(resolvePrimaryProfile(profiles, 'b')?.id, 'b')
-  assert.equal(resolvePrimaryProfile(profiles, '')?.id, 'a')
-  // 标记指向被删掉的规则时回落第一条：一个悬空 id 不该让同步静默失效。
-  assert.equal(resolvePrimaryProfile(profiles, 'gone')?.id, 'a')
-  assert.equal(resolvePrimaryProfile([], 'a'), undefined)
+test('effectiveChain adopts a legacy default pool when there is no chain key at all', () => {
+  const legacy = { enabled: true, candidates: [cand('a'), cand('b')], switchOn: switchOnAll, maxTotalAttempts: 5, stickyTurns: 2, strategy: 'round-robin' }
+  const result = effectiveChain({ enabled: true, default: legacy })
+  assert.deepEqual(result.chain.candidates.map(c => c.provider), ['a', 'b'])
+  assert.equal(result.chain.maxTotalAttempts, 5)
+  assert.equal(result.chain.stickyTurns, 2)
+  assert.equal(result.chain.strategy, 'round-robin')
+  assert.equal(result.source, 'default')
 })
 
-test('primaryRouteOf is the primary profile pinned model, or null without any profile', () => {
-  const profiles = [modelProfile('a', 'wb/global', 'deepseek-v4.1-flash'), modelProfile('b', 'stepfun', 'step-5-preview')]
-  assert.deepEqual(primaryRouteOf(profiles, 'b'), { provider: 'stepfun', model: 'step-5-preview' })
-  assert.equal(primaryRouteOf([], 'b'), null)
-})
-
-test('sameRoute compares provider and model, never the reasoning effort', () => {
-  assert.equal(sameRoute({ provider: 'p', model: 'm' }, { provider: 'p', model: 'm', reasoningEffort: 'high' }), true)
-  assert.equal(sameRoute({ provider: 'p', model: 'm' }, { provider: 'q', model: 'm' }), false)
-  assert.equal(sameRoute(null, { provider: 'p', model: 'm' }), false)
-})
-
-test('syncDefaultModel writes the primary model and keeps the configured effort', async () => {
-  const saved = []
-  const face = {
-    currentSelection: () => ({ provider: 'old', model: 'old-model', reasoningEffort: 'high' }),
-    saveSelection: async (next) => { saved.push(next) },
+test('effectiveChain turns a single legacy profile into the global chain, dropping its pinned first hop', () => {
+  const profile = {
+    id: 'p1',
+    when: { provider: 'selected', model: 'm' },
+    candidates: [cand('selected'), cand('backup-1'), cand('backup-2')],
+    switchOn: switchOnAll,
+    maxTotalAttempts: 6,
+    stickyTurns: 1,
+    strategy: 'weight',
   }
-  const outcome = await syncDefaultModel(face, { provider: 'wb/global', model: 'deepseek-v4.1-flash' }, () => {})
-  assert.equal(outcome.synced, true)
-  assert.equal(outcome.error, null)
-  // 换模型不该顺手改掉用户配的推理档位。
-  assert.deepEqual(saved, [{ provider: 'wb/global', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' }])
+  const result = effectiveChain({ enabled: true, profiles: [profile] })
+  // 被钉死的 candidates[0] 就是"用户选中的模型"，它成为隐式第一跳，不再占一条降级。
+  assert.deepEqual(result.chain.candidates.map(c => c.provider), ['backup-1', 'backup-2'])
+  assert.equal(result.chain.maxTotalAttempts, 6)
+  assert.equal(result.chain.strategy, 'weight')
+  assert.equal(result.source, 'profile')
 })
 
-test('syncDefaultModel does not write when the default already is the primary', async () => {
-  let writes = 0
-  const face = {
-    currentSelection: () => ({ provider: 'p', model: 'm' }),
-    saveSelection: async () => { writes += 1 },
-  }
-  const outcome = await syncDefaultModel(face, { provider: 'p', model: 'm' }, () => {})
-  assert.equal(outcome.synced, true)
-  assert.equal(writes, 0)
+test('effectiveChain reports the legacy profiles it had to ignore', () => {
+  const one = { id: 'p1', when: { provider: 'a', model: 'm' }, candidates: [cand('a'), cand('b')], switchOn: switchOnAll, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' }
+  const two = { ...one, id: 'p2', when: { provider: 'c', model: 'm' }, candidates: [cand('c'), cand('d')] }
+  const result = effectiveChain({ enabled: true, profiles: [one, two] })
+  assert.equal(result.source, 'profile')
+  assert.equal(result.ignoredProfiles, 1)
+  assert.deepEqual(result.chain.candidates.map(c => c.provider), ['b'])
 })
 
-test('syncDefaultModel reports a refused save instead of swallowing it', async () => {
-  const logged = []
-  const face = {
-    currentSelection: () => ({ provider: 'old', model: 'old-model' }),
-    // overlay / home patch 覆盖了这一行时 DSH 的 configEditor 就是这样拒绝的。
-    saveSelection: async () => { throw new Error('Configuration for "agent-default-model" is overridden by a home patch or command-line overlay') },
-  }
-  const outcome = await syncDefaultModel(face, { provider: 'p', model: 'm' }, (message) => logged.push(message))
-  assert.equal(outcome.synced, false)
-  assert.match(outcome.error ?? '', /overridden by a home patch/)
-  assert.equal(logged.length, 1)
+test('effectiveChain is empty when nothing is configured', () => {
+  const result = effectiveChain({ enabled: false })
+  assert.deepEqual(result.chain, emptyChain())
+  assert.equal(result.source, 'empty')
 })
 
-test('syncDefaultModel does nothing without a primary, and says so', async () => {
-  let writes = 0
-  const face = {
-    currentSelection: () => ({ provider: 'p', model: 'm' }),
-    saveSelection: async () => { writes += 1 },
-  }
-  const outcome = await syncDefaultModel(face, null, () => {})
-  assert.equal(outcome.synced, false)
-  assert.equal(outcome.error, null)
-  assert.equal(writes, 0)
+test('an empty chain is a configuration, not a missing one', () => {
+  // "没有降级可走"是用户配出来的状态：插件因此不接管。把它当成"没配"会回头去过
+  // 旧形状，把用户清空的链又填回旧规则，还会用旧默认值覆盖他改过的预算。
+  const result = effectiveChain({ enabled: true, chain: { candidates: [], switchOn: switchOnAll, maxTotalAttempts: 9, stickyTurns: 0, strategy: 'order' }, default: { candidates: [cand('legacy')] } })
+  assert.deepEqual(result.chain.candidates, [])
+  assert.equal(result.chain.maxTotalAttempts, 9, 'the chain\'s own settings survive')
+  assert.equal(result.source, 'chain')
 })
 
-test('syncDefaultModel reports a Host that carries no default-model service', async () => {
-  const outcome = await syncDefaultModel(undefined, { provider: 'p', model: 'm' }, () => {})
-  assert.equal(outcome.synced, false)
-  assert.equal(outcome.error, 'no-default-model-service')
+test('resolveChain puts the selected model first and the configured fallbacks after it', () => {
+  const chain = resolveChain({ provider: 'selected', model: 'm' }, chainValue({ candidates: [cand('a'), cand('b')] }))
+  assert.deepEqual(chain.candidates.map(c => `${c.provider}/${c.model}`), ['selected/m', 'a/m', 'b/m'])
+  // 第一跳是用户自己的选择，只打一次；降级候选各按自己的 maxAttempts。
+  assert.equal(chain.candidates[0].maxAttempts, 1)
+  // order 是用户可见编号：0 = 第一跳，1..N = 降级第几条。
+  assert.deepEqual(chain.order, [0, 1, 2])
+})
+
+test('resolveChain drops a fallback that names the selected route', () => {
+  const chain = resolveChain({ provider: 'a', model: 'm' }, chainValue({ candidates: [cand('a'), cand('b')] }))
+  assert.deepEqual(chain.candidates.map(c => `${c.provider}/${c.model}`), ['a/m', 'b/m'])
+  assert.equal(chain.order.length, 2)
+})
+
+test('resolveChain has nothing to route when no fallback is configured', () => {
+  assert.equal(resolveChain({ provider: 'a', model: 'm' }, chainValue()), undefined)
+  // 只配了"选中模型"自己，等于没有降级可走。
+  assert.equal(resolveChain({ provider: 'a', model: 'm' }, chainValue({ candidates: [cand('a')] })), undefined)
+})
+
+test('the chain rules reject a repeated route and a weight strategy with nothing to draw', () => {
+  const repeated = structuralViolations({ chain: chainValue({ candidates: [cand('a'), cand('a')] }) })
+  assert.deepEqual(repeated.map(v => v.key), ['problemDuplicateRouteInChain'])
+  const weightless = structuralViolations({ chain: chainValue({ candidates: [cand('a')], strategy: 'weight' }) })
+  assert.deepEqual(weightless.map(v => v.key), ['problemWeightNoPositive'])
+  assert.deepEqual(structuralViolations({ chain: chainValue({ candidates: [cand('a')] }) }), [])
+})
+
+test('the failover notice names the failing route and the fallback position', () => {
+  const message = failoverNotice({ provider: 'wb', model: 'global:deepseek' }, { provider: 'stepfun', model: 'step' }, 1, 3, 'SERVER')
+  const text = message.content[0].text
+  assert.match(text, /wb\/global:deepseek/)
+  assert.match(text, /服务端错误/)
+  assert.match(text, /stepfun\/step/)
+  assert.match(text, /降级 1\/3/)
+  assert.doesNotMatch(text, /主模型/, 'a global chain has no primary model to name')
 })
 
 await Promise.all(pending)

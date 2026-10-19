@@ -84,24 +84,13 @@ const overlay = `- insert:
       name: '${PKG.replaceAll('\\', '/')}/lib/index.js'
       config:
         enabled: true
-        # 一条规则，主模型就是它：接管开启时新会话默认模型要被写成它的第一个候选。
-        # 这个组合提供 profileContext，所以 configEditor 真的落盘——同步因此是
-        # 可观测的真实写入，不是单测里的假 face。
-        primaryProfileId: p1
-        profiles:
-          - id: p1
-            when: { provider: stub-primary, model: stub-model }
-            candidates:
-              - { provider: stub-primary, model: stub-model, maxAttempts: 1 }
-            switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-            maxTotalAttempts: 6
-        default:
-          enabled: false
+        # 一条全局降级链：候选就是降级候选，第一跳是用户选中的模型（隐式）。
+        chain:
           candidates:
             - { provider: stub-primary, model: stub-model, maxAttempts: 1 }
             - { provider: stub-third, model: stub-model, maxAttempts: 1 }
           switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-          maxTotalAttempts: 3
+          maxTotalAttempts: 6
         health:
           probe:
             # The schedule is on here so the timer itself is exercised: the
@@ -204,10 +193,8 @@ test('the generated artifact passes the loader’s own registration validator', 
   const ids = artifact.TYPERT.invocations.map(invocation => invocation.id)
   assert.deepEqual(ids, [
     'dsh-model-router#routerHealth/checkConnectivity',
-    'dsh-model-router#routerHealth/defaultModelStatus',
     'dsh-model-router#routerHealth/probeAll',
     'dsh-model-router#routerHealth/probeReport',
-    'dsh-model-router#routerHealth/syncDefaultModel',
   ])
 })
 
@@ -366,38 +353,21 @@ test('a per-route probe prompt override reaches the wire, and the shared prompt 
   assert.equal(overridden?.maxTokens, 1, 'the probe asks for one token, so the cost stays bounded')
 })
 
-// ---- 接管开关与主模型同步，对着真实的 agentDefaultModel ----
-// 这是同步唯一能被真实观测的地方：这个组合提供 profileContext，DSH 的 configEditor
-// 因此真的把新默认写进 profile patch，而 agentDefaultModel.currentSelection() 会读回
-// 来。子进程组合（run.mjs）够不到 Remote，单测里的 face 是假的。
+// ---- 接管不再碰 DSH 的默认模型 ----
+// 2026-10-19 之前，开启接管会把新会话默认模型写成"主模型"（走 agentDefaultModel.
+// saveSelection）。产品形态改成"一条全局降级链"之后没有主模型了，插件也因此不再
+// 写 DSH 的全局配置。这条钉住那个反向事实：默认模型是用户自己的选择，插件只影响
+// 失败之后走哪，不影响新会话从哪个模型开始。
 
-test('the default-model sync writes the primary into DSH own default model, and the service reads it back', async () => {
-  // 一个用例按顺序讲完整件事：这里的 test() 不保证先后（同步体会先跑完），分开写
-  // 会让后一个用例读到前一个的结果——那是测试顺序的偶然而不是产品行为。
-  const before = await invoke('defaultModelStatus', {})
-  assert.equal(before.enabled, true)
-  assert.deepEqual(before.primary, { provider: 'stub-primary', model: 'stub-model' })
-  assert.equal(before.lastError, null)
-
+test('takeover leaves DSH own default model alone', async () => {
   const face = ctx.get('agentDefaultModel')
-  // 这个组合的 agent-default-model 没被 overlay 改过，所以默认还不是主模型。
-  const composed = face.currentSelection()
-  assert.notDeepEqual(composed, before.primary, 'the composed default is expected to differ from the primary')
-
-  const status = await invoke('syncDefaultModel', {})
-  assert.equal(status.synced, true, `sync reported ${JSON.stringify(status)}`)
-  // 读回真实服务，而不是只看插件自己的返回值：写没写进去只有它知道。
-  assert.deepEqual(face.currentSelection(),
-    { provider: 'stub-primary', model: 'stub-model' },
-    'DSH own default-model service must hold the primary now')
-
-  // 值已经相同，所以第二次同步不再写：每次都写会让 HMR 每次启动都多重启一轮。
-  const again = await invoke('syncDefaultModel', {})
-  assert.equal(again.synced, true)
-  assert.equal(again.lastError, null)
-  assert.deepEqual(face.currentSelection(), { provider: 'stub-primary', model: 'stub-model' })
-  const after = await invoke('defaultModelStatus', {})
-  assert.equal(after.synced, true)
+  const before = face.currentSelection()
+  // 这个组合没有 patch agent-default-model，所以它是 bundle 的默认值；这里不断言
+  // 具体是哪一条，只断言插件没有改它。
+  const routes = (await invoke('probeAll', { request: { routes: [{ provider: 'stub-primary', model: 'stub-model' }] } })).routes
+  assert.equal(routes[0].kind, 'reachable', 'the plugin is loaded and serving its Remote')
+  assert.deepEqual(face.currentSelection(), before,
+    'routing must not rewrite the user default model — that choice belongs to the user')
 })
 
 await Promise.all(pending)

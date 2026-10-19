@@ -28,7 +28,7 @@
  */
 
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import type { Candidate, DefaultProfile, Profile, Strategy, SwitchOn } from './config.ts'
+import type { Candidate, ChainConfig, Strategy, SwitchOn } from './config.ts'
 import { IMPLICIT_HOP_MAX_ATTEMPTS, switchOnKeyOf } from './defaults.ts'
 import { routeKeyOf } from './routes.ts'
 import type { StepChain, StepConditions, StepState } from './state.ts'
@@ -68,37 +68,39 @@ export function rotate<T>(list: readonly T[], start: number): T[] {
 }
 
 /**
- * Match the user's resolved route. A matched profile's chain starts at its
- * pinned `candidates[0]` (the `when` model). The default pool is pure
- * fallback: the user's own route is the implicit first hop with one attempt.
- * Returns undefined when this request is not the plugin's to route.
+ * Build this step's chain: the user's own selection first, the configured
+ * fallbacks after it.
+ *
+ * The first hop is the selected model and gets exactly one shot
+ * ({@link IMPLICIT_HOP_MAX_ATTEMPTS}) — the chain exists to move ON, not to
+ * retry the route the user already chose. A fallback that names the selected
+ * route is dropped: it is already the first hop, and trying it twice would bill
+ * the same channel twice for one request.
+ *
+ * Returns undefined when there is nothing to fall back to — an empty chain, or
+ * one that only names the selected route. The plugin then stays out of the
+ * request path entirely instead of imposing its one-shot cap on a request it
+ * has nothing to add to.
  */
-export function resolveChain(
-  resolved: LlmCallConfig,
-  profiles: readonly Profile[],
-  fallback: DefaultProfile,
-): StepChain | undefined {
-  for (const profile of profiles) {
-    if (profile.when.provider === resolved.provider && profile.when.model === resolved.model) {
-      return {
-        candidates: profile.candidates,
-        order: profile.candidates.map((_, index) => index),
-        switchOn: profile.switchOn,
-        maxTotalAttempts: profile.maxTotalAttempts,
-        stickyTurns: profile.stickyTurns,
-        strategy: profile.strategy,
-      }
-    }
+export function resolveChain(resolved: LlmCallConfig, chain: ChainConfig): StepChain | undefined {
+  const selected = routeKeyOf(resolved.provider, resolved.model)
+  const fallbacks = chain.candidates.filter(candidate => routeKeyOf(candidate.provider, candidate.model) !== selected)
+  if (fallbacks.length === 0) return undefined
+  const implicit: Candidate = {
+    provider: resolved.provider,
+    model: resolved.model,
+    maxAttempts: IMPLICIT_HOP_MAX_ATTEMPTS,
+    weight: 0,
   }
-  if (!fallback.enabled || fallback.candidates.length === 0) return undefined
-  const implicit: Candidate = { provider: resolved.provider, model: resolved.model, maxAttempts: IMPLICIT_HOP_MAX_ATTEMPTS, weight: 0 }
+  const candidates = [implicit, ...fallbacks]
   return {
-    candidates: [implicit, ...fallback.candidates],
-    order: [0, ...fallback.candidates.map((_, index) => index + 1)],
-    switchOn: fallback.switchOn,
-    maxTotalAttempts: fallback.maxTotalAttempts,
-    stickyTurns: fallback.stickyTurns,
-    strategy: fallback.strategy,
+    candidates,
+    // 用户可见编号：0 = 第一跳（他自己选的模型），1..N = 降级第几条。
+    order: candidates.map((_, index) => index),
+    switchOn: chain.switchOn,
+    maxTotalAttempts: chain.maxTotalAttempts,
+    stickyTurns: chain.stickyTurns,
+    strategy: chain.strategy,
   }
 }
 
@@ -221,9 +223,9 @@ export function toolResultHasImage(data: unknown): boolean {
  * `images` is tri-state: `true` requires an image in the request, `false`
  * requires its absence — the pair that splits one chain into an image route
  * and a text route — and an absent value constrains nothing. Both directions
- * apply to every candidate including a matched profile's pinned `candidates[0]`:
- * an explicit condition is the user's stated intent, and skipping a primary
- * that fails it is honoring the configuration, not a silent reroute.
+ * apply to every candidate: an explicit condition is the user's stated intent,
+ * and skipping a candidate that fails it honors the configuration rather than
+ * silently rerouting around it.
  *
  * Note: 为什么文本模型能在 DSH 里勾识图、靠路由兜底 —— 见
  * .agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md

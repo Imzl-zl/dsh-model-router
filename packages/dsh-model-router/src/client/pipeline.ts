@@ -1,4 +1,4 @@
-/** The fallback pipeline editor: candidate nodes, connectors, switch-on grid, budget row and the failover drawer. */
+/** The fallback chain editor: the implicit first hop, candidate nodes, connectors, switch-on grid, budget row and the failover drawer. */
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -12,11 +12,30 @@ import { SegmentedTabs, Tag, useModalLayer } from '@deepseek-ai/dsh-client-ui-pr
 import { STRATEGY_OPTIONS } from './validate.ts'
 import { DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STRATEGY, SWITCH_ON_CODES } from '../defaults.ts'
 
+/**
+ * The first hop is the model the user selected in DSH, so it cannot be a card
+ * with a provider and a model — the plugin does not know which one it will be
+ * until a request arrives. It is a statement of what the chain does instead:
+ * your selection fires once, then the configured fallbacks take over.
+ */
+function FirstHopCard(props) {
+  var t = props.t
+  return h('div', { style: S.node },
+    h('div', { className: 'dsh-router-node-card', style: Object.assign({}, S.nodeCard, S.nodeCardFirstHop) },
+      h('div', { style: S.nodeMainRow },
+        h('div', { style: Object.assign({}, S.rankBadge, S.rankBadgeFirstHop) }, '★'),
+        h('div', { style: S.nodeContent },
+          h('div', { style: S.modelInfo },
+            h('div', { style: S.modelNameRow },
+              h('span', { style: S.modelName }, t('firstHopTitle')),
+              h('span', { style: S.firstHopBadge }, t('firstHopBadge'))),
+            h('span', { style: S.modelPath }, t('firstHopHint')))))))
+}
+
 export function CandidateNode(props) {
   var t = props.t
   var candidate = props.candidate
   var index = props.index
-  var isPrimary = index === 0 && !props.isDefault
   var expandedState = useState(false)
   var expanded = expandedState[0]
   var setExpanded = expandedState[1]
@@ -31,10 +50,9 @@ export function CandidateNode(props) {
   var imagesMode = needs.images === true ? 'require' : needs.images === false ? 'forbid' : 'any'
   var reasoning = reasoningLabelOf(props.catalog, candidate.provider, candidate.model)
 
-  var minMoveIndex = props.isDefault ? 0 : 1
-  var canMoveUp = !isPrimary && index > minMoveIndex && !props.disabled
-  var canMoveDown = (!isPrimary || props.isDefault) && index < props.total - 1 && !props.disabled
-  var canDrag = (!isPrimary || props.isDefault) && props.total > 1 && !props.disabled
+  var canMoveUp = index > 0 && !props.disabled
+  var canMoveDown = index < props.total - 1 && !props.disabled
+  var canDrag = props.total > 0 && !props.disabled
 
   /**
    * 从卡片内部任何地方都能开始拖，除了控件本身。
@@ -43,14 +61,24 @@ export function CandidateNode(props) {
    * 的条件面板里——那些地方一拖就该是它们自己的行为（点按钮、选中输入框里的文字），
    * 而不是把卡片搬走。这里在 dragstart 上按起点判定，命中交互元素就取消这次拖拽。
    *
+   * 判据必须**止于本卡**（`closest` 的边界传给卡片自己，而不是默认的 document）：
+   * 卡片外面也有一层 `role="tabpanel"`（选路策略那个面板），拿整篇文档当边界会把每一
+   * 张卡都判成"在面板里"，拖拽从此一次也发不起来——浏览器实测踩过。
+   *
    * 为什么不用指针事件自己做一套：HTML5 拖放已经处理了拖影、放置目标与滚动容器
    * 内的自动滚动，自建一套要把这些重做一遍，而触屏上两者都不可用（上下按钮仍在）。
    */
+  var cardRef = useRef(null)
   var handleDragStart = function (e) {
     if (!canDrag) { e.preventDefault(); return }
     var target = e.target
-    if (target && typeof target.closest === 'function'
-      && target.closest('button, input, textarea, select, a, [contenteditable="true"], [role="tabpanel"]')) {
+    var card = cardRef.current
+    // 边界是本卡：命中的交互元素必须真的在这张卡里才取消拖拽；卡外那层
+    // `role="tabpanel"`（选路策略面板）不算——见上面的说明。
+    var hit = target && typeof target.closest === 'function'
+      ? target.closest('button, input, textarea, select, a, [contenteditable="true"], [role="tabpanel"]')
+      : null
+    if (hit !== null && card !== null && card.contains(hit)) {
       e.preventDefault()
       return
     }
@@ -59,11 +87,11 @@ export function CandidateNode(props) {
 
   return h('div', { style: S.node },
     h('div', {
+      ref: cardRef,
       className: 'dsh-router-node-card',
       style: Object.assign(
         {},
         S.nodeCard,
-        isPrimary ? S.nodeCardPrimary : null,
         props.isDragging ? S.nodeCardDragging : null,
         props.isDragTarget && !props.isDragging ? S.nodeCardDragOver : null,
       ),
@@ -76,20 +104,18 @@ export function CandidateNode(props) {
       h('div', { style: S.nodeMainRow },
         // 握把不再是唯一的拖拽起点，而是"这张卡可以拖"的视觉提示；命中区比图标大，
         // 颜色在手感上给出 grab 反馈。
-        !isPrimary ? h('div', {
+        h('div', {
           className: 'dsh-router-grip-handle',
           style: Object.assign({}, S.gripHandle, !canDrag ? S.gripHandleDisabled : null),
           title: t('dragReorderHint'),
           'aria-hidden': true,
-        }, h(Icon, { d: ICON_GRIP, size: 14 })) : null,
-        h('div', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null) },
-          isPrimary ? '★' : String(props.isDefault ? index + 1 : index).padStart(2, '0')),
+        }, h(Icon, { d: ICON_GRIP, size: 14 })),
+        h('div', { style: S.rankBadge }, String(index + 1).padStart(2, '0')),
         h('div', { style: S.nodeContent },
           h('div', { style: S.modelInfo },
             h('div', { style: S.modelNameRow },
               h('span', { style: S.modelName, title: candidate.model }, candidate.model || '—'),
               h('span', { style: S.providerBadge }, candidate.provider),
-              isPrimary ? h('span', { style: Object.assign({}, S.primaryBadge, healthToneBadge('healthy')) }, '👑 ' + t('primaryModelBadge')) : null,
               h(HealthSignalDot, {
                 t: t,
                 route: routeKeyOf(candidate.provider, candidate.model),
@@ -107,7 +133,7 @@ export function CandidateNode(props) {
                 'aria-expanded': expanded,
                 onClick: function () { setExpanded(!expanded) },
               }, hasActiveNeeds ? '⚙️ ● ' + t('toggleNeedsBtn') : '⚙️ ' + t('toggleNeedsBtn'))),
-            h('span', { style: S.modelPath }, routeKeyOf(candidate.provider, candidate.model))),
+            h('span', { style: S.modelPath, title: routeKeyOf(candidate.provider, candidate.model) }, routeKeyOf(candidate.provider, candidate.model))),
           h('div', { style: S.nodeControls },
             h('div', { style: S.nodeTuning },
               h('div', { style: S.attemptPicker, title: t('attemptLimitHint') },
@@ -153,39 +179,33 @@ export function CandidateNode(props) {
                 }),
                 h('span', { style: { whiteSpace: 'nowrap' } }, props.weightShare + '%')) : null),
             h('div', { style: S.nodeActions },
-              isPrimary
-                ? h('span', { style: Object.assign({}, S.primaryLockedBadge, accentBadge()), title: t('primaryPinnedHint') },
-                    h(Icon, { d: ICON_SHIELD, size: 11 }),
-                    t('primaryLockedBadge'))
-                : [
-                    h('button', {
-                      key: 'up',
-                      type: 'button',
-                      className: 'dsh-router-action-btn',
-                      style: Object.assign({}, S.actionBtn, !canMoveUp ? S.actionBtnDisabled : null),
-                      disabled: !canMoveUp,
-                      title: t('moveUp'),
-                      onClick: function () { props.onMove(index, -1) },
-                    }, h(Icon, { d: ICON_UP, size: 13 })),
-                    h('button', {
-                      key: 'down',
-                      type: 'button',
-                      className: 'dsh-router-action-btn',
-                      style: Object.assign({}, S.actionBtn, !canMoveDown ? S.actionBtnDisabled : null),
-                      disabled: !canMoveDown,
-                      title: t('moveDown'),
-                      onClick: function () { props.onMove(index, 1) },
-                    }, h(Icon, { d: ICON_DOWN, size: 13 })),
-                    h('button', {
-                      key: 'del',
-                      type: 'button',
-                      className: 'dsh-router-action-btn dsh-router-action-btn-danger',
-                      style: Object.assign({}, S.actionBtn, S.actionBtnDanger),
-                      disabled: props.disabled,
-                      title: t('removeNode'),
-                      onClick: function () { props.onRemove(index) },
-                    }, h(Icon, { d: ICON_TRASH, size: 12 })),
-                  ])))),
+              h('button', {
+                key: 'up',
+                type: 'button',
+                className: 'dsh-router-action-btn',
+                style: Object.assign({}, S.actionBtn, !canMoveUp ? S.actionBtnDisabled : null),
+                disabled: !canMoveUp,
+                title: t('moveUp'),
+                onClick: function () { props.onMove(index, -1) },
+              }, h(Icon, { d: ICON_UP, size: 13 })),
+              h('button', {
+                key: 'down',
+                type: 'button',
+                className: 'dsh-router-action-btn',
+                style: Object.assign({}, S.actionBtn, !canMoveDown ? S.actionBtnDisabled : null),
+                disabled: !canMoveDown,
+                title: t('moveDown'),
+                onClick: function () { props.onMove(index, 1) },
+              }, h(Icon, { d: ICON_DOWN, size: 13 })),
+              h('button', {
+                key: 'del',
+                type: 'button',
+                className: 'dsh-router-action-btn dsh-router-action-btn-danger',
+                style: Object.assign({}, S.actionBtn, S.actionBtnDanger),
+                disabled: props.disabled,
+                title: t('removeNode'),
+                onClick: function () { props.onRemove(index) },
+              }, h(Icon, { d: ICON_TRASH, size: 12 })))))),
       expanded ? h('div', { style: S.needsPanel },
         h('div', { style: S.needsGrid },
           h('div', { style: S.needCard, id: 'images-' + imagesMode + '-panel-' + index, role: 'tabpanel', 'aria-labelledby': 'images-' + imagesMode + '-' + index },
@@ -340,10 +360,7 @@ export function PipelineEditor(props) {
   }
 
   var handleDragOver = function (e, index) {
-    var minIndex = props.isDefault ? 0 : 1
-    if (index < minIndex) return
-    // 拖拽源自己也要能当放置目标之外的"滚回去"目标：不允许落到比最小序号更前面，
-    // 所以第一张（用户选中的模型）永远不会被挤掉。
+    // 拖拽源自己也要能当放置目标之外的"滚回去"目标。
     e.preventDefault()
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
     if (dragTargetIndex !== index) {
@@ -353,11 +370,10 @@ export function PipelineEditor(props) {
 
   var handleDrop = function (e, toIndex) {
     e.preventDefault()
-    var minIndex = props.isDefault ? 0 : 1
     var from = dragSourceIndex
     setDragSourceIndex(null)
     setDragTargetIndex(null)
-    if (from !== null && from !== toIndex && from >= minIndex && toIndex >= minIndex) {
+    if (from !== null && from !== toIndex) {
       if (props.onReorder) {
         props.onReorder(from, toIndex)
       }
@@ -370,126 +386,51 @@ export function PipelineEditor(props) {
   }
 
   var nodes = []
-  if (!props.isDefault && candidates.length > 0) {
-    // 1. Primary Model Block
-    nodes.push(h('div', { key: 'primary-wrapper', style: S.primaryCardContainer },
-      h('div', { style: S.primaryCardHeader },
-        h('span', { style: S.primaryCardTitle },
-          h(Icon, { d: ICON_BOLT, size: 14 }),
-          t('primaryTargetSection')),
-        h('span', { style: S.primaryCardHint }, t('primaryTargetHint'))),
-      h(CandidateNode, {
-        key: 'primary-node',
-        t: t,
-        candidate: candidates[0],
-        index: 0,
-        total: candidates.length,
-        isDefault: false,
+  // 1. 第一跳：用户自己选中的模型，只打一次（不在这里配置）
+  nodes.push(h(FirstHopCard, { key: 'first-hop', t: t }))
+
+  // 2. 流程指示
+  nodes.push(h('div', { key: 'flow-indicator', style: S.flowConnector },
+    h('div', { style: S.flowConnectorPill },
+      h(Icon, { d: ICON_ARROW_DOWN, size: 12 }),
+      t('flowIndicatorText'))))
+
+  // 3. 降级候选
+  nodes.push(h('div', { key: 'fallback-header', style: S.fallbackSectionHeader },
+    h('span', { style: S.fallbackSectionTitle },
+      h(Icon, { d: ICON_ROUTE, size: 14 }),
+      t('fallbackChainSection'),
+      h('span', { style: S.countBadge }, String(candidates.length))),
+    h('span', { style: S.cardHint }, t('fallbackChainHint'))))
+
+  if (candidates.length === 0) {
+    nodes.push(h('div', { key: 'fallback-empty', style: S.fallbackEmptyCard },
+      h(Icon, { d: ICON_ROUTE, size: 28, style: { opacity: 0.35, color: 'var(--dsh-router-accent)' } }),
+      h('h4', { style: S.fallbackEmptyTitle }, t('fallbackEmptyTitle')),
+      h('p', { style: S.fallbackEmptyDesc }, t('fallbackEmptyDesc')),
+      h('button', {
+        type: 'button',
+        className: 'dsh-router-catalog-btn',
+        style: S.catalogBtnSm,
         disabled: props.disabled,
-        catalog: props.catalog,
-        passive: props.passive,
-        discover: props.discover,
-        probe: props.probe,
-        onJumpHealth: props.onJumpHealth,
-        showWeight: strategy === 'weight',
-        weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidates[0].weight || 0) / weightTotal) * 100) : 0,
-        isDragging: false,
-        isDragTarget: false,
-        onDragStart: handleDragStart,
-        onDragOver: handleDragOver,
-        onDrop: handleDrop,
-        onDragEnd: handleDragEnd,
-        onMaxAttempts: props.onMaxAttempts,
-        onWeight: props.onWeight,
-        onMove: props.onMove,
-        onRemove: props.onRemove,
-        onNeeds: props.onNeeds,
-        stickyTurns: props.stickyTurns,
-        onStickyTurns: props.onStickyTurns,
-        imageFocus: props.imageFocus,
-      })))
-
-    // 2. Flow transition indicator
-    nodes.push(h('div', { key: 'flow-indicator', style: S.flowConnector },
-      h('div', { style: S.flowConnectorPill },
-        h(Icon, { d: ICON_ARROW_DOWN, size: 12 }),
-        t('flowIndicatorText'))))
-
-    // 3. Fallback Section Header
-    nodes.push(h('div', { key: 'fallback-header', style: S.fallbackSectionHeader },
-      h('span', { style: S.fallbackSectionTitle },
-        h(Icon, { d: ICON_ROUTE, size: 14 }),
-        t('fallbackChainSection'),
-        h('span', { style: S.countBadge }, String(Math.max(0, candidates.length - 1)))),
-      h('span', { style: S.primaryCardHint }, t('fallbackChainHint'))))
-
-    if (candidates.length <= 1) {
-      nodes.push(h('div', { key: 'fallback-empty', style: S.fallbackEmptyCard },
-        h(Icon, { d: ICON_ROUTE, size: 28, style: { opacity: 0.35, color: 'var(--dsh-router-accent)' } }),
-        h('h4', { style: S.fallbackEmptyTitle }, t('fallbackEmptyTitle')),
-        h('p', { style: S.fallbackEmptyDesc }, t('fallbackEmptyDesc')),
-        h('button', {
-          type: 'button',
-          className: 'dsh-router-catalog-btn',
-          style: S.catalogBtnSm,
-          disabled: props.disabled,
-          onClick: props.onOpenAddCandidate,
-        }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addCandidateBtn'))))
-    } else {
-      candidates.slice(1).forEach(function (candidate, offset) {
-        var index = offset + 1
-        if (offset > 0) {
-          nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: offset + 1 }))
-        }
-        nodes.push(h(CandidateNode, {
-          key: 'n' + index,
-          t: t,
-          candidate: candidate,
-          index: index,
-          total: candidates.length,
-          isDefault: false,
-          disabled: props.disabled,
-          catalog: props.catalog,
-          passive: props.passive,
-          discover: props.discover,
-          probe: props.probe,
-          onJumpHealth: props.onJumpHealth,
-          showWeight: strategy === 'weight',
-          weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
-          isDragging: dragSourceIndex === index,
-          isDragTarget: dragTargetIndex === index,
-          onDragStart: handleDragStart,
-          onDragOver: handleDragOver,
-          onDrop: handleDrop,
-          onDragEnd: handleDragEnd,
-          onMaxAttempts: props.onMaxAttempts,
-          onWeight: props.onWeight,
-          onMove: props.onMove,
-          onRemove: props.onRemove,
-          onNeeds: props.onNeeds,
-          stickyTurns: props.stickyTurns,
-          onStickyTurns: props.onStickyTurns,
-          imageFocus: props.imageFocus,
-        }))
-      })
-    }
+        onClick: props.onOpenAddCandidate,
+      }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addCandidateBtn'))))
   } else {
-    // Default pool mode: all candidates in one pool
     candidates.forEach(function (candidate, index) {
-      if (index > 0) nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: index + 1 }))
+      if (index > 0) {
+        nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: index + 1 }))
+      }
       nodes.push(h(CandidateNode, {
         key: 'n' + index,
         t: t,
         candidate: candidate,
         index: index,
         total: candidates.length,
-        isDefault: true,
         disabled: props.disabled,
         catalog: props.catalog,
         passive: props.passive,
         discover: props.discover,
         probe: props.probe,
-        onJumpHealth: props.onJumpHealth,
         showWeight: strategy === 'weight',
         weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
         isDragging: dragSourceIndex === index,
@@ -532,7 +473,7 @@ export function PipelineEditor(props) {
         value: strategy,
         onChange: function (value) { if (props.onStrategy) props.onStrategy(value) },
       }),
-      h('span', { style: S.strategyHintTag }, t('strategyHint' + strategy))),
+      h('span', { style: S.strategyHintTag, title: t('strategyDetail' + strategy) }, t('strategyHint' + strategy))),
     // 三个策略共用同一个面板：id 跟着选中项走，aria-controls 才指向真实节点。
     h('div', {
       id: 'strategy-panel-' + strategy,

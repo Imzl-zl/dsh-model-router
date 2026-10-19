@@ -35,32 +35,22 @@ export function defaultSwitchOn() {
   return Object.assign({}, DEFAULT_SWITCH_ON)
 }
 
-export function defaultProfileValue() {
-  return { enabled: false, candidates: [], switchOn: defaultSwitchOn(), maxTotalAttempts: DEFAULT_POOL_MAX_TOTAL_ATTEMPTS, stickyTurns: DEFAULT_STICKY_TURNS }
+/** A chain with no fallbacks: what a fresh draft, and a legacy record, start from. */
+export function defaultChainValue() {
+  return {
+    candidates: [],
+    switchOn: defaultSwitchOn(),
+    maxTotalAttempts: DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
+    stickyTurns: DEFAULT_STICKY_TURNS,
+    strategy: 'order',
+  }
 }
 
-export function normalizeProfiles(value) {
-  return clone(value ?? []).map(function (profile) {
-    if (!Array.isArray(profile.candidates)) profile.candidates = []
-    if (typeof profile.stickyTurns !== 'number' || profile.stickyTurns < 0) profile.stickyTurns = DEFAULT_STICKY_TURNS
-    return profile
-  })
-}
-
-/**
- * 主模型标记的归一化：非字符串（旧配置没有这个字段）按"空 = 第一条"处理。
- * 指向已删规则的悬空值这里**不**修正——UI 与宿主都用同一条回落规则读它，
- * 在这里偷偷改掉会让两边对"谁是主"各说一套。
- */
-export function normalizePrimaryProfileId(value) {
-  return typeof value === 'string' ? value : ''
-}
-
-export function normalizeDefault(value) {
-  var pool = clone(value ?? defaultProfileValue())
-  if (!Array.isArray(pool.candidates)) pool.candidates = []
-  if (typeof pool.stickyTurns !== 'number' || pool.stickyTurns < 0) pool.stickyTurns = DEFAULT_STICKY_TURNS
-  return pool
+export function normalizeChain(value) {
+  var chain = clone(value ?? defaultChainValue())
+  if (!Array.isArray(chain.candidates)) chain.candidates = []
+  if (typeof chain.stickyTurns !== 'number' || chain.stickyTurns < 0) chain.stickyTurns = DEFAULT_STICKY_TURNS
+  return chain
 }
 
 
@@ -68,23 +58,18 @@ export function validate(draft) {
   var problems = []
   // 跨字段规则与 host 同源（../rules.ts 的 structuralViolations）：host 抛第一条、
   // 这里收全部，key + vars 进字典渲染。此前两份规则靠三句「与 host 的 assertStructural
-  // 同步」的注释对齐，且已经漂移——默认兜底池的重复渠道这里漏检，用户存得下一个
-  // 加载即被 host 拒绝的配置，吃的还是一句英文错误。
-  structuralViolations(draft).forEach(function (violation) {
+  // 同步」的注释对齐，且已经漂移——重复渠道 host 从第一天就拒、浏览器漏检，用户存得下
+  // 一个加载即被 host 拒绝的配置，吃的还是一句英文错误。
+  structuralViolations({ chain: draft.chain, health: draft.health }).forEach(function (violation) {
     problems.push({ key: violation.key, vars: violation.vars })
   })
   // 草稿态检查：host 故意不做单字段边界（schema 拥有它们，assertStructural 的
   // docstring 划了这条线），浏览器要在保存前挡住，否则用户吃到的是 host 的英文拒绝。
-  draft.profiles.forEach(function (profile) {
-    profile.candidates.forEach(function (candidate, index) {
-      if (!candidate.provider || !candidate.model) problems.push({ key: 'problemEmptyRoute', vars: { id: profile.id, index: index + 1 } })
-      if (!(candidate.maxAttempts >= 1 && candidate.maxAttempts <= 5)) problems.push({ key: 'problemBadMaxAttempts', vars: { id: profile.id, index: index + 1 } })
-    })
-    if (!(profile.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: { id: profile.id } })
-    if (!(profile.stickyTurns >= 0)) problems.push({ key: 'problemBadSticky', vars: { id: profile.id } })
+  draft.chain.candidates.forEach(function (candidate, index) {
+    if (!candidate.provider || !candidate.model) problems.push({ key: 'problemEmptyRoute', vars: { index: index + 1 } })
+    if (!(candidate.maxAttempts >= 1 && candidate.maxAttempts <= 5)) problems.push({ key: 'problemBadMaxAttempts', vars: { index: index + 1 } })
   })
-  if (!(draft.default.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadDefaultTotal', vars: {} })
-  if (!(draft.default.stickyTurns >= 0)) problems.push({ key: 'problemBadDefaultSticky', vars: {} })
+  if (!(draft.chain.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: {} })
   return problems
 }
 

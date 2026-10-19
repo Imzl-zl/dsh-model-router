@@ -44,26 +44,21 @@ export interface RoutableCandidate {
 }
 
 /**
- * Every physical route a config names, deduplicated, in chain order: profiles
- * first, then the default pool. Deduplication is what keeps a route that
- * appears in three profiles from being probed or checked three times.
+ * Every physical route the chain names, deduplicated, in chain order.
+ *
+ * The first hop is the user's current selection and is not in the config, so it
+ * is not here either — the probe and the connectivity check cover the fallbacks
+ * the user configured.
  */
-export function configuredRoutes(
-  profiles: readonly { candidates: readonly RoutableCandidate[] }[],
-  fallback: { candidates: readonly RoutableCandidate[] },
-): string[] {
+export function configuredRoutes(chain: { candidates: readonly RoutableCandidate[] }): string[] {
   const seen = new Set<string>()
   const routes: string[] = []
-  const collect = (candidates: readonly RoutableCandidate[]): void => {
-    for (const candidate of candidates) {
-      const key = routeKeyOf(candidate.provider, candidate.model)
-      if (seen.has(key)) continue
-      seen.add(key)
-      routes.push(key)
-    }
+  for (const candidate of chain.candidates) {
+    const key = routeKeyOf(candidate.provider, candidate.model)
+    if (seen.has(key)) continue
+    seen.add(key)
+    routes.push(key)
   }
-  for (const profile of profiles) collect(profile.candidates)
-  collect(fallback.candidates)
   return routes
 }
 
@@ -72,14 +67,12 @@ export function configuredRoutes(
  * probe and connectivity runs cover, and the browser's lists show. A draft's
  * fields may be absent (an older record, a half-built form row), so this
  * adapter normalizes them and delegates — the collection rule itself stays
- * {@link configuredRoutes}' alone. The browser half had this two-line wrapper
- * in two modules; one copy lives here now.
+ * {@link configuredRoutes}' alone.
  */
 export function configuredRouteList(config: {
-  profiles?: readonly { candidates: readonly RoutableCandidate[] }[]
-  default?: { candidates: readonly RoutableCandidate[] }
+  chain?: { candidates: readonly RoutableCandidate[] }
 }): string[] {
-  return configuredRoutes(config.profiles ?? [], config.default ?? { candidates: [] })
+  return configuredRoutes(config.chain ?? { candidates: [] })
 }
 
 /**

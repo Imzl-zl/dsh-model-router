@@ -10,20 +10,21 @@
 
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, summarize } from './format.ts'
-import { defaultSwitchOn, normalizeDefault, normalizeHealth, normalizeProfiles, validate } from './validate.ts'
+import { normalizeChain, normalizeHealth, validate } from './validate.ts'
+import { effectiveChain } from '../chain.ts'
 import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
-import { DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STICKY_TURNS, NEW_PROFILE_MAX_ATTEMPTS } from '../defaults.ts'
+import { DEFAULT_MAX_ATTEMPTS } from '../defaults.ts'
 
 export function createController(ctx, scope, t) {
   var seed = function () {
     var value = scope.getSnapshot().value ?? {}
+    // 旧配置（按模型分规则 + 默认兜底池）在这里迁成一条链：规则模块与宿主读的是
+    // 同一个 effectiveChain，所以浏览器看到的就是 Host 会执行的那一条。
     return {
       // 与 host schema 的默认值同源：接管会改请求实际打到的渠道，默认关。
       enabled: value.enabled ?? false,
-      primaryProfileId: typeof value.primaryProfileId === 'string' ? value.primaryProfileId : '',
-      profiles: normalizeProfiles(value.profiles),
-      default: normalizeDefault(value.default),
+      chain: normalizeChain(effectiveChain(value).chain),
       // A config saved by an older build carries the flat health shape; the
       // three tiers are re-derived here so one old row cannot leave the UI
       // reading `undefined` for a tier that has a perfectly good default.
@@ -32,7 +33,6 @@ export function createController(ctx, scope, t) {
   }
   var host = seed()
   var draft = seed()
-  var autoActive = true
   var ui = {
     activeId: null,
     modal: null,
@@ -63,11 +63,6 @@ export function createController(ctx, scope, t) {
     // counts are the feedback, not the dots.
     checkSummary: null,
     probeSummary: null,
-    // 接管开关与主模型同步的状态（宿主 agentDefaultModel 的现值 + 是否还指向
-    // 主模型）。DSH 每次手动换模型都会把默认改掉，所以这个状态必须单独读，
-    // 不能从 draft 推。
-    defaultModel: null,
-    defaultModelLoading: false,
   }
   var saving = false
   var failed = false
@@ -114,8 +109,6 @@ export function createController(ctx, scope, t) {
         probingRoutes: ui.probingRoutes,
         checkSummary: ui.checkSummary,
         probeSummary: ui.probeSummary,
-        defaultModel: ui.defaultModel,
-        defaultModelLoading: ui.defaultModelLoading,
       },
     }
   }
@@ -315,42 +308,8 @@ export function createController(ctx, scope, t) {
     // false forever. See .agents/notes/implemented/2026-10-15-host-draft-baseline-independence.md。
     draft = clone(next)
     failed = false
-    // The first snapshot can arrive after the controller was built (status
-    // loading, no value), so the active tab is re-established here too.
-    ensureActive()
     publish()
   })
-
-  /**
-   * The profile an edit addresses. An id that matches nothing throws rather
-   * than silently editing a phantom chain — every caller passes an id the
-   * UI has just rendered.
-   */
-  function profileOf(profileId) {
-    var profile = draft.profiles.find(function (p) { return p.id === profileId })
-    if (profile === undefined) throw new Error('model-router: no profile "' + profileId + '" in the draft')
-    return profile
-  }
-  /**
-   * The candidate list an edit addresses: the default pool, or one
-   * profile's chain. An id that matches nothing throws rather than
-   * silently editing a phantom list — every caller passes an id the UI
-   * has just rendered.
-   */
-  function listOf(profileId, isDefault) {
-    if (isDefault) return draft.default.candidates
-    return profileOf(profileId).candidates
-  }
-  /**
-   * Re-establish the active tab while it is still auto-managed: the first
-   * scope snapshot can arrive after the controller was built (status
-   * loading, no value), and an explicit user pick always wins.
-   */
-  function ensureActive() {
-    if (!autoActive) return
-    ui.activeId = draft.profiles.length ? draft.profiles[0].id : '__default__'
-  }
-  ensureActive()
 
   var controller = {
     store: store,
@@ -361,44 +320,8 @@ export function createController(ctx, scope, t) {
     /** Whether our workbench is mounted at all — the shortcut command's gate. */
     surfaceActive: function () { return surfaceCount > 0 },
     setEnabled: function (value) { draft.enabled = value; publish() },
-    setPrimaryProfile: function (id) { draft.primaryProfileId = id; publish() },
-    /**
-     * 读宿主侧的接管同步状态。只有 Host face 挂上才有答案——没挂的时候保持
-     * null，UI 显示"未知"，不猜一个"已同步"。
-     */
-    loadDefaultModelStatus: function () {
-      var health = ctx.remote && ctx.remote.routerHealth
-      if (!health || typeof health.defaultModelStatus !== 'function') return
-      if (ui.defaultModelLoading) return
-      ui.defaultModelLoading = true
-      publish()
-      health.defaultModelStatus().then(function (result) {
-        ui.defaultModelLoading = false
-        if (result && result.ok === true) ui.defaultModel = result.value ?? null
-        publish()
-      }).catch(function () {
-        ui.defaultModelLoading = false
-        publish()
-      })
-    },
-    /** 一键重新同步：宿主侧写一次 agentDefaultModel，再把新状态读回来。 */
-    syncDefaultModel: function () {
-      var health = ctx.remote && ctx.remote.routerHealth
-      if (!health || typeof health.syncDefaultModel !== 'function') return
-      ui.defaultModelLoading = true
-      publish()
-      health.syncDefaultModel().then(function (result) {
-        ui.defaultModelLoading = false
-        if (result && result.ok === true) ui.defaultModel = result.value ?? null
-        publish()
-      }).catch(function () {
-        ui.defaultModelLoading = false
-        publish()
-      })
-    },
     setActive: function (id) {
       ui.activeId = id
-      autoActive = false
       // 打开健康工作台时重取一次被动快照。它原本只在控制器创建时读一次，
       // 故障转移发生后工作台还显示着旧延迟/旧可用率——监控视图在事故进行中
       // 给人看旧数字，比没有这个数字更糟。重取是同一套 20 会话合并，代价是
@@ -422,98 +345,53 @@ export function createController(ctx, scope, t) {
       // 会让保存按钮永久转圈，且用户看不到任何失败原因。
       scope.mutate([
         { op: 'set', path: ['enabled'], value: draft.enabled },
-        { op: 'set', path: ['primaryProfileId'], value: draft.primaryProfileId },
-        { op: 'set', path: ['profiles'], value: draft.profiles },
-        { op: 'set', path: ['default'], value: draft.default },
+        { op: 'set', path: ['chain'], value: draft.chain },
         { op: 'set', path: ['health'], value: draft.health },
       ], scope.getSnapshot().revision).then(function (accepted) {
         saving = false
         failed = !accepted
         publish()
-        // 保存成功 = fiber 重启 = 宿主按新配置同步一次默认模型；这里把新状态读
-        // 回来，同步行因此立刻反映结果，而不是留在旧值上。
-        if (accepted) controller.loadDefaultModelStatus()
       }, function () {
         saving = false
         failed = true
         publish()
       })
     },
-    addProfile: function (when, templateId) {
-      var id = 'profile-' + String(draft.profiles.length + 1)
-      while (draft.profiles.some(function (profile) { return profile.id === id })) {
-        id = id + '-x'
-      }
-      var template = draft.profiles.find(function (profile) { return profile.id === templateId })
-      var candidates = template
-        ? template.candidates.map(function (candidate) { return clone(candidate) })
-        : [{ provider: when.provider, model: when.model, maxAttempts: NEW_PROFILE_MAX_ATTEMPTS }]
-      candidates[0] = { provider: when.provider, model: when.model, maxAttempts: NEW_PROFILE_MAX_ATTEMPTS }
-      draft.profiles.push({
-        id: id,
-        when: { provider: when.provider, model: when.model },
-        candidates: candidates,
-        switchOn: defaultSwitchOn(),
-        maxTotalAttempts: DEFAULT_MAX_TOTAL_ATTEMPTS,
-        stickyTurns: DEFAULT_STICKY_TURNS,
-      })
-      // 第一条规则自动成为主模型：开启接管时新会话要有一个明确的起点，而"空标记
-      // = 第一条"这条回落规则让第一次创建不需要额外问一句。
-      if (draft.profiles.length === 1) draft.primaryProfileId = id
-      ui.activeId = id
-      ui.modal = null
-      publish()
-    },
-    deleteProfile: function (id) {
-      draft.profiles = draft.profiles.filter(function (profile) { return profile.id !== id })
-      // 删掉的正是主模型时清标记，让"空 = 第一条"接管；留着一个悬空 id 会让
-      // 宿主与 UI 对"谁是主"给出不同答案。
-      if (draft.primaryProfileId === id) draft.primaryProfileId = ''
-      ui.modal = null
-      ui.riskAck = false
-      ensureActive()
-      publish()
-    },
-    addCandidates: function (profileId, entries, isDefault) {
-      var list = listOf(profileId, isDefault)
+    /** Add fallback candidates to the one chain. */
+    addCandidates: function (entries) {
       entries.forEach(function (entry) {
         // 默认值先给、entry 后覆盖：目录选择不带 maxAttempts（1 是它的默认），
         // 手动录入带了就必须按用户填的走——写死 1 会静默吞掉用户输入。
-        list.push(Object.assign({ maxAttempts: DEFAULT_MAX_ATTEMPTS }, entry))
+        draft.chain.candidates.push(Object.assign({ maxAttempts: DEFAULT_MAX_ATTEMPTS }, entry))
       })
       ui.modal = null
       publish()
     },
-    removeCandidate: function (profileId, index, isDefault) {
-      // 只有 profile 的第一个候选是钉死的 when 模型；默认兜底池没有 primary，
-      // 它的第一个候选和别的候选一样可增删、可换序。
-      if (index <= 0 && !isDefault) return
-      listOf(profileId, isDefault).splice(index, 1)
+    removeCandidate: function (index) {
+      draft.chain.candidates.splice(index, 1)
       publish()
     },
-    reorderCandidates: function (profileId, fromIndex, toIndex, isDefault) {
-      var minIndex = isDefault ? 0 : 1
-      if (fromIndex < minIndex || toIndex < minIndex) return
-      var list = listOf(profileId, isDefault)
+    reorderCandidates: function (fromIndex, toIndex) {
+      var list = draft.chain.candidates
       if (fromIndex >= list.length || toIndex >= list.length || fromIndex === toIndex) return
       var item = list.splice(fromIndex, 1)[0]
       list.splice(toIndex, 0, item)
       publish()
     },
-    moveCandidate: function (profileId, index, direction, isDefault) {
+    moveCandidate: function (index, direction) {
       // 一次移动就是一次换位：与拖拽走同一条重排路径。曾有两套实现（splice 搬家
       // 与相邻交换），边界守卫各写各的，改一边忘了另一边就静默出错。
-      controller.reorderCandidates(profileId, index, index + direction, isDefault)
+      controller.reorderCandidates(index, index + direction)
     },
-    setMaxAttempts: function (profileId, index, value, isDefault) {
-      var candidate = listOf(profileId, isDefault)[index]
+    setMaxAttempts: function (index, value) {
+      var candidate = draft.chain.candidates[index]
       var parsed = Number(value)
       candidate.maxAttempts = Number.isFinite(parsed) ? Math.min(5, Math.max(1, Math.round(parsed))) : DEFAULT_MAX_ATTEMPTS
       publish()
     },
     /** Patch one candidate's `needs`; an empty patch clears the field. */
-    setNeeds: function (profileId, index, patch, isDefault) {
-      var candidate = listOf(profileId, isDefault)[index]
+    setNeeds: function (index, patch) {
+      var candidate = draft.chain.candidates[index]
       var next = Object.assign({}, candidate.needs ?? {})
       // images 三态：require/forbid 各设一极，any 删掉这个字段。
       if (patch.imagesMode !== undefined) {
@@ -528,47 +406,38 @@ export function createController(ctx, scope, t) {
       candidate.needs = Object.keys(next).length > 0 ? next : undefined
       publish()
     },
-    setStickyTurns: function (profileId, value, isDefault) {
+    setStickyTurns: function (value) {
       var parsed = Number(value)
-      var clamped = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
-      if (isDefault) draft.default.stickyTurns = clamped
-      else profileOf(profileId).stickyTurns = clamped
+      draft.chain.stickyTurns = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
       publish()
     },
-    setMaxTotalAttempts: function (profileId, value, isDefault) {
+    setMaxTotalAttempts: function (value) {
       var parsed = Number(value)
-      var clamped = Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 1
-      if (isDefault) draft.default.maxTotalAttempts = clamped
-      else profileOf(profileId).maxTotalAttempts = clamped
+      draft.chain.maxTotalAttempts = Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 1
       publish()
     },
-    toggleSwitchOn: function (profileId, key, isDefault) {
-      var target = isDefault ? draft.default.switchOn : profileOf(profileId).switchOn
-      target[key] = !target[key]
+    toggleSwitchOn: function (key) {
+      draft.chain.switchOn[key] = !draft.chain.switchOn[key]
       publish()
     },
-    setStrategy: function (profileId, value, isDefault) {
-      // 策略只管起点，所以名单本身不动——只改"从哪条开始"。目标链由调用方
-      // 点名（与其余 setter 一致），不靠"当前停在哪个 tab"推断。
-      if (isDefault) draft.default.strategy = value
-      else profileOf(profileId).strategy = value
+    setStrategy: function (value) {
+      // 策略只管起点，所以名单本身不动——只改"从哪条开始"。
+      draft.chain.strategy = value
       publish()
     },
-    setWeight: function (profileId, index, value, isDefault) {
+    setWeight: function (index, value) {
       var parsed = Number(value)
       var clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 0
-      var list = listOf(profileId, isDefault)
-      if (list[index] !== undefined) list[index].weight = clamped
+      if (draft.chain.candidates[index] !== undefined) draft.chain.candidates[index].weight = clamped
       publish()
     },
-    setDefaultEnabled: function (value) { draft.default.enabled = value; publish() },
     openModal: function (modal) {
       ui.modal = modal
       ui.riskAck = false
       // The catalog is loaded lazily: at apply time the host may still be
       // registering adapters, and an early read caches an empty catalog
       // forever.
-      if (modal.kind === 'new-profile' || modal.kind === 'add-candidate') ensureCatalog()
+      if (modal.kind === 'add-candidate') ensureCatalog()
       publish()
     },
     closeModal: function () { ui.modal = null; ui.riskAck = false; publish() },
@@ -806,9 +675,6 @@ export function createController(ctx, scope, t) {
       checkAborts.clear()
     },
   }
-  // 接管同步状态一建好就读：宿主侧它是独立事实（DSH 的默认模型会被任何一次手动
-  // 换模型改掉），不能从 draft 推，而状态行不该在用户第一次打开弹窗时还是空的。
-  controller.loadDefaultModelStatus()
   return controller
 }
 

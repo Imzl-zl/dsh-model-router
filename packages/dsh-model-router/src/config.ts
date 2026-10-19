@@ -7,11 +7,9 @@
  * `internal/config` waterfall before Cordis restarts the plugin fiber.
  *
  * The shape is the canonical schema from docs/design/product-plan.md section 3:
- * an `enabled` master switch, an array of per-model profiles, and a `default`
- * pure-fallback pool. `candidates[0]` of a matched profile is pinned to the
- * `when` model, so the user's own selection is always in the chain and always
- * attempted — but under the `weight` and `round-robin` strategies it is not
- * necessarily the first hop. Those strategies move the start on purpose.
+ * an `enabled` master switch and the one global fallback chain. The chain's first
+ * hop is the model the user selected in DSH — it is not configured here and the
+ * plugin does not own it — so `candidates` lists the fallbacks only.
  */
 
 import z from '@deepseek-ai/schemastery'
@@ -20,7 +18,6 @@ import {
   DEFAULT_BREAKER_SCOPE,
   DEFAULT_INTERVAL_SECONDS,
   DEFAULT_MAX_ATTEMPTS,
-  DEFAULT_MAX_TOTAL_ATTEMPTS,
   DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
   DEFAULT_PROBE_PROMPT,
   DEFAULT_PROBE_TIMEOUT_SECONDS,
@@ -95,31 +92,21 @@ export const switchOnSchema = z.object({
   quota: z.boolean().default(DEFAULT_SWITCH_ON.quota).description('额度用尽（QUOTA）：同上，换渠道可继续；熔断会让后续请求先跳过这条'),
 })
 
-/** One backup chain for the exact provider/model the user picks. */
-export const profileSchema = z.object({
-  id: z.string().required().description('规则 ID，不可与其他规则重复'),
-  when: z.object({
-    provider: z.string().required().description('用户选中的 provider'),
-    model: z.string().required().description('用户选中的模型 ID'),
-  }).required().description('用户选中这个模型时，本规则生效'),
-  candidates: z.array(candidateSchema).required()
-    .description('按顺序尝试的候选渠道；第一个必须就是 when 模型（钉死，但权重/轮询策略下不一定是第一跳）'),
-  switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
-  maxTotalAttempts: z.number().step(1).min(1).default(DEFAULT_MAX_TOTAL_ATTEMPTS)
-    .description('这个请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
-  stickyTurns: z.number().step(1).min(0).max(99).default(DEFAULT_STICKY_TURNS)
-    .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）。追问刚发过的图片时设 2~3，识图模型多粘几轮'),
-  strategy: strategySchema,
-})
-
-/** The pure fallback pool for models without a dedicated profile. */
-export const defaultSchema = z.object({
-  enabled: z.boolean().default(false).description('是否接管未配置专属规则的模型'),
+/**
+ * The one global fallback chain.
+ *
+ * `candidates` are the FALLBACKS only. The first hop is whatever model the user
+ * selected in DSH — it is not configured here because it is not a constant, and
+ * the plugin does not own it. A failure moves from that hop through this list in
+ * order. An empty list means "nothing to fall back to", and the plugin then
+ * stays out of the request path entirely.
+ */
+export const chainSchema = z.object({
   candidates: z.array(candidateSchema).default([])
-    .description('通用降级池；用户当前选中的模型永远是第一跳，本池是纯备用'),
+    .description('降级候选：第一跳永远是你当前选中的模型（只打一次），失败后按这里的顺序走'),
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
   maxTotalAttempts: z.number().step(1).min(1).default(DEFAULT_POOL_MAX_TOTAL_ATTEMPTS)
-    .description('接管时单请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
+    .description('这个请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
   stickyTurns: z.number().step(1).min(0).max(99).default(DEFAULT_STICKY_TURNS)
     .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）'),
   strategy: strategySchema,
@@ -201,12 +188,8 @@ export const healthSchema = z.object({
 export const Config = z.object({
   enabled: z.boolean().default(false).volatile()
     .description('接管总闸：关闭时所有模型绕过插件，直接走官方适配器。默认关——接管会改请求实际打到的渠道，必须由用户显式打开'),
-  primaryProfileId: z.string().default('').volatile()
-    .description('哪条规则是主模型：开启接管时，新会话的默认模型会被设为它的第一个候选。留空 = 第一条规则'),
-  profiles: z.array(profileSchema).default([]).volatile()
-    .description('路由规则列表；按 when 精确匹配'),
-  default: defaultSchema.default({}).volatile()
-    .description('全局默认兜底：接管未配置专属规则的模型'),
+  chain: chainSchema.default({}).volatile()
+    .description('唯一的降级链：第一跳是你当前选中的模型，失败后按这里配置的候选顺序走'),
   health: healthSchema.default({}).volatile()
     .description('渠道健康监控：运行时记录、连通性检查、发送测试消息、自动禁用四档'),
 })
@@ -247,27 +230,15 @@ export interface SwitchOn {
 // The `@typert` tag below marks this interface as the package's host-face
 // surface: the generator emits a contribution only for a package whose
 // reachable sources carry a marked declaration
-// (packages/typert/generator/src/analyzer.ts:2775-2808), and `Profile` is the
-// plugin's central business type. Why this type, and which alternatives were
+// (packages/typert/generator/src/analyzer.ts:2775-2808), and `ChainConfig` is
+// the plugin's central business type. Why this type, and which alternatives were
 // rejected, are recorded in
 // .agents/notes/implemented/2026-10-15-out-of-tree-build-pipeline.md
-/** One backup chain for the exact provider/model the user picks.
+/** The one global fallback chain; the first hop is the user's own selection.
  *
  * @typert
  */
-export interface Profile {
-  id: string
-  when: { provider: string; model: string }
-  candidates: Candidate[]
-  switchOn: SwitchOn
-  maxTotalAttempts: number
-  stickyTurns: number
-  strategy: Strategy
-}
-
-/** The pure fallback pool for models without a dedicated profile. */
-export interface DefaultProfile {
-  enabled: boolean
+export interface ChainConfig {
   candidates: Candidate[]
   switchOn: SwitchOn
   maxTotalAttempts: number
@@ -327,10 +298,7 @@ export interface BreakerConfig {
 /** Plugin configuration as `apply` sees it: every field is a Volatile accessor. */
 export interface Config {
   enabled: Volatile<boolean>
-  /** Which profile's pinned model new sessions start on. Empty = the first profile. */
-  primaryProfileId: Volatile<string>
-  profiles: Volatile<Profile[]>
-  default: Volatile<DefaultProfile>
+  chain: Volatile<ChainConfig>
   health: Volatile<HealthConfig>
 }
 
@@ -340,12 +308,11 @@ export type RouterOptions = { [K in keyof Config]?: Config[K] extends Volatile<i
 /**
  * Structural CROSS-FIELD validation, run before a config update restarts the
  * plugin fiber. Single-field bounds (a negative number, an empty string) are
- * the schema's job — both production call paths run the schema first
- * (`index.ts:117` reads a Cordis-validated Config, `index.ts:126` runs
- * `Config(raw)` itself), so a guard repeated here is dead code that only
- * starts lying when the schema tightens. What is left is what no single field
- * can know: duplicate ids, an unpinned primary, a repeated route, a weight
- * strategy with nothing to draw, a breaker rule that matches nothing.
+ * the schema's job — both production code paths run the schema first, so a
+ * guard repeated here is dead code that only starts lying when the schema
+ * tightens. What is left is what no single field can know: a repeated route in
+ * the chain, a weight strategy with nothing to draw, a breaker rule that
+ * matches nothing.
  *
  * Note: 为何删掉 8 个数值 guard（实测全被 schema 挡在前面）—— 见
  * .agents/notes/implemented/2026-10-17-finish-the-shared-modules.md；
@@ -358,13 +325,12 @@ export type RouterOptions = { [K in keyof Config]?: Config[K] extends Volatile<i
  *
  * Deliberately narrow: only errors that are wrong in every environment. A
  * candidate whose provider is not registered is environmental drift (the user
- * may uninstall a provider later), so it degrades that profile to disabled
- * with a warning instead of failing the whole plugin — see
- * .agents/notes and docs/design/product-plan.md section 9.
+ * may uninstall a provider later), so it degrades to a warning instead of
+ * failing the whole plugin — see .agents/notes and
+ * docs/design/product-plan.md section 9.
  */
 export function assertStructural(config: {
-  profiles: readonly Profile[]
-  default: DefaultProfile
+  chain: ChainConfig
   health?: HealthConfig
 }): void {
   const [first] = structuralViolations(config)

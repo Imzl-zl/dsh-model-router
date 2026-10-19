@@ -136,13 +136,6 @@ export var ROUTER_CSS = [
   '  background: rgba(239, 68, 68, 0.1) !important;',
   '  border-color: var(--dsw-alias-state-error-primary) !important;',
   '}',
-  '/* The add button is white-on-accent; recolouring the glyph with the accent on',
-  '   hover paints it accent-on-accent (1:1) and the "+" vanishes. Darkening the',
-  '   surface is what a hover needs here: measured 5.96:1 for the white glyph. */',
-  '.dsh-router-add-profile-btn:hover {',
-  '  background: color-mix(in srgb, var(--dsh-router-accent) 88%, black) !important;',
-  '  color: #fff !important;',
-  '}',
   '/* Action buttons in candidate row: up, down, remove */',
   '.dsh-router-action-btn:not(:disabled):hover {',
   '  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;',
@@ -891,24 +884,26 @@ export var S = {
     background: 'color-mix(in srgb, var(--dsh-router-tone-bad) 5%, transparent)',
     boxSizing: 'border-box',
   },
-  dangerZoneTitle: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-  dangerZoneHint: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', marginTop: 3, lineHeight: 1.45 },
-  // 有改动时贴在工作区底部的保存/放弃条。它复制的是顶栏那一对动作，不是
-  // 第二个状态源 —— 见 ui-review.md P1-1。
+  dirtyBarText: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', fontWeight: 500 },
+  // 底部保存条：只在有未保存修改时出现。把顶栏那一对动作放到当前视口里，
+  // 不新增状态源（复用同一对 props）。
   dirtyBar: {
+    position: 'sticky',
+    bottom: 0,
+    zIndex: 2,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    padding: '8px 14px',
-    marginTop: 4,
-    borderRadius: 'var(--dsw-radius-md, 10px)',
-    border: '0.5px solid var(--dsw-alias-border-l2)',
-    background: 'var(--dsw-alias-bg-layer-2)',
-    boxSizing: 'border-box',
-    flexShrink: 0,
+    flexWrap: 'wrap',
+    padding: '10px 14px',
+    marginTop: 12,
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-3)',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    boxShadow: '0 -2px 12px color-mix(in srgb, var(--dsw-alias-shadow, rgba(0,0,0,0.2)) 18%, transparent)',
   },
-  dirtyBarText: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', fontWeight: 500 },
+  sidebarSectionTitle: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-tertiary)', letterSpacing: '0.3px', textTransform: 'uppercase' },
   dirtyBarActions: { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 },
   dirtyBarDiscard: {
     boxSizing: 'border-box',
@@ -1133,11 +1128,6 @@ export var S = {
     transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
     boxSizing: 'border-box',
   },
-  nodeCardPrimary: {
-    borderColor: 'var(--dsh-router-accent)',
-    background: 'linear-gradient(90deg, color-mix(in srgb, var(--dsh-router-accent) 8%, transparent) 0%, var(--dsw-alias-bg-layer-2) 100%)',
-    boxShadow: '0 0 0 1px color-mix(in srgb, var(--dsh-router-accent) 20%, transparent)',
-  },
   nodeCardDragging: {
     opacity: 0.35,
     borderStyle: 'dashed',
@@ -1163,6 +1153,18 @@ export var S = {
   gripHandleDisabled: {
     opacity: 0.18,
   },
+  // 接管开关那一行：左标签右开关，正常的设置行形态。它曾经被塞进标题栏第二行，
+  // 和一句 30 多字的说明互相挤——标题栏是单行定高容器，塞第二行只会叠在一起。
+  takeoverRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    padding: '10px 14px',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    border: '0.5px solid var(--dsw-alias-border-l2)',
+  },
   // 整张卡都是拖拽起点（交互控件除外，见 pipeline.ts 的 dragstart 守卫），所以
   // 光标在卡面上就是 grab；按下时变 grabbing 给出"已经抓住了"的反馈。
   nodeCardDraggable: {
@@ -1171,42 +1173,32 @@ export var S = {
   nodeCardGrabbing: {
     cursor: 'grabbing',
   },
-  primaryCardContainer: {
-    marginBottom: 16,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
+  // 第一跳卡：它不是一个可配置候选（是用户选中的模型），所以用描边而不是填色，
+  // 也不挂 draggable。
+  nodeCardFirstHop: {
+    borderStyle: 'dashed',
+    background: 'transparent',
   },
-  primaryCardHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '0 2px',
+  rankBadgeFirstHop: {
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-tertiary)',
+    borderStyle: 'dashed',
   },
-  primaryCardTitle: {
-    fontSize: 12.5,
+  firstHopBadge: {
+    fontSize: 11,
     fontWeight: 600,
-    // 文字用 accent-text（按主题混合到 AA），accent 本身只留给图标与底。
-    color: 'var(--dsh-router-accent-text)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    letterSpacing: '0.2px',
+    padding: '2px 8px',
+    borderRadius: 'var(--dsw-radius-xs, 4px)',
+    color: 'var(--dsw-alias-label-secondary)',
+    background: 'var(--dsw-alias-bg-layer-3)',
+    border: '0.5px solid var(--dsw-alias-border-l2)',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
-  primaryCardHint: {
+  // 次级说明：开关行、降级段头、链路页头都用它——小、灰、不抢主标题。
+  cardHint: {
     fontSize: 11.5,
     color: 'var(--dsw-alias-label-tertiary)',
-  },
-  // 与 workspaceStatePill / imageRouteBadge 同一条纪律：accent 只进底与边，
-  // 文字走 label-primary（accent 当文字实测深色 3.01:1，低于 AA）。
-  primaryLockedBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 4,
-    fontSize: 11,
-    fontWeight: 500,
-    padding: '3px 8px',
-    borderRadius: 'var(--dsw-radius-sm, 6px)',
   },
   flowConnector: {
     display: 'flex',
@@ -1315,12 +1307,6 @@ export var S = {
     color: 'var(--dsw-alias-label-secondary)',
     border: '0.5px solid var(--dsw-alias-border-l4)',
   },
-  rankBadgePrimary: {
-    background: 'linear-gradient(135deg, var(--dsh-router-accent) 0%, #324ecc 100%)',
-    color: '#ffffff',
-    borderColor: 'transparent',
-    boxShadow: '0 2px 6px color-mix(in srgb, var(--dsh-router-accent) 40%, transparent)',
-  },
   nodeContent: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' },
   modelInfo: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, flex: 1 },
   modelNameRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 },
@@ -1329,12 +1315,9 @@ export var S = {
   // 随弹窗宽度变，写死 260px 在窄弹窗里照样挤。
   modelName: { fontSize: 14.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '0 1 auto', minWidth: 0, maxWidth: '100%' },
   providerBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-secondary)', border: '0.5px solid var(--dsw-alias-border-l2)', fontWeight: 500, fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', flexShrink: 0 },
-  primaryBadge: { fontSize: 11, padding: '2px 8px', borderRadius: 'var(--dsw-radius-xs, 4px)', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 },
-  dotHealthy: { background: 'var(--dsh-router-tone-ok)' },
-  dotDegraded: { background: 'var(--dsh-router-tone-warn)' },
-  dotUnhealthy: { background: 'var(--dsh-router-tone-bad)' },
-  dotUnknown: { background: 'var(--dsw-alias-bg-layer-3)', border: '0.5px solid var(--dsw-alias-border-l3)' },
+  // 完整路由标识：上面的大字模型名会省略，这一行给全的 provider/model。
   modelPath: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'var(--ds-font-family-code, monospace)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' },
+  // 控件区：永远不参与压缩。长模型名把空间让出来，挤不到这些按钮和输入框上。
   nodeControls: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' },
   nodeTuning: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 },
   attemptPicker: { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--dsw-alias-bg-layer-1)', border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md, 8px)', padding: '4px 10px', fontSize: 12.5, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', flexShrink: 0 },
@@ -1353,6 +1336,10 @@ export var S = {
     boxSizing: 'border-box',
     height: 32,
   },
+  actionBtnDisabled: { opacity: 0.3, cursor: 'not-allowed' },
+  // 删除按钮的字形色走插件自己的 tone 变量（按主题取 static 调色板档位），不借
+  // DSH 的 state-error-primary——那个令牌在某个主题里必然是中调，当文字色不达标。
+  actionBtnDanger: { color: 'var(--dsh-router-tone-bad)' },
   actionBtn: {
     width: 26,
     height: 26,
@@ -1642,29 +1629,6 @@ export var S = {
     whiteSpace: 'nowrap',
   },
   // 主模型标记：规则页头的徽标 + 侧栏列表里的小点。accent 只做底与边。
-  primaryProfileBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 4,
-    fontSize: 11,
-    fontWeight: 600,
-    padding: '2px 8px',
-    borderRadius: 'var(--dsw-radius-xs, 4px)',
-    flexShrink: 0,
-  },
-  primaryProfileHint: {
-    fontSize: 11.5,
-    color: 'var(--dsw-alias-label-tertiary)',
-    maxWidth: 260,
-    lineHeight: 1.4,
-  },
-  navPrimaryDot: {
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    flexShrink: 0,
-    border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 40%, transparent)',
-  },
   timelineBarContainer: {
     display: 'flex',
     alignItems: 'flex-end',

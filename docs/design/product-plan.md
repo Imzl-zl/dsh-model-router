@@ -95,48 +95,34 @@ last_updated: "2026-10-12"
 
 ### 2.5 范围
 
-```yaml
-default:                        # 没匹配到任何 when 时
-  enabled: false                # 默认不接管
-```
+一条全局降级链，对所有模型生效（`enabled` 开着时）：
 
-- **只接管配了 `when` 的模型**，没配的行为零变化。
-- `default` 可选打开，作用于所有未显式配置的模型。默认关。
+- **第一跳是用户当前选中的模型**，只打一次，不在配置里；
+- 失败后按 `chain.candidates` 的顺序试降级候选；
+- `chain.candidates` 为空 = 没有降级可走，插件整个不进入请求路径（不接管）。
 
 ## 三、配置示例（canonical schema，已定稿）
 
 ```yaml
 enabled: false                # 接管总闸：关掉后所有模型绕过插件（默认关）
-primaryProfileId: ''          # 哪条规则是主模型；空 = 第一条。开启接管时新会话默认模型被设为它
-profiles:                     # 数组；按 when 精确匹配
-  - id: coding-main
-    when: { provider: deepseek-official, model: deepseek-v4-flash }
-    candidates:               # [0] 钉死为 when 模型：不可删、不可换序；显式 needs 条件对它同样生效
-      - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2, needs: { images: false } }
-      - { provider: pi-ai-gpt,        model: gpt-5,           maxAttempts: 1, needs: { images: true } }
-      - { provider: pi-ai-claude,     model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
-    switchOn: [RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, EMPTY_RESPONSE]
-    maxTotalAttempts: 6
-    stickyTurns: 0            # 带图轮之后粘几个无图轮；0 = 无图轮立即切回
-
-  - id: gpt-main
-    when: { provider: pi-ai-gpt, model: gpt-5 }
-    candidates:
-      - { provider: pi-ai-gpt,    model: gpt-5,           maxAttempts: 1 }
-      - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2 }
-
-default:                      # 纯备用池：primary 永远是运行时用户所选，无钉死节点
-  enabled: false              # 默认不接管未配置的模型
-  candidates:
-    - { provider: deepseek-official, model: deepseek-chat, maxAttempts: 1 }
-  switchOn: [RATE_LIMIT, SERVER, TIMEOUT]
-  maxTotalAttempts: 3
+chain:                        # 唯一的降级链
+  candidates:                 # 降级候选；第一跳永远是你当前选中的模型（只打一次），不在这里配置
+    - { provider: pi-ai-gpt,        model: gpt-5,           maxAttempts: 1, needs: { images: true } }
+    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
+    - { provider: deepseek-official, model: deepseek-chat,  maxAttempts: 1 }
+  switchOn: [RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, EMPTY_RESPONSE]
+  maxTotalAttempts: 6
+  stickyTurns: 0              # 带图轮之后粘几个无图轮；0 = 无图轮立即切回
 
 health:
   timelineBucketSeconds: 600  # 健康时间轴一格代表多少秒；格数固定 24，窗口 = 24 × 它
 ```
 
-配置走 DSH 的 `Config` + `Volatile<T>`，放在 Plugins 页，改完即时生效，不用重启。校验分级见第九节。
+配置走 DSH 的 `Config` + `Volatile<T>`，改完即时生效，不用重启。校验分级见第九节。
+
+旧配置（`profiles` 按模型分规则 + `default` 兜底池）加载时迁成这一条链：规则被钉死的
+`candidates[0]`（= 用户选中的模型）成为隐式第一跳，其余成为降级候选；多条规则只认第一
+条，忽略的条数由宿主日志报出。迁移规则见 `src/chain.ts` 的 `effectiveChain`。
 
 ## 四、用户能看到什么
 
@@ -205,17 +191,19 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 |---|---|---|
 | 1 | 条件路由进哪个 Phase | **Phase 2**。Phase 1 先交付最小可用的有序链，条件路由要多听两个 waterfall |
 | 2 | 第一版就要中文通知 | **要**。成本低，见 4.2 |
-| 3 | `default.enabled` 默认 | **关**。只接管显式配置的模型 |
+| 3 | ~~`default.enabled` 默认~~ | **已作废**（2026-10-19）：单链下没有"未配置的模型"这一说，见第 9 条 |
 | 4 | 辅助调用选路 | **不做**。DSH 已自带且更完整，见第十一节 |
-| 5 | `enabled`（接管总闸）默认 | **关**。接管会改请求实际打到的渠道（资金/限流后果），默认值必须是用户的显式选择；开关在弹窗顶栏常驻可见 |
-| 6 | 开启接管时是否自动改新会话默认模型 | **要，且跟随主模型变化**。机制是 DSH 的 `agentDefaultModel.saveSelection()`，只影响没有 request header / pending pick 的新会话；DSH 每次手动换模型都会覆盖默认，所以插件显示同步状态并提供「重新同步」，不在每个请求上重断言 |
-| 7 | 主模型怎么定 | **显式标记**（`primaryProfileId`），默认第一条，标记悬空回落第一条 |
+| 5 | `enabled`（接管总闸）默认 | **关**。接管会改请求实际打到的渠道（资金/限流后果），默认值必须是用户的显式选择；开关在链路页头一行设置里 |
+| 6 | ~~开启接管时自动改新会话默认模型~~ | **已作废**（2026-10-19）：没有主模型就没有要同步的目标；插件因此完全不写 DSH 的全局配置 |
+| 7 | ~~主模型怎么定~~ | **已作废**（2026-10-19），见第 9 条 |
 | 8 | 健康时间轴口径 | **固定 24 格 × 可配时长桶**（默认 10 分钟）。一格是一段时间，柱高是该桶成功率，空桶是无数据；观测点按时间戳保留 24 小时，改桶长不丢历史 |
+| 9 | 产品结构 | **一条全局降级链**。第一跳永远是用户当前选中的模型（只打一次、不在配置里），失败后按配置的降级候选走；不按模型分规则、不分主次。旧配置加载时迁移（`src/chain.ts`） |
+| 10 | 空链 | **是一种配置**：`chain` 键存在就赢，哪怕没有降级候选；此时插件整个不接管，UI 用空状态说明 |
 
 ## 九、Schema 与界面设计的三个硬约束
 
 1. **备份链顺序必须用 array，不能用 dict**——顺序是本插件的核心语义，dict 无序。
-2. **跨字段校验走 `validateConfig()`**（DSH 插件范式：zod schema 管字段级 + `apply()` 里 `validateConfig()` 管跨字段、加载即抛，见 `llm-retry/src/index.ts:30,123-124`；Cordis `fiber.update()` 先校验再重启，`vendor/cordis/src/fiber.ts:731-751`，保存时即被拒）。分级：结构错误（ID 重复、上限非法、候选为空）硬失败；provider 未注册（环境漂移，如用户事后卸载 provider）降级为该 profile 停用 + `ctx.logger.warn` + UI 徽章警告——硬失败会得到"卸载一个 provider、整个路由器莫名全死"的脆弱性。客户端可用 `modelCatalog().routableProviders` 对 provider 做实时提示；model ID 不校验（catalog 成员是 advisory，核心路由接受未列出 ID）。
+2. **跨字段校验走 `validateConfig()`**（DSH 插件范式：zod schema 管字段级 + `apply()` 里 `validateConfig()` 管跨字段、加载即抛，见 `llm-retry/src/index.ts:30,123-124`；Cordis `fiber.update()` 先校验再重启，`vendor/cordis/src/fiber.ts:731-751`，保存时即被拒）。分级：结构错误（同一条链重复配置同一渠道、权重策略没有正权重）硬失败；provider 未注册（环境漂移，如用户事后卸载 provider）降级为该候选运行时跳过 + `ctx.logger.warn`——硬失败会得到"卸载一个 provider、整个路由器莫名全死"的脆弱性。客户端可用 `modelCatalog().routableProviders` 对 provider 做实时提示；model ID 不校验（catalog 成员是 advisory，核心路由接受未列出 ID）。
 3. **`.description()` 不会显示在任何 UI 上**——DSH 无 Config→表单生成器，见第十节。
 
 ## 十、配置界面设计
@@ -245,10 +233,10 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 
 | 区块 | 字段 |
 |---|---|
-| 接管总闸 | 「接管路由」开关（默认关；关闭时所有模型绕过插件）+ 主模型同步状态行（已同步 / 已被手动选择更改 / 写入失败 + 重新同步） |
-| 全局 | 是否接管未配置的模型（默认关；开启后配纯备用池） |
-| 备份链（每个 profile） | 有序候选列表：provider / 模型 ID，可增删与排序（整卡可拖，交互控件除外）；`candidates[0]` 钉死为 when 模型；「主模型」标记与「设为主模型」 |
-| 候选高级条件 | 图片 / 最小上下文门槛（仅备用候选可配）；推理档位徽标为自动维度 |
+| 接管总闸 | 「接管路由」开关，链路页头一行设置（左标签右开关，默认关）。关闭时插件不进入请求路径 |
+| 第一跳 | 只读卡片：「你当前选中的模型」，说明它只打一次、不在配置里 |
+| 降级链 | 有序候选列表：provider / 模型 ID，可增删与排序（整卡可拖，交互控件除外）；没有钉死节点 |
+| 候选高级条件 | 图片 / 最小上下文门槛；推理档位徽标为自动维度 |
 | 切换条件 | 限流 / 服务端错误 / 超时 / 网络传输 / 空回复（复选框，默认对齐 DSH 自己的 normal policy）+ 请求被拒绝（默认不勾） |
 | 硬上限 | 单请求最多尝试次数 |
 | 渠道健康 | 时间轴 24 格 × 每格时长（1/5/10/30/60 分钟，默认 10 分钟）；柱高=该桶成功率，空槽=无数据 |

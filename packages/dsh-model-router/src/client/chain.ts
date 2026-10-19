@@ -1,18 +1,17 @@
-/** One chain's view: pipeline and policies sub-tabs, shared by profiles and the default pool. */
+/** The one chain's view: pipeline and policies sub-tabs. */
 
 import { useEffect, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { accentBadge, fill } from './format.ts'
-import { Icon, ICON_BOLT, ICON_CLOSE, ICON_GLOBE, ICON_PLUS, ICON_ROUTE, ICON_SAVE, ICON_SHIELD, ICON_UNDO, ICON_WARN } from './icons.ts'
+import { Icon, ICON_BOLT, ICON_PLUS, ICON_ROUTE, ICON_SAVE, ICON_SHIELD, ICON_UNDO, ICON_WARN } from './icons.ts'
 import { BudgetRow, PipelineEditor, SwitchOnGrid } from './pipeline.ts'
 import { SegmentedTabs, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 
 export function ChainView(props) {
   var t = props.t
   var chain = props.chain
-  var isDefault = props.isDefault
-  var chainId = isDefault ? null : chain.id
+  var chainId = 'chain'
   var subTabState = useState('pipeline')
   var subTab = subTabState[0] === 'policies' ? 'policies' : 'pipeline'
   var setSubTab = subTabState[1]
@@ -37,9 +36,8 @@ export function ChainView(props) {
   // 切到另一条链时清掉上一次的聚焦，否则同序号会在新链上误展开一个节点。
   useEffect(function () { setImageFocus(-1) }, [chainId])
 
-  // 面板 id 的作用域：profile 按 id 区分，默认池全局唯一。
-  var tabId = function (name) { return isDefault ? 'default-subtab-' + name : 'subtab-' + name + '-' + chainId }
-  var panelId = function (name) { return isDefault ? 'default-subpanel-' + name : 'subpanel-' + name + '-' + chainId }
+  var tabId = function (name) { return 'subtab-' + name }
+  var panelId = function (name) { return 'subpanel-' + name }
   var subTabIcon = function (name) {
     if (name === 'pipeline') return ICON_ROUTE
     return ICON_SHIELD
@@ -56,8 +54,7 @@ export function ChainView(props) {
   })
 
   // ---- 页头 ----
-  // 只留「哪条链 + 几条备用 + 识图路由」这行硬事实；描述句说的事在节点区的
-  // primaryTargetHint 与 introBox 里已经说过一遍 —— 见 ui-review.md P2-2。
+  // 只留「哪条链 + 几条降级 + 识图路由」这行硬事实，以及接管开关。
   var imageBadge = firstImageIndex === -1 ? null : h('button', {
     type: 'button',
     className: 'dsh-router-image-route-badge',
@@ -70,58 +67,34 @@ export function ChainView(props) {
     },
   }, '🖼️ ' + t('imageRouteBadge'))
 
-  var isPrimaryProfile = !isDefault && props.primaryProfileId === chainId
   var headerCard = h('section', { style: S.workspaceHeaderCard },
     h('div', { style: S.workspaceHeaderLeft },
-      isDefault
-        ? h('div', { style: S.workspaceAvatar }, h(Icon, { d: ICON_GLOBE, size: 18 }))
-        : h('div', { style: S.workspaceAvatar }, (chain.when?.model || 'M').slice(0, 2).toUpperCase()),
+      h('div', { style: S.workspaceAvatar }, h(Icon, { d: ICON_BOLT, size: 18 })),
       h('div', { style: S.workspaceTitles },
         h('div', { style: S.workspaceTitleRow },
-          h('h2', { style: S.workspaceModelName, title: chain.when?.model }, isDefault ? t('defaultProfileTab') : chain.when.model),
-          isDefault
-            ? h('span', {
-                style: chain.enabled ? Object.assign({}, S.workspaceStatePill, accentBadge()) : S.navStatusInactive,
-              }, chain.enabled ? '● ' + t('defaultPoolActiveBadge') : '○ ' + t('defaultPoolInactiveBadge'))
-            : h('span', { style: Object.assign({}, S.workspaceStatePill, accentBadge()) }, '● ' + t('activeBadge')),
-          // 主模型标记：接管开着时，新会话的默认模型就是这一条的第一个候选。
-          // 它是显式标记而不是"列表第一条"——多条规则时"谁是主"必须看得见。
-          isPrimaryProfile
-            ? h('span', { style: Object.assign({}, S.primaryProfileBadge, accentBadge()), title: t('primaryProfileBadgeHint') },
-                h(Icon, { d: ICON_BOLT, size: 11 }),
-                t('primaryProfileBadge'))
-            : null,
-          !isDefault && chain.when?.provider ? h('span', { style: S.providerBadge }, chain.when.provider) : null,
-          h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: isDefault ? chain.candidates.length : Math.max(0, chain.candidates.length - 1) })),
+          h('h2', { style: S.workspaceModelName }, t('chainNavTitle')),
+          h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: chain.candidates.length })),
           imageBadge))),
-    // 删除不放在页头右端：那是主操作位。它现在在 policies 页签底部 —— 见 P1-2。
-    isDefault
-      ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 } },
-          h('span', { style: { fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('defaultProfileSwitchLabel')),
-          h(Switch, {
-            checked: chain.enabled,
-            label: t('defaultProfileSwitchLabel'),
-            disabled: props.disabled,
-            onChange: function (next) { props.onDefaultEnabled(next) },
-          }))
-      : h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' } },
-          isPrimaryProfile
-            ? h('span', { style: S.primaryProfileHint }, t('primaryProfileHint'))
-            : h('button', {
-                type: 'button',
-                className: 'dsh-router-catalog-btn',
-                style: S.catalogBtnSm,
-                disabled: props.disabled,
-                title: t('setPrimaryProfileHint'),
-                onClick: function () { props.onSetPrimaryProfile(chainId) },
-              }, h(Icon, { d: ICON_BOLT, size: 12 }), t('setPrimaryProfileBtn'))))
+    // 接管开关做成一行正常的设置行（左标签右开关），不再塞进标题栏：标题栏是单行
+    // 定高容器，塞进去只会互相挤。开关关着时下面一行说明"现在什么都不做"。
+    h('div', { style: S.takeoverRow },
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 } },
+        h('span', { style: { fontSize: 12.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('takeoverSwitchLabel')),
+        h('span', { style: S.cardHint }, t('takeoverRowHint'))),
+      h('div', { style: { flexShrink: 0 } },
+        h(Switch, {
+          checked: props.enabled,
+          label: t('takeoverSwitchLabel'),
+          disabled: props.disabled,
+          onChange: function (next) { props.onEnabled(next) },
+        }))))
 
-  var introBox = isDefault && !chain.enabled
+  var introBox = !props.enabled
     ? h('div', { style: S.introBox },
         h(Icon, { d: ICON_WARN, size: 20 }),
         h('div', null,
-          h('h3', { style: S.introTitle }, t('defaultProfileIntroTitle')),
-          h('p', { style: S.introDesc }, t('defaultProfileIntroDesc'))))
+          h('h3', { style: S.introTitle }, t('takeoverOffTitle')),
+          h('p', { style: S.introDesc }, t('takeoverOffDesc'))))
     : null
 
   // ---- 候选链页签 ----
@@ -131,24 +104,22 @@ export function ChainView(props) {
       className: 'dsh-router-catalog-btn',
       style: S.catalogBtnLg,
       disabled: props.disabled,
-      onClick: function () { props.onOpenAddCandidate(chainId, isDefault) },
+      onClick: props.onOpenAddCandidate,
     }, h(Icon, { d: ICON_PLUS, size: 13 }), t('addCandidateBtn')))
 
-  var visionGuide = isDefault
-    ? null
-    : h('div', { style: S.guideBox },
-        h('div', { style: S.guideHeader },
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            h(Icon, { d: ICON_WARN, size: 16 }),
-            h('strong', null, t('visionWorkflowTitle'))),
-          h('button', {
-            type: 'button',
-            className: 'dsh-router-guide-toggle',
-            style: S.guideToggleBtn,
-            'aria-expanded': guideOpen,
-            onClick: function () { setGuideOpen(!guideOpen) },
-          }, guideOpen ? t('visionGuideCollapse') : t('visionGuideExpand'))),
-        guideOpen ? h('p', { style: S.guideContent }, t('visionWorkflowText')) : null)
+  var visionGuide = h('div', { style: S.guideBox },
+    h('div', { style: S.guideHeader },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        h(Icon, { d: ICON_WARN, size: 16 }),
+        h('strong', null, t('visionWorkflowTitle'))),
+      h('button', {
+        type: 'button',
+        className: 'dsh-router-guide-toggle',
+        style: S.guideToggleBtn,
+        'aria-expanded': guideOpen,
+        onClick: function () { setGuideOpen(!guideOpen) },
+      }, guideOpen ? t('visionGuideCollapse') : t('visionGuideExpand'))),
+    guideOpen ? h('p', { style: S.guideContent }, t('visionWorkflowText')) : null)
 
   var pipelinePanel = h('section', {
     id: panelId('pipeline'),
@@ -156,58 +127,36 @@ export function ChainView(props) {
     'aria-labelledby': tabId('pipeline'),
     style: S.card,
   },
-    isDefault
-      ? h('div', { style: S.sectionHeader },
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-            h('h3', { style: Object.assign({}, S.sectionTitle, { fontSize: 13.5 }) }, t('defaultPoolTitle')),
-            h('p', { style: S.sectionSubtitle }, t('defaultPoolSubtitle'))))
-      : null,
     h(PipelineEditor, {
       t: t,
       candidates: chain.candidates,
       strategy: chain.strategy,
-      isDefault: isDefault,
       disabled: props.disabled,
       catalog: props.catalog,
       passive: props.passive,
       discover: props.discover,
       probe: props.probe,
-      onStrategy: function (val) { props.onStrategy(chainId, val, isDefault) },
+      onStrategy: function (val) { props.onStrategy(val) },
       onJumpHealth: props.onJumpHealth,
-      onMaxAttempts: function (index, value) { props.onMaxAttempts(chainId, index, value, isDefault) },
-      onMove: function (index, direction) { props.onMove(chainId, index, direction, isDefault) },
-      onReorder: function (fromIndex, toIndex) { props.onReorder(chainId, fromIndex, toIndex, isDefault) },
-      onRemove: function (index) { props.onRemove(chainId, index, isDefault) },
-      onNeeds: function (index, patch) { props.onNeeds(chainId, index, patch, isDefault) },
-      onWeight: function (index, value) { props.onWeight(chainId, index, value, isDefault) },
-      onOpenAddCandidate: function () { props.onOpenAddCandidate(chainId, isDefault) },
+      onMaxAttempts: function (index, value) { props.onMaxAttempts(index, value) },
+      onMove: function (index, direction) { props.onMove(index, direction) },
+      onReorder: function (fromIndex, toIndex) { props.onReorder(fromIndex, toIndex) },
+      onRemove: function (index) { props.onRemove(index) },
+      onNeeds: function (index, patch) { props.onNeeds(index, patch) },
+      onWeight: function (index, value) { props.onWeight(index, value) },
+      onOpenAddCandidate: function () { props.onOpenAddCandidate() },
       onJumpPolicies: function () { setSubTab('policies') },
       maxTotalAttempts: chain.maxTotalAttempts,
       // 识图粘滞在节点的高级条件面板里（imagesMode 为「仅带图」时才出现），
       // 不在这里渲染 —— 见 docs/design/ui-review.md P0-1。
       stickyTurns: chain.stickyTurns,
-      onStickyTurns: function (value) { props.onStickyTurns(chainId, value, isDefault) },
+      onStickyTurns: function (value) { props.onStickyTurns(value) },
       imageFocus: imageFocus,
     }),
     visionGuide,
     addBar)
 
   // ---- 策略页签 ----
-  // 删除落在策略页底部：它属于配置生命周期动作，与「切换条件/预算」一样
-  // 是一次会话里很少碰的东西，放在这里比摆在页头主操作位更合比例。
-  // 二次确认仍由 RiskConfirmation 承担 —— 见 P1-2。
-  var dangerZone = isDefault ? null : h('div', { style: S.dangerZone },
-    h('div', null,
-      h('div', { style: S.dangerZoneTitle }, t('dangerZoneTitle')),
-      h('div', { style: S.dangerZoneHint }, t('dangerZoneHint'))),
-    h('button', {
-      type: 'button',
-      className: 'dsh-router-danger-btn',
-      style: S.dangerBtn,
-      disabled: props.disabled,
-      onClick: function () { props.onDeleteProfile(chainId) },
-    }, h(Icon, { d: ICON_CLOSE, size: 12 }), t('deleteProfileBtn')))
-
   var policiesPanel = h('div', {
     id: panelId('policies'),
     role: 'tabpanel',
@@ -222,7 +171,7 @@ export function ChainView(props) {
         t: t,
         value: chain.switchOn,
         disabled: props.disabled,
-        onToggle: function (key) { props.onToggleSwitchOn(chainId, key, isDefault) },
+        onToggle: function (key) { props.onToggleSwitchOn(key) },
       })),
     h('section', { style: S.card },
       h('div', { style: S.sectionHeader },
@@ -233,28 +182,25 @@ export function ChainView(props) {
         t: t,
         maxTotalAttempts: chain.maxTotalAttempts,
         disabled: props.disabled,
-        onMaxTotal: function (value) { props.onMaxTotal(chainId, value, isDefault) },
-      })),
-    dangerZone)
+        onMaxTotal: function (value) { props.onMaxTotal(value) },
+      })))
 
   // ---- 工作区主体 ----
   // One wrapper around everything the page contributes below the subnav. It
   // is the workspace's scrolling region, so the rule editor's height never
   // pushes the dialog's body into scrolling — the same containment the health
   // workspace gets from S.workspaceScroll.
-  var body = !isDefault || chain.enabled
-    ? h('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 12 } },
-        h('div', { className: 'dsh-router-subnav-bar', style: S.subNavBar },
-          h(SegmentedTabs, {
-            items: subTabs,
-            value: subTab,
-            onChange: function (val) { setSubTab(val) },
-            label: t('subTabsLabel'),
-          })),
-        h('div', { style: S.workspaceScroll },
-          subTab === 'pipeline' ? pipelinePanel : null,
-          subTab === 'policies' ? policiesPanel : null))
-    : null
+  var body = h('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 12 } },
+    h('div', { className: 'dsh-router-subnav-bar', style: S.subNavBar },
+      h(SegmentedTabs, {
+        items: subTabs,
+        value: subTab,
+        onChange: function (val) { setSubTab(val) },
+        label: t('subTabsLabel'),
+      })),
+    h('div', { style: S.workspaceScroll },
+      subTab === 'pipeline' ? pipelinePanel : null,
+      subTab === 'policies' ? policiesPanel : null))
 
   // 保存/放弃的唯一入口在弹窗顶栏，而编辑区在几百像素之下。这条只在有改动时
   // 出现的条把同一对动作放到当前视口里，不新增状态源 —— 见 P1-1。

@@ -6,29 +6,22 @@ import { S } from './styles.ts'
 import { accentBadge, fill, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
 import { configuredRouteList, routeKeyOf } from '../routes.ts'
 import { ChainView } from './chain.ts'
-import { AddCandidateModal, HealthSettingsModal, NewProfileModal } from './modals.ts'
+import { AddCandidateModal, HealthSettingsModal } from './modals.ts'
 import { FailoverDrawer } from './pipeline.ts'
 import { GlobalHealthWorkspace } from './workspace.ts'
-import { Icon, ICON_BOLT, ICON_CHART, ICON_GLOBE, ICON_PLUS, ICON_SEARCH } from './icons.ts'
-import { RiskConfirmation, SettingsForm } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Icon, ICON_BOLT, ICON_CHART, ICON_PLUS } from './icons.ts'
+import { RiskConfirmation, SettingsForm, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 
 export function RouterPage(props) {
   var t = props.t
   var state = props.useRouterPage(function (snapshot) { return snapshot })
   var draft = state.draft
   var disabled = !state.writable || state.saving
+  // 只有两个视图：降级链与渠道健康。旧版左侧是"默认池 + 每条规则一个 tab"，
+  // 现在只有一条链，侧栏也就不再需要列表与搜索。
   var isHealthMode = state.ui.activeId === '__health__'
-  var isDefaultMode = state.ui.activeId === '__default__'
-  var activeProfile = null
-  if (!isHealthMode && !isDefaultMode) {
-    activeProfile = draft.profiles.find(function (profile) { return profile.id === state.ui.activeId }) ?? (draft.profiles.length > 0 ? draft.profiles[0] : null)
-  }
   var modal = state.ui.modal
   var routableProviders = state.ui.catalog?.routableProviders ?? []
-
-  var searchQueryState = useState('')
-  var searchQuery = searchQueryState[0]
-  var setSearchQuery = searchQueryState[1]
 
   var focusRouteState = useState(null)
   var focusRoute = focusRouteState[0]
@@ -41,26 +34,12 @@ export function RouterPage(props) {
     props.onActive('__health__')
   }, [props.onActive])
 
-  var filteredProfiles = draft.profiles.filter(function (profile) {
-    if (!searchQuery.trim()) return true
-    var q = searchQuery.toLowerCase().trim()
-    return (profile.when.model && profile.when.model.toLowerCase().indexOf(q) !== -1)
-      || (profile.when.provider && profile.when.provider.toLowerCase().indexOf(q) !== -1)
-  })
-
-  // All unique physical routes across profiles, default pool, and history
+  // All unique physical routes across the chain and history
   var allPhysicalRoutes = useMemo(function () {
     var set = new Set()
-    draft.profiles.forEach(function (p) {
-      (p.candidates || []).forEach(function (c) {
-        if (c.provider && c.model) set.add(routeKeyOf(c.provider, c.model))
-      })
+    draft.chain.candidates.forEach(function (c) {
+      if (c.provider && c.model) set.add(routeKeyOf(c.provider, c.model))
     })
-    if (draft.default && draft.default.candidates) {
-      draft.default.candidates.forEach(function (c) {
-        if (c.provider && c.model) set.add(routeKeyOf(c.provider, c.model))
-      })
-    }
     if (state.ui.passive) {
       Object.keys(state.ui.passive).forEach(function (r) { set.add(r) })
     }
@@ -68,7 +47,7 @@ export function RouterPage(props) {
       Object.keys(state.ui.discover).forEach(function (r) { set.add(r) })
     }
     return Array.from(set)
-  }, [draft, state.ui.passive, state.ui.discover])
+  }, [draft.chain.candidates, state.ui.passive, state.ui.discover])
 
   var faultedCount = 0
   var degradedCount = 0
@@ -90,11 +69,8 @@ export function RouterPage(props) {
   // 监听——自建版在插件弹窗打开时也会触发保存，且用户改不了键位。
   // 注册见 apply.ts 的 `router: save command`。
 
-  // The dialog's own top bar (footer.ts) carries the title, the enable switch,
-  // save, discard and close. There used to be a second copy of all of that here
-  // as a sticky header, for when this workbench was served as a page on DSH's
-  // Plugins page — that carrier is gone, and with it the `margin: 0 -20px`
-  // bleed and the 768px media query that only ever applied to it.
+  // The dialog's own top bar (footer.ts) carries the title, the takeover switch,
+  // save, discard and close.
 
   // DSH's SettingsForm always renders a footer with its own save button. This
   // dialog anchors save/discard in its top bar, so the footer is suppressed —
@@ -180,103 +156,32 @@ export function RouterPage(props) {
         h('div', { className: 'dsh-router-workbench', style: S.workbench },
           h('aside', { className: 'dsh-router-master-sidebar', style: S.masterSidebar },
             h('div', { style: S.sidebarHeader },
-              h('div', { style: S.searchBox },
-                h(Icon, { d: ICON_SEARCH, size: 13, style: S.searchIcon }),
-                h('input', {
-                  type: 'text',
-                  placeholder: t('searchProfilePlaceholder'),
-                  'aria-label': t('searchProfilePlaceholder'),
-                  value: searchQuery,
-                  onChange: function (e) { setSearchQuery(e.target.value) },
-                  style: S.searchInput,
-                })),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-add-profile-btn',
-                style: S.sidebarAddBtn,
-                disabled: disabled,
-                title: t('addProfile'),
-                onClick: function () { props.onOpenNewProfile() },
-              }, h(Icon, { d: ICON_PLUS, size: 12 }))),
+              h('span', { style: S.sidebarSectionTitle }, t('navSystemSectionTitle'))),
 
             h('div', { className: 'dsh-router-master-list', style: S.masterList },
-              // 1. Global Default Fallback Pool (Pinned at top)
+              // 1. 降级链
               h('div', {
                 role: 'button',
                 tabIndex: 0,
-                className: 'dsh-router-nav-item' + (!isHealthMode && activeProfile === null ? ' active' : ''),
-                style: Object.assign({}, S.navItem, S.navItemDefault, (!isHealthMode && activeProfile === null) ? S.navItemActive : null),
-                onClick: function () { props.onActive('__default__') },
-                onKeyDown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); props.onActive('__default__') } },
+                className: 'dsh-router-nav-item' + (isHealthMode ? '' : ' active'),
+                style: Object.assign({}, S.navItem, isHealthMode ? null : S.navItemActive),
+                onClick: function () { props.onActive('__chain__') },
+                onKeyDown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); props.onActive('__chain__') } },
               },
                 h('div', { style: S.navItemLeft },
-                  h('div', { style: S.navDefaultIconWrap },
-                    h(Icon, { d: ICON_GLOBE, size: 14 })),
+                  h('div', { style: Object.assign({}, S.navModelIconWrap, isHealthMode ? null : S.navModelIconActive) },
+                    h(Icon, { d: ICON_BOLT, size: 13 })),
                   h('div', { style: S.navItemTextWrap },
                     h('div', { style: S.navItemTitleRow },
-                      h('span', { style: S.navItemTitle }, t('defaultProfileTab')),
-                      h('span', {
-                        style: draft.default.enabled ? Object.assign({}, S.navStatusActive, accentBadge()) : S.navStatusInactive,
-                      }, draft.default.enabled ? t('defaultPoolActiveBadge') : t('defaultPoolInactiveBadge'))),
-                    h('div', { style: S.navItemSubText },
-                      draft.default.enabled ? fill(t('candidateCountTag'), { n: draft.default.candidates.length }) : t('defaultProfileNotActive'))))),
+                      h('span', { style: S.navItemTitle }, t('chainNavTitle')),
+                      draft.enabled
+                        ? h('span', { style: Object.assign({}, S.navStatusActive, accentBadge()) }, '● ' + t('statusRunningBadge'))
+                        : h('span', { style: S.navStatusInactive }, '○ ' + t('statusDisabledBadge'))),
+                    h('div', { style: S.navItemSubText }, fill(t('candidateCountTag'), { n: draft.chain.candidates.length }))))),
 
               h('div', { style: S.navDivider }),
 
-              // 2. Profiles Section
-              h('div', { style: S.navSectionHeader },
-                h('span', { style: S.navSectionTitle }, t('profilesTitle')),
-                h('span', { style: S.countBadge }, String(filteredProfiles.length))),
-
-              filteredProfiles.length === 0
-                ? h('div', { style: S.navEmptyHint }, searchQuery ? t('noMatchingProfiles') : t('noProfilesConfigured'))
-                : filteredProfiles.map(function (profile) {
-                    var isActive = !isHealthMode && activeProfile !== null && activeProfile.id === profile.id
-                    var hasImages = profile.candidates.some(function (c) { return c.needs && c.needs.images !== undefined })
-                    var worstCandStatus = 'unknown'
-                    profile.candidates.forEach(function (c) {
-                      var st = routeStatus(state.ui.passive, state.ui.discover, state.ui.probe, routeKeyOf(c.provider, c.model))
-                      if (st === 'unhealthy') worstCandStatus = 'unhealthy'
-                      else if (st === 'degraded' && worstCandStatus !== 'unhealthy') worstCandStatus = 'degraded'
-                      else if (st === 'healthy' && worstCandStatus === 'unknown') worstCandStatus = 'healthy'
-                    })
-                    return h('div', {
-                      key: profile.id,
-                      role: 'button',
-                      tabIndex: 0,
-                      className: 'dsh-router-nav-item' + (isActive ? ' active' : ''),
-                      style: Object.assign({}, S.navItem, isActive ? S.navItemActive : null),
-                      onClick: function () { props.onActive(profile.id) },
-                      onKeyDown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); props.onActive(profile.id) } },
-                    },
-                      h('div', { style: S.navItemLeft },
-                        h('div', { style: Object.assign({}, S.navModelIconWrap, isActive ? S.navModelIconActive : null) },
-                          h(Icon, { d: ICON_BOLT, size: 13 })),
-                        h('div', { style: S.navItemTextWrap },
-                          h('div', { style: S.navItemTitleRow },
-                            h('span', { style: S.navItemTitle, title: profile.when.model }, profile.when.model),
-                            h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-                              // 主模型在列表里也标出来：它是接管开启时新会话的起点，
-                              // 只在详情页标会让用户在列表里认不出哪条是主。
-                              profile.id === draft.primaryProfileId
-                                ? h('span', { style: Object.assign({}, S.navPrimaryDot, accentBadge()), title: t('primaryProfileBadgeHint') })
-                                : null,
-                              worstCandStatus !== 'unknown'
-                                ? h('span', {
-                                    style: Object.assign({}, S.navMicroDot, healthToneStyle(worstCandStatus)),
-                                    title: t('healthStatus' + worstCandStatus[0].toUpperCase() + worstCandStatus.slice(1)),
-                                  })
-                                : null,
-                              h('span', { style: S.navCandidateBadge }, fill(t('candidateCountTag'), { n: Math.max(0, profile.candidates.length - 1) })))),
-                          h('div', { style: S.navItemTagsRow },
-                            h('span', { style: S.navProviderTag }, profile.when.provider),
-                            hasImages ? h('span', { style: S.navImageTag, title: t('needImagesTitle') }, '🖼️') : null))))
-                  })),
-
-            // 3. Global Channel Health Navigation Entry (Fixed at sidebar bottom)
-            h('div', { className: 'dsh-router-sidebar-footer', style: S.sidebarFooter },
-              h('div', { style: S.navFooterHeader },
-                h('span', { style: S.navSectionTitle }, t('navSystemSectionTitle'))),
+              // 2. 渠道健康
               h('div', {
                 role: 'button',
                 tabIndex: 0,
@@ -297,9 +202,9 @@ export function RouterPage(props) {
                           ? h('span', { style: Object.assign({}, S.navStatusDegraded, healthToneBadge('degraded')) }, fill(t('navHealthDegraded'), { n: degradedCount }))
                           : h('span', { style: Object.assign({}, S.navStatusActive, healthToneBadge('healthy')) }, t('navHealthAllHealthy'))),
                     h('div', { style: S.navItemSubText },
-                       fill(t('navHealthCount'), { n: allPhysicalRoutes.length }) + ' · ' + t('navHealthFooterSub'))))))),
+                      fill(t('navHealthCount'), { n: allPhysicalRoutes.length }) + ' · ' + t('navHealthFooterSub'))))))),
 
-          // Right Workspace: Switch between GlobalHealthWorkspace and ChainView
+          // Right Workspace: chain editor or health monitor
           isHealthMode
             ? h('div', {
                 // A flex column, not a plain block: this wrapper sits between the
@@ -333,25 +238,19 @@ export function RouterPage(props) {
                   onOpenDrawer: props.onOpenDrawer,
                   onCheckRoute: props.onCheckRoute,
                   onProbeRoute: props.onProbeRoute,
-                  // 从健康页的用途徽标跳回它所在的链（默认池是 '__default__'）。
-                  onJumpProfile: function (id) {
-                    setFocusRoute(null)
-                    props.onActive(id === '__default__' ? '__default__' : id)
-                  },
                 }))
             : h('div', {
                 // Same containment as the health wrapper above: without it the
                 // chain view's column is content-height and a long candidate
                 // chain pushes the dialog body into scrolling.
                 style: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, alignSelf: 'stretch' },
-                id: activeProfile === null ? 'panel-default' : 'panel-' + activeProfile.id,
+                id: 'panel-chain',
               },
-                h(ChainView, Object.assign({
-                  key: activeProfile === null ? 'default' : activeProfile.id,
+                h(ChainView, {
                   t: t,
-                  chain: activeProfile === null ? draft.default : activeProfile,
-                  isDefault: activeProfile === null,
+                  chain: draft.chain,
                   disabled: disabled,
+                  enabled: draft.enabled,
                   catalog: state.ui.catalog,
                   passive: state.ui.passive,
                   discover: state.ui.discover,
@@ -369,12 +268,7 @@ export function RouterPage(props) {
                   onOpenAddCandidate: props.onOpenAddCandidate,
                   onCheckAll: props.onCheckAll,
                   onOpenHealthModal: props.onOpenHealthModal,
-                  onDefaultEnabled: props.onDefaultEnabled,
-                  onDeleteProfile: props.onDeleteProfile,
                   onJumpHealth: handleJumpHealth,
-                  primaryProfileId: draft.primaryProfileId,
-                  onSetPrimaryProfile: props.onSetPrimaryProfile,
-                  defaultModel: state.ui.defaultModel,
                   // 保存条复用的是顶栏那一对动作，不新增状态源。
                   dirty: state.dirty,
                   saving: state.saving,
@@ -382,7 +276,7 @@ export function RouterPage(props) {
                   invalid: state.invalid,
                   onSave: props.onSave,
                   onDiscard: props.onDiscard,
-                })))))),
+                }))))),
 
     modal !== null && modal.kind === 'health' ? h(HealthSettingsModal, {
       t: t,
@@ -396,34 +290,12 @@ export function RouterPage(props) {
       onClose: props.onCloseModal,
       onUpdateHealth: props.onUpdateHealth,
     }) : null,
-    modal !== null && modal.kind === 'new-profile' ? h(NewProfileModal, {
-      t: t,
-      catalog: state.ui.catalog,
-      catalogLoading: state.ui.catalogLoading,
-      profiles: draft.profiles,
-      configured: draft.profiles.map(function (profile) { return routeKeyOf(profile.when.provider, profile.when.model) }),
-      onClose: props.onCloseModal,
-      onCreate: props.onCreateProfile,
-    }) : null,
     modal !== null && modal.kind === 'add-candidate' ? h(AddCandidateModal, {
       t: t,
       catalog: state.ui.catalog,
       routableProviders: routableProviders,
       onClose: props.onCloseModal,
-      onAdd: function (entries) { props.onAddCandidates(modal.profileId, entries, modal.isDefault) },
-    }) : null,
-    modal !== null && modal.kind === 'delete' ? h(RiskConfirmation, {
-      open: true,
-      title: t('riskConfirmTitle'),
-      description: t('riskConfirmDesc'),
-      acknowledgeLabel: t('riskConfirmCheckbox'),
-      cancelLabel: t('cancel'),
-      closeLabel: t('close'),
-      confirmLabel: t('confirmDeleteBtn'),
-      acknowledged: state.ui.riskAck,
-      onAcknowledgedChange: props.onRiskAck,
-      onCancel: props.onCloseModal,
-      onConfirm: function () { props.onConfirmDelete(modal.profileId) },
+      onAdd: function (entries) { props.onAddCandidates(entries) },
     }) : null,
     state.ui.drawerOpen ? h(FailoverDrawer, {
       key: 'drawer',

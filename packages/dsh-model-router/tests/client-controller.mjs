@@ -340,25 +340,25 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
 // ---- fixtures ----
 
 const switchOn = () => ({ rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false })
-const profile = (over = {}) => ({
-  id: 'p1',
-  when: { provider: 'deepseek', model: 'm' },
-  candidates: [{ provider: 'deepseek', model: 'm', maxAttempts: 1, weight: 0 }],
+const cand = (provider = 'deepseek', model = 'm', over = {}) => ({ provider, model, maxAttempts: 1, weight: 0, ...over })
+// 一条全局降级链：候选就是降级候选，第一跳是用户选中的模型（不在配置里）。
+// 默认给一条候选——大部分用例要有个第 0 个候选可编辑。
+const chainValue = (candidates = [cand()], over = {}) => ({
+  candidates,
   switchOn: switchOn(),
   maxTotalAttempts: 3,
   stickyTurns: 0,
   strategy: 'order',
   ...over,
 })
-const defaultPool = (over = {}) => ({ enabled: false, candidates: [], switchOn: switchOn(), maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
-const config = (over = {}) => ({ enabled: true, profiles: [profile()], default: defaultPool(), ...over })
+const config = (over = {}) => ({ enabled: true, chain: chainValue(), ...over })
 const routeOf = (candidate) => `${candidate.provider}/${candidate.model}`
 
 // ---- save() settlement ----
 
 test('a rejected save surfaces the failure and clears saving', async () => {
   const h = await mount({ value: config(), mutate: () => Promise.reject(new Error('wire down')) })
-  h.actions.onMaxAttempts('p1', 0, '3', false)
+  h.actions.onMaxAttempts(0, '3')
   h.actions.onSave()
   assert.equal(h.state().saving, true, 'saving is set while the write crosses the wire')
   await flush()
@@ -369,13 +369,13 @@ test('a rejected save surfaces the failure and clears saving', async () => {
 
 test('an accepted save settles clean once the Host republishes', async () => {
   const h = await mount({ value: config() })
-  h.actions.onMaxAttempts('p1', 0, '3', false)
+  h.actions.onMaxAttempts(0, '3')
   h.actions.onSave()
   await flush()
   assert.equal(h.state().saving, false)
   assert.equal(h.state().failed, false)
   assert.equal(h.state().dirty, false, 'the republished value re-seeds the draft')
-  assert.equal(h.state().draft.profiles[0].candidates[0].maxAttempts, 3)
+  assert.equal(h.state().draft.chain.candidates[0].maxAttempts, 3)
 })
 
 // ---- validate() renders the shared cross-field rules (../rules.ts) ----
@@ -384,91 +384,50 @@ test('an accepted save settles clean once the Host republishes', async () => {
 // 2026-10-17 起规则只有一个表达式（src/rules.ts），host 抛第一条、这里收全部；
 // 本组钉住的是浏览器侧的保存拦截仍按 key 工作。
 
-test('a profile on the weight strategy with no positive weight blocks the save', async () => {
-  const h = await mount({ value: config({ profiles: [profile({ strategy: 'weight' })] }) })
+test('a weight strategy with no positive weight blocks the save', async () => {
+  const h = await mount({ value: config({ chain: chainValue([cand('a', 'x')], { strategy: 'weight' }) }) })
   assert.equal(h.state().invalid, true)
-  const problem = h.state().problems.find((entry) => entry.key === 'problemProfileWeightNoPositive')
-  assert.ok(problem, 'the profile is named in the problem list')
-  assert.equal(problem.vars.id, 'p1')
+  assert.ok(h.state().problems.some((entry) => entry.key === 'problemWeightNoPositive'))
   h.actions.onSave()
   assert.equal(h.mutateCalls.length, 0, 'the write never reaches the Host')
 })
 
-test('the default pool keeps its own weight-strategy problem', async () => {
-  const h = await mount({ value: config({ default: defaultPool({ enabled: true, strategy: 'weight', candidates: [{ provider: 'a', model: 'x', maxAttempts: 1, weight: 0 }] }) }) })
-  assert.ok(h.state().problems.some((entry) => entry.key === 'problemWeightNoPositive'))
+// ---- one chain: every candidate moves and removes ----
+
+test('the drag guard is scoped to the card, not the whole document', () => {
+  // 浏览器实测抓到的真 bug：卡外还有一层 role="tabpanel"（选路策略面板），
+  // `closest` 拿整篇文档当边界时每张卡都被判成"在面板里"，拖拽一次也发不起来。
+  const source = sourceOf('pipeline.ts')
+  assert.ok(/card\.contains\(hit\)/.test(source),
+    'the interactive-element check must confirm the hit is inside THIS card')
+  assert.ok(!/target\.closest\('button, input[^)]*\)\)\s*\{/.test(source.replace(/\s+/g, ' ')),
+    'a bare closest() over the document is the bug — the outer tabpanel would swallow every drag')
 })
 
-// ---- the pinned primary vs the default pool ----
-
-test('the profile primary stays pinned', async () => {
-  const h = await mount({ value: config() })
-  h.actions.onMove('p1', 0, 1, false)
-  h.actions.onRemove('p1', 0, false)
-  const candidates = h.state().draft.profiles[0].candidates
-  assert.equal(candidates.length, 1, 'the primary cannot be removed')
-  assert.equal(routeOf(candidates[0]), 'deepseek/m', 'the primary cannot be reordered')
-})
-
-test('the default pool has no pinned head: its first candidate moves and removes', async () => {
+test('every candidate moves and removes: there is no pinned head any more', async () => {
   const h = await mount({
     value: config({
-      default: defaultPool({
-        enabled: true,
-        candidates: [
-          { provider: 'a', model: 'x', maxAttempts: 1 },
-          { provider: 'b', model: 'y', maxAttempts: 1 },
-        ],
-      }),
+      chain: chainValue([cand('a', 'x'), cand('b', 'y')]),
     }),
   })
-  h.actions.onActive('__default__')
-  h.actions.onMove(null, 0, 1, true)
-  assert.equal(routeOf(h.state().draft.default.candidates[0]), 'b/y', 'the first pool candidate moves down')
-  h.actions.onMove(null, 1, -1, true)
-  assert.equal(routeOf(h.state().draft.default.candidates[0]), 'a/x', 'the second pool candidate moves back up')
-  h.actions.onMove(null, 0, 1, true)
-  h.actions.onRemove(null, 0, true)
-  assert.deepEqual(h.state().draft.default.candidates.map(routeOf), ['a/x'], 'the first pool candidate removes')
+  h.actions.onMove(0, 1)
+  assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['b/y', 'a/x'], 'the first candidate moves down')
+  h.actions.onMove(1, -1)
+  assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['a/x', 'b/y'], 'the second candidate moves back up')
+  h.actions.onRemove(0)
+  assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['b/y'], 'the first candidate removes')
 })
 
-test('the candidates reorder within allowed bounds', async () => {
+test('the candidates reorder within bounds', async () => {
   const h = await mount({
     value: config({
-      default: defaultPool({
-        enabled: true,
-        candidates: [
-          { provider: 'a', model: '1', maxAttempts: 1 },
-          { provider: 'b', model: '2', maxAttempts: 1 },
-          { provider: 'c', model: '3', maxAttempts: 1 },
-        ],
-      }),
-      profiles: [
-        {
-          id: 'p1',
-          when: { provider: 'deepseek', model: 'm' },
-          candidates: [
-            { provider: 'deepseek', model: 'm', maxAttempts: 1 },
-            { provider: 'sub1', model: 's1', maxAttempts: 1 },
-            { provider: 'sub2', model: 's2', maxAttempts: 1 },
-          ],
-        },
-      ],
+      chain: chainValue([cand('a', '1'), cand('b', '2'), cand('c', '3')]),
     }),
   })
-  // Default pool: full reorder allowed
-  h.actions.onReorder(null, 0, 2, true)
-  assert.deepEqual(h.state().draft.default.candidates.map(routeOf), ['b/2', 'c/3', 'a/1'])
-
-  // Profile: primary (index 0) remains pinned
-  h.actions.onReorder('p1', 0, 2, false)
-  assert.equal(routeOf(h.state().draft.profiles[0].candidates[0]), 'deepseek/m', 'primary cannot be moved via reorder')
-  h.actions.onReorder('p1', 2, 0, false)
-  assert.equal(routeOf(h.state().draft.profiles[0].candidates[0]), 'deepseek/m', 'candidate cannot replace primary via reorder')
-
-  // Profile: candidates 1 and 2 can reorder freely
-  h.actions.onReorder('p1', 2, 1, false)
-  assert.deepEqual(h.state().draft.profiles[0].candidates.map(routeOf), ['deepseek/m', 'sub2/s2', 'sub1/s1'])
+  h.actions.onReorder(0, 2)
+  assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['b/2', 'c/3', 'a/1'])
+  h.actions.onReorder(2, 1)
+  assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['b/2', 'a/1', 'c/3'])
 })
 
 // ---- scope republish vs the draft ----
@@ -476,20 +435,20 @@ test('the candidates reorder within allowed bounds', async () => {
 test('a republication with the same value keeps the unsaved draft', async () => {
   const value = config()
   const h = await mount({ value })
-  h.actions.onMaxAttempts('p1', 0, '3', false)
+  h.actions.onMaxAttempts(0, '3')
   assert.equal(h.state().dirty, true)
   h.republish({ value, revision: 2 })
   assert.equal(h.state().dirty, true, 'an unrelated republish must not wipe the draft')
-  assert.equal(h.state().draft.profiles[0].candidates[0].maxAttempts, 3)
+  assert.equal(h.state().draft.chain.candidates[0].maxAttempts, 3)
 })
 
 test('a genuinely changed Host value re-seeds the draft', async () => {
   const h = await mount({ value: config() })
-  h.actions.onMaxAttempts('p1', 0, '3', false)
+  h.actions.onMaxAttempts(0, '3')
   assert.equal(h.state().dirty, true)
-  h.republish({ value: config({ profiles: [profile({ maxTotalAttempts: 9 })] }), revision: 2 })
+  h.republish({ value: config({ chain: chainValue([], { maxTotalAttempts: 9 }) }), revision: 2 })
   assert.equal(h.state().dirty, false, 'the Host is the authority once its value moves')
-  assert.equal(h.state().draft.profiles[0].maxTotalAttempts, 9)
+  assert.equal(h.state().draft.chain.maxTotalAttempts, 9)
 })
 
 test('an edit after a value-changing republish keeps the draft dirty', async () => {
@@ -498,7 +457,7 @@ test('an edit after a value-changing republish keeps the draft dirty', async () 
   // re-seed runs on every real start, and edits come after it.
   const h = await mount({ value: undefined })
   h.republish({ value: config(), revision: 1 })
-  h.actions.onMaxAttempts('p1', 0, '3', false)
+  h.actions.onMaxAttempts(0, '3')
   assert.equal(h.state().dirty, true, 'the draft and the Host baseline must stay independent objects')
 })
 
@@ -724,26 +683,26 @@ test('re-reading the same passive record does not grow the timeline', async () =
 // 字段，1 是它的默认值；手录带了就必须按用户填的走）。
 test('a manually added candidate keeps the attempt count the user typed', async () => {
   const h = await mount({ value: config() })
-  h.actions.onAddCandidates('p1', [{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 3 }], false)
-  const chain = h.state().draft.profiles[0].candidates
+  h.actions.onAddCandidates([{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 3 }])
+  const chain = h.state().draft.chain.candidates
   assert.equal(chain.length, 2)
   assert.equal(chain[1].maxAttempts, 3, 'the typed attempt count survives')
   // 目录选择路径不带 maxAttempts：默认 1 仍然生效。
-  h.actions.onAddCandidates('p1', [{ provider: 'stub-third', model: 'stub-model' }], false)
-  assert.equal(h.state().draft.profiles[0].candidates[2].maxAttempts, 1)
+  h.actions.onAddCandidates([{ provider: 'stub-third', model: 'stub-model' }])
+  assert.equal(h.state().draft.chain.candidates[2].maxAttempts, 1)
 })
 
 // 回归：侧栏弹窗与插件页共用同一个 controller，而 DSH 的 SettingsForm 卸载即 discard。
 // 关弹窗曾把另一面未保存的编辑静默丢掉。现在弹窗那一侧传的是 no-op。
 test('closing the quick modal does not discard the other surface\'s unsaved edits', async () => {
   const h = await mount({ value: config() })
-  h.actions.onMaxAttempts('p1', 0, '3', false)
+  h.actions.onMaxAttempts(0, '3')
   assert.equal(h.state().dirty, true, 'the edit is unsaved')
   // 弹窗挂一次、再卸一次（等价于打开又关掉侧栏快捷弹窗）。
   h.actions.retainSurface()
   h.actions.releaseSurface()
   assert.equal(h.state().dirty, true, 'the draft survives the modal mount/unmount cycle')
-  assert.equal(h.state().draft.profiles[0].candidates[0].maxAttempts, 3)
+  assert.equal(h.state().draft.chain.candidates[0].maxAttempts, 3)
 })
 
 // 原生快捷键：保存命令注册进 DSH 的 shortcuts 服务（可重绑定、进快捷键设置页、按模态
@@ -761,11 +720,11 @@ test('the save command is registered with DSH\'s shortcuts service and gated by 
   h.actions.retainSurface()
   const resolution = command.resolve({ modal: null })
   assert.equal(resolution.status, 'handled')
-  h.actions.onMaxAttempts('p1', 0, '3', false)
+  h.actions.onMaxAttempts(0, '3')
   resolution.run()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(h.mutateCalls.length, 1, 'running the command saves the staged edit')
-  assert.equal(h.mutateCalls[0].ops.some((op) => op.path[0] === 'profiles'), true)
+  assert.equal(h.mutateCalls[0].ops.some((op) => op.path[0] === 'chain'), true)
 })
 
 // ---- component-level mounts (the loading frame and the surface gate) ----
@@ -781,10 +740,7 @@ const propsFor = (h) => Object.assign({}, h.actions, {
 // Two candidates so the pipeline renders a Connector: the render path covers the
 // dictionary-driven failover tag/notice, not just the form.
 const twoCandidates = () => config({
-  profiles: [profile({ candidates: [
-    { provider: 'deepseek', model: 'm', maxAttempts: 1, weight: 0 },
-    { provider: 'deepseek', model: 'm2', maxAttempts: 1, weight: 0 },
-  ] })],
+  chain: chainValue([cand('deepseek', 'm'), cand('deepseek', 'm2')]),
 })
 
 // C3：DSH 的 SettingsForm 在 namespace 未就绪时不渲染 children
@@ -849,13 +805,7 @@ test('checkAll walks every configured route and lands its verdict keyed by route
   const asked = []
   const h = await mount({
     value: config({
-      profiles: [
-        profile({ candidates: [
-          { provider: 'deepseek', model: 'm', maxAttempts: 1, weight: 0 },
-          { provider: 'other', model: 'm2', maxAttempts: 1, weight: 0 },
-        ] }),
-      ],
-      default: defaultPool({ enabled: true, candidates: [{ provider: 'third', model: 'm3', maxAttempts: 1, weight: 0 }] }),
+      chain: chainValue([cand('deepseek', 'm'), cand('other', 'm2'), cand('third', 'm3')]),
     }),
     remote: {
       routerHealth: {
@@ -892,10 +842,7 @@ test('a run the Host cannot answer still counts every route as 没能检查', as
   // asked for, which is the same lie in the other direction.
   const h = await mount({
     value: config({
-      profiles: [profile({ candidates: [
-        { provider: 'deepseek', model: 'm', maxAttempts: 1, weight: 0 },
-        { provider: 'other', model: 'm2', maxAttempts: 1, weight: 0 },
-      ] })],
+      chain: chainValue([cand('deepseek', 'm'), cand('other', 'm2')]),
     }),
     remote: { routerHealth: { checkConnectivity: () => Promise.resolve({ ok: false }) } },
   })
@@ -1024,8 +971,8 @@ test('the configured-route list has one expression, shared by both halves', asyn
 test('configuration-state badges keep their text in label-primary, not the accent', async () => {
   // 浏览器实测（2026-10-19）：accent 当文字色 —— 深色 2.61:1、浅色 4.28:1，
   // 均低于 AA 的 4.5:1，深色主题下几乎读不出来。这不是审美取舍，是同一份
-  // 语义色纪律（文字永远不是色调色）漏到 accent 上。三处徽标（接管中 / 识图
-  // 路由 / 主模型固定首位）已改回 label-primary + accent 淡染底与描边。
+  // 语义色纪律（文字永远不是色调色）漏到 accent 上。相关徽标（接管中 / 识图
+  // 路由 / 条件已启用）已改回 label-primary + accent 淡染底与描边。
   const format = sourceOf('format.ts')
   const badge = format.slice(format.indexOf('export function accentBadge'))
   assert.ok(badge.includes("color: 'var(--dsw-alias-label-primary)'"),
@@ -1035,7 +982,7 @@ test('configuration-state badges keep their text in label-primary, not the accen
 
   // 徽标类样式同样不得把 accent 放进 color（图标/头像包在外层，不在此列）。
   const styles = sourceOf('styles.ts')
-  for (const name of ['workspaceStatePill', 'imageRouteBadge', 'primaryLockedBadge', 'needStatusBadgeActive']) {
+  for (const name of ['workspaceStatePill', 'imageRouteBadge', 'needStatusBadgeActive', 'firstHopBadge']) {
     const at = styles.indexOf(name + ':')
     assert.ok(at !== -1, `fixture: ${name} exists in styles.ts`)
     const block = styles.slice(at, styles.indexOf('},', at) === -1 ? at + 600 : styles.indexOf('},', at))
@@ -1046,7 +993,7 @@ test('configuration-state badges keep their text in label-primary, not the accen
   // 非徽标的 accent 文字（卡片小标题、行内链接按钮）走 accent-text：按主题
   // 混合到 AA。实测深色 5.37~5.78:1、浅色 6.19~6.85:1；原始 accent 只有
   // 2.6:1 / 4.28:1。
-  for (const name of ['primaryCardTitle', 'policySummaryBtn', 'guideToggleBtn', 'needsBtnActive']) {
+  for (const name of ['policySummaryBtn', 'guideToggleBtn', 'needsBtnActive']) {
     const at = styles.indexOf(name + ':')
     assert.ok(at !== -1, `fixture: ${name} exists in styles.ts`)
     const block = styles.slice(at, styles.indexOf('},', at) === -1 ? at + 600 : styles.indexOf('},', at))
@@ -1060,17 +1007,19 @@ test('configuration-state badges keep their text in label-primary, not the accen
     'accent-text must be resolved per theme (light mixes towards black, dark towards white)')
 })
 
-test('the sidebar add button keeps a visible glyph on hover', async () => {
-  // hover 规则曾把 color 设成 accent，而这个按钮的底色本来就是 accent ——
-  // 悬停时图标变成 accent-on-accent（1:1），加号直接消失。修法是悬停变暗底色、
-  // 图标保持白色（实测 5.96:1）。
+test('no injected hover rule repaints an accent-surface glyph with the accent', async () => {
+  // 曾经 `.dsh-router-add-profile-btn:hover` 把 color 设成 accent，而那个按钮的底色
+  // 本来就是 accent —— 悬停时图标变成 accent-on-accent（1:1），加号直接消失（实测）。
+  // 那个按钮随"按模型分规则"一起删了，但这类错误会再来：任何 hover 规则都不得把
+  // accent 同时给底色和字形。这里对整段注入 CSS 立规矩，不针对某一个类名。
   const styles = sourceOf('styles.ts')
-  const at = styles.indexOf('.dsh-router-add-profile-btn:hover')
-  assert.ok(at !== -1, 'fixture: the hover rule exists')
-  const block = styles.slice(at, styles.indexOf("'}", at) === -1 ? at + 300 : styles.indexOf("'}", at))
-  assert.ok(!block.includes('color: var(--dsh-router-accent)'),
-    'the hover rule must not paint the glyph with the accent over an accent surface')
-  assert.ok(block.includes('color: #fff'), 'the glyph stays white on the darkened surface')
+  const rules = [...styles.matchAll(/\.dsh-router-[\w-]+:hover[^{]*\{([^}]*)\}/g)]
+  assert.ok(rules.length > 0, 'fixture: the bundle carries hover rules')
+  for (const [, body] of rules) {
+    const paintsAccent = /(?:^|;|\s)(?:color|background):\s*var\(--dsh-router-accent\)/.test(body)
+    assert.ok(!paintsAccent,
+      `a hover rule must not paint with the raw accent (it is the surface colour): ${body.trim().slice(0, 80)}`)
+  }
 })
 
 test('the health settings modal is handed the section’s writability', async () => {
@@ -1167,52 +1116,24 @@ test('every async run holds its busy state long enough to be painted', async () 
 
 // ---- per-candidate edits ----
 
-test('weight edits address the named profile', async () => {
+test('weight edits address the one chain', async () => {
   const h = await mount({ value: config() })
-  h.actions.onWeight('p1', 0, '40', false)
-  assert.equal(h.state().draft.profiles[0].candidates[0].weight, 40)
+  h.actions.onWeight(0, '40')
+  assert.equal(h.state().draft.chain.candidates[0].weight, 40)
+  h.actions.onStrategy('round-robin')
+  assert.equal(h.state().draft.chain.strategy, 'round-robin')
+  h.actions.onStrategy('weight')
+  assert.equal(h.state().draft.chain.strategy, 'weight')
 })
 
-test('weight edits address the default pool without throwing', async () => {
-  const h = await mount({ value: config({ default: defaultPool({ enabled: true, candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 0 }] }) }) })
-  h.actions.onWeight(null, 0, '60', true)
-  assert.equal(h.state().draft.default.candidates[0].weight, 60)
-})
-
-test('strategy edits address both named profile and default pool', async () => {
-  const h = await mount({ value: config({ default: defaultPool({ enabled: true }) }) })
-  h.actions.onStrategy('p1', 'round-robin', false)
-  assert.equal(h.state().draft.profiles[0].strategy, 'round-robin')
-  h.actions.onStrategy(null, 'weight', true)
-  assert.equal(h.state().draft.default.strategy, 'weight')
-})
-
-test('a strategy edit on an unknown profile id fails loudly', async () => {
+test('chain-level edits land on the chain, and none of them throw', async () => {
   const h = await mount({ value: config() })
-  assert.throws(() => h.actions.onStrategy('nope', 'weight', false), /no profile "nope"/)
-})
-
-test('an unknown profile id fails loudly instead of editing a phantom list', async () => {
-  const h = await mount({ value: config() })
-  assert.throws(() => h.actions.onMaxAttempts('nope', 0, '2', false), /no profile "nope"/)
-})
-
-test('every profile setter fails loudly on an unknown id, not on a phantom chain', async () => {
-  // M9：三个 setter 曾绕过 profileOf 自己 find——未知 id 时 find 返回 undefined，
-  // 赋值当场 TypeError。调用方（UI）传的是刚渲染过的 id，这种形状只该是响亮的
-  // "没有这个 profile"，而不是一个崩在栈里的 TypeError。
-  const h = await mount({ value: config() })
-  for (const call of [
-    () => h.actions.onMaxTotal('nope', '2', false),
-    () => h.actions.onStickyTurns('nope', '1', false),
-    () => h.actions.onToggleSwitchOn('nope', 'rateLimit', false),
-  ]) {
-    assert.throws(call, /no profile "nope"/)
-  }
-  // 草稿没被碰：响亮的失败不该留下半完成的编辑。
-  assert.equal(h.state().draft.profiles[0].maxTotalAttempts, 3)
-  assert.equal(h.state().draft.profiles[0].stickyTurns, 0)
-  assert.equal(h.state().draft.profiles[0].switchOn.rateLimit, true)
+  h.actions.onMaxTotal('9')
+  h.actions.onStickyTurns('2')
+  h.actions.onToggleSwitchOn('rateLimit')
+  assert.equal(h.state().draft.chain.maxTotalAttempts, 9)
+  assert.equal(h.state().draft.chain.stickyTurns, 2)
+  assert.equal(h.state().draft.chain.switchOn.rateLimit, false)
 })
 
 test('unloading stops the discover timer, aborts the checks in flight, and survives late publishes', async () => {
@@ -1259,12 +1180,24 @@ test('unloading stops the discover timer, aborts the checks in flight, and survi
 
 // ---- legacy shapes ----
 
-test('a profile saved before candidates existed reads as an empty, reported chain', async () => {
-  const legacy = profile()
-  delete legacy.candidates
-  const h = await mount({ value: config({ profiles: [legacy] }) })
-  assert.deepEqual(h.state().draft.profiles[0].candidates, [])
-  assert.ok(h.state().problems.some((entry) => entry.key === 'problemEmptyChain'))
+test('a chain saved before candidates existed reads as an empty chain', async () => {
+  const h = await mount({ value: config({ chain: chainValue([]) }) })
+  assert.deepEqual(h.state().draft.chain.candidates, [])
+  // 空链不是配置错误：插件就是不接管（first hop 之外没有降级可走）。
+  assert.equal(h.state().invalid, false)
+})
+
+test('a legacy default pool is adopted as the chain', async () => {
+  const h = await mount({
+    value: {
+      enabled: true,
+      default: { enabled: true, candidates: [cand('a', 'x'), cand('b', 'y')], switchOn: switchOn(), maxTotalAttempts: 5, stickyTurns: 1, strategy: 'round-robin' },
+    },
+  })
+  assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['a/x', 'b/y'])
+  assert.equal(h.state().draft.chain.maxTotalAttempts, 5)
+  assert.equal(h.state().draft.chain.stickyTurns, 1)
+  assert.equal(h.state().draft.chain.strategy, 'round-robin')
 })
 
 // ---- one surface, one height source, one tone source ----
@@ -1293,7 +1226,7 @@ test('the browser half registers exactly one surface: the sidebar dialog', async
     'the workbench root is the dialog\'s flex column')
   // 两个视图的外包装必须是 flex 列且 alignSelf: stretch：行向容器里 flex:1 管宽，
   // 高度归 align-self 管；少任何一样，该列就按内容高度算并把弹窗体顶滚。
-  for (const id of ['panel-global-health', 'panel-\' + activeProfile.id']) {
+  for (const id of ['panel-global-health', 'panel-chain']) {
     const at = page.indexOf(id)
     assert.ok(at > 0, `fixture: ${id} wrapper exists`)
     const block = page.slice(page.lastIndexOf('style: {', at), at)
@@ -1470,10 +1403,9 @@ test('the timeline window is one rule: the dashboard reads the shared module, ne
     'the browser-side merge must prune by the same rule')
 })
 
-// ---- 接管开关与主模型同步（浏览器侧） ----
+// ---- 接管开关（浏览器侧） ----
 // 开关此前没有控件：apply.ts 的 onEnabled 是个死入口，顶栏徽标只是状态展示。这里
-// 钉住三件事：草稿带得上 primaryProfileId、保存载荷带得上、同步状态来自宿主而不是
-// 从草稿推。
+// 钉住：草稿改得动、保存载荷带得上、新草稿默认关。
 
 test('the takeover switch edits the draft, and the save payload carries it', async () => {
   const h = await mount({ value: config({ enabled: false }) })
@@ -1486,108 +1418,41 @@ test('the takeover switch edits the draft, and the save payload carries it', asy
   const saved = h.mutateCalls.at(-1).ops
   assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'enabled' && op.value === true),
     'the takeover switch must reach the Host through the save payload')
+  assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'chain'),
+    'the chain must be saved alongside the switch')
 })
 
 test('a fresh draft defaults the takeover switch off, like the host schema', async () => {
-  const h = await mount({ value: { profiles: [profile()], default: defaultPool() } })
+  const h = await mount({ value: { chain: chainValue() } })
   assert.equal(h.state().draft.enabled, false)
 })
 
-test('the primary marker follows an explicit pick, and the first profile by default', async () => {
-  const two = [
-    profile(),
-    profile({
-      id: 'p2',
-      when: { provider: 'gw', model: 'other' },
-      candidates: [{ provider: 'gw', model: 'other', maxAttempts: 1, weight: 0 }],
-    }),
-  ]
-  const h = await mount({ value: config({ profiles: two }) })
-  // 没存标记时草稿是空串，宿主按"空 = 第一条"解析；浏览器不做第二种解释。
-  assert.equal(h.state().draft.primaryProfileId, '')
-  h.actions.onSetPrimaryProfile('p2')
-  assert.equal(h.state().draft.primaryProfileId, 'p2')
+test('a legacy per-model config is read as the one chain the Host executes', async () => {
+  // 旧形状：按模型分规则 + 默认兜底池。浏览器看到的必须是宿主 effectiveChain 迁出来的
+  // 那一条——被钉死的 candidates[0]（就是"选中模型"本身）成为隐式第一跳，不再占降级位。
+  const legacy = {
+    enabled: true,
+    profiles: [{
+      id: 'p1',
+      when: { provider: 'deepseek', model: 'm' },
+      candidates: [cand('deepseek', 'm'), cand('backup', 'b')],
+      switchOn: switchOn(),
+      maxTotalAttempts: 6,
+      stickyTurns: 0,
+      strategy: 'order',
+    }],
+    default: { enabled: false, candidates: [], switchOn: switchOn(), maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
+  }
+  const h = await mount({ value: legacy })
+  assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['backup/b'])
+  assert.equal(h.state().draft.chain.maxTotalAttempts, 6)
+  // 保存一次之后，配置就是新形状：旧的 profiles/default 不再被写回。
+  h.actions.onMaxAttempts(0, '2')
   h.actions.onSave()
   await flush()
   const saved = h.mutateCalls.at(-1).ops
-  assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'primaryProfileId' && op.value === 'p2'),
-    'the primary marker must reach the Host through the save payload')
-})
-
-test('creating the first profile marks it primary, and deleting the primary clears the marker', async () => {
-  const h = await mount({ value: config({ profiles: [] }) })
-  h.actions.onCreateProfile({ provider: 'gw', model: 'fresh' })
-  const created = h.state().draft.profiles[0]
-  assert.equal(h.state().draft.primaryProfileId, created.id)
-  h.actions.onSetPrimaryProfile(created.id)
-  h.actions.onDeleteProfile(created.id)
-  h.actions.onConfirmDelete(created.id)
-  assert.equal(h.state().draft.primaryProfileId, '', 'a dangling marker would make the two halves disagree')
-})
-
-test('the sync status is read from the Host, not derived from the draft', async () => {
-  let statusCalls = 0
-  const h = await mount({
-    value: config({ enabled: true }),
-    remote: {
-      routerHealth: {
-        defaultModelStatus: () => {
-          statusCalls += 1
-          return Promise.resolve({
-            ok: true,
-            value: {
-              enabled: true,
-              primary: { provider: 'deepseek', model: 'm' },
-              current: { provider: 'gw', model: 'other' },
-              synced: false,
-              lastError: null,
-            },
-          })
-        },
-        syncDefaultModel: () => Promise.resolve({
-          ok: true,
-          value: {
-            enabled: true,
-            primary: { provider: 'deepseek', model: 'm' },
-            current: { provider: 'deepseek', model: 'm' },
-            synced: true,
-            lastError: null,
-          },
-        }),
-      },
-    },
-  })
-  await flush()
-  assert.equal(statusCalls > 0, true, 'the status line has no other source than the Host')
-  assert.equal(h.state().ui.defaultModel.synced, false)
-  // 草稿里开开关不会让状态行谎称已同步。
-  assert.equal(h.state().draft.enabled, true)
-  h.actions.onSyncDefaultModel()
-  await flush()
-  assert.equal(h.state().ui.defaultModel.synced, true)
-})
-
-test('an accepted save re-reads the sync status, so the line shows what the restart did', async () => {
-  const h = await mount({
-    value: config({ enabled: false }),
-    remote: {
-      routerHealth: {
-        defaultModelStatus: () => Promise.resolve({
-          ok: true,
-          value: { enabled: false, primary: { provider: 'deepseek', model: 'm' }, current: null, synced: false, lastError: null },
-        }),
-      },
-    },
-  })
-  await flush()
-  const before = h.state().ui.defaultModel
-  h.actions.onEnabled(true)
-  h.actions.onSave()
-  await flush()
-  assert.equal(h.state().failed, false)
-  assert.notEqual(h.state().ui.defaultModel, null)
-  assert.equal(h.state().ui.defaultModel.enabled, false, 'the status comes from the Host, which has not restarted yet in this stub')
-  assert.notEqual(h.state().ui.defaultModel, before)
+  assert.ok(saved.every((op) => !['profiles', 'default', 'primaryProfileId'].includes(op.path[0])),
+    'the legacy keys must not be written back')
 })
 
 await Promise.all(pending)

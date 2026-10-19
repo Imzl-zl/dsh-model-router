@@ -41,9 +41,8 @@ import {
   Config,
   assertStructural,
   type Candidate,
-  type DefaultProfile,
+  type ChainConfig,
   type HealthConfig,
-  type Profile,
   type RouterOptions,
 } from './config.ts'
 import { decideAfterInner, decideBeforeInner, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
@@ -58,13 +57,8 @@ import { channelHealthProjection } from './health.ts'
 import { CircuitBreaker, type RouteBlock } from './breaker.ts'
 import { checkConnectivity, type ConnectivityLlm, type ConnectivitySettings } from './connectivity.ts'
 import { probePromptFor, probeRoute } from './probe.ts'
-import {
-  primaryRouteOf,
-  sameRoute,
-  syncDefaultModel,
-  type DefaultModelFace,
-} from './default-model.ts'
-import type { ConnectivityRequest, ConnectivityVerdict, DefaultModelStatus, ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
+import { effectiveChain, type ChainSource } from './chain.ts'
+import type { ConnectivityRequest, ConnectivityVerdict, ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
 
 /**
  * No `declare module '@deepseek-ai/cordis'` augmentation here on purpose. The
@@ -85,8 +79,8 @@ import type { ConnectivityRequest, ConnectivityVerdict, DefaultModelStatus, Prob
  * because the browser half lists the same set for its checks — one definition,
  * both halves.
  */
-function configuredRunRoutes(config: { profiles: readonly Profile[]; default: DefaultProfile }): ProbeRoute[] {
-  return configuredRoutes(config.profiles, config.default).map((key) => routeParts(key))
+function configuredRunRoutes(config: { chain: ChainConfig }): ProbeRoute[] {
+  return configuredRoutes(config.chain).map((key) => routeParts(key))
 }
 
 export default class ModelRouter extends TypertRemoteService {
@@ -106,8 +100,6 @@ export default class ModelRouter extends TypertRemoteService {
   /** Probes currently running (scheduled or manual); a scheduled tick skips while any is in flight. */
   private probeInFlight = 0
   private probeTimerId: ReturnType<typeof setInterval> | undefined
-  /** Why the last default-model sync did not land, for the browser's status line. */
-  private lastDefaultModelError: string | null = null
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'modelRouter', { namespace: 'routerHealth' })
@@ -126,25 +118,27 @@ export default class ModelRouter extends TypertRemoteService {
     const agentsBySession = this.agentsBySession
 
     // Structural validation at load: wrong in every environment, so it fails loud.
-    assertStructural(readConfig(config))
+    const initial = readConfig(config)
+    if (initial.migratedFrom !== 'chain' && initial.migratedFrom !== 'empty') {
+      ctx.logger.warn(
+        `model-router: the config still uses the old ${initial.migratedFrom === 'default' ? 'default pool' : 'per-model profiles'} shape; `
+        + 'it was read as the single global chain. Re-save from the dialog to store the new shape.'
+        + (initial.ignoredProfiles > 0 ? ` ${initial.ignoredProfiles} extra profile(s) could not be represented and were ignored.` : ''),
+      )
+    }
+    assertStructural(initial)
     // Provider audit: same rule at load and at save, so a bad save is rejected by the
     // waterfall instead of killing the running plugin (see the internal/config listener).
-    assertNoAlwaysPolicy(ctx, readConfig(config))
+    assertNoAlwaysPolicy(ctx, initial)
     // Hot updates are validated before Cordis restarts this fiber, so a bad edit
     // is rejected at save time instead of killing the running plugin.
     ctx.on('internal/config', function (this: Fiber, _raw, next) {
       const raw: unknown = next()
       if (this !== ctx.fiber) return raw
       const candidate = Config(raw as RouterOptions)
-      assertStructural({
-        profiles: candidate.profiles.get() as readonly Profile[],
-        default: candidate.default.get() as DefaultProfile,
-        health: candidate.health?.get() as HealthConfig | undefined,
-      })
-      assertNoAlwaysPolicy(ctx, {
-        profiles: candidate.profiles.get() as readonly Profile[],
-        default: candidate.default.get() as DefaultProfile,
-      })
+      const effective = readConfig(candidate)
+      assertStructural(effective)
+      assertNoAlwaysPolicy(ctx, effective)
       return raw
     })
 
@@ -152,21 +146,7 @@ export default class ModelRouter extends TypertRemoteService {
     // at runtime: the candidate is skipped and the request falls through to the
     // user's own route. This warning is best-effort only — providers registered
     // after this plugin loads are not visible here.
-    warnUnregisteredProviders(ctx, readConfig(config))
-
-    // 接管开着就把新会话的默认模型指向主模型。跑在每次 fiber 启动（含配置保存后
-    // 的重启），所以"开启接管"和"换了主模型"都覆盖，不需要第二条更新路径。
-    // 只在新值与现值不同时才写：写一次就会让 DSH 的 HMR 重载一次 profile patch，
-    // 每次都写会让每次启动都多重启一轮。关闭接管不写、也不还原——还原是用旧
-    // 决定覆盖用户此后手动选过的模型。
-    if (config.enabled.get() === true) {
-      const primary = primaryRouteOf(config.profiles.get() as readonly Profile[], config.primaryProfileId.get() as string)
-      void syncDefaultModel(
-        ctx.get('agentDefaultModel') as DefaultModelFace | undefined,
-        primary,
-        (message: string) => ctx.logger.warn(message),
-      ).then((outcome) => { this.lastDefaultModelError = outcome.error })
-    }
+    warnUnregisteredProviders(ctx, initial)
 
     // The durable failover ledger and the channel-health fold, both registered
     // through `ctx.get` (the optional-service rule): a composition without the
@@ -229,11 +209,7 @@ export default class ModelRouter extends TypertRemoteService {
 
           let state = states.current(agent, turn, step)
           if (state === undefined) {
-            const chain = resolveChain(
-              resolved,
-              config.profiles.get() as readonly Profile[],
-              config.default.get() as DefaultProfile,
-            )
+            const chain = resolveChain(resolved, readConfig(config).chain)
             if (chain === undefined) return resolved
             states.setStickyTurns(agent, chain.stickyTurns)
             // 策略只决定从哪条开始；起点之后的前进逻辑与策略无关。
@@ -249,7 +225,7 @@ export default class ModelRouter extends TypertRemoteService {
           // request cannot be served by: an unmet `needs` condition first, then a
           // capability rejection. Conditions apply to EVERY candidate — including
           // the user's own route: an explicit `needs` is the user's stated intent,
-          // and skipping a primary that fails it honors the configuration instead
+          // and skipping a candidate that fails it honors the configuration instead
           // of silently ignoring it. What the user's own route stays exempt from
           // is the automatic machinery: breaker cooldowns and capability
           // pre-validation, which DSH already settled when the selection was made.
@@ -349,9 +325,10 @@ export default class ModelRouter extends TypertRemoteService {
               failoverNotice(
                 candidates[plan.fromIndex]!,
                 candidates[index]!,
-                // 用户自己排的编号，不是策略旋转后的位置。
-                (order[index] ?? index) + 1,
-                order.length,
+                // 用户自己排的降级编号（order[0] 是第一跳，1..N 是降级），不是策略
+                // 旋转后的位置；总数是降级候选数，不含第一跳。
+                order[index] ?? index,
+                Math.max(0, order.length - 1),
                 states.failureCodeOf(agent.session, turn, step),
               ),
               { surfaceOp: 'append' },
@@ -497,51 +474,6 @@ export default class ModelRouter extends TypertRemoteService {
   }
 
   /**
-   * Whether DSH's default model is still this plugin's primary model, and why
-   * the last sync did or did not land.
-   *
-   * The browser reads this to show the sync state next to the takeover switch:
-   * DSH saves every manual model pick as the new default, so a pick the user
-   * made in any session moves the default away from the primary, and that has
-   * to be visible rather than looking like the switch silently stopped working.
-   */
-  @Remote
-  async defaultModelStatus(): Promise<DefaultModelStatus> {
-    const config = readConfig(this.config)
-    const primary = primaryRouteOf(config.profiles, this.config.primaryProfileId.get() as string)
-    const face = this.ctx.get('agentDefaultModel') as DefaultModelFace | undefined
-    const current = face?.currentSelection() ?? null
-    return {
-      enabled: this.config.enabled.get() as boolean,
-      primary,
-      current,
-      synced: primary !== null && sameRoute(current, primary),
-      lastError: this.lastDefaultModelError,
-    }
-  }
-
-  /**
-   * Point new sessions at the primary model now, and report what happened.
-   *
-   * Exposed because the sync runs when the config is saved (a save restarts this
-   * fiber), and a manual pick in between overrides it — the user needs a way to
-   * re-assert without editing anything else.
-   */
-  @Remote
-  async syncDefaultModel(): Promise<DefaultModelStatus> {
-    this.lastDefaultModelError = null
-    const config = readConfig(this.config)
-    const primary = primaryRouteOf(config.profiles, this.config.primaryProfileId.get() as string)
-    const outcome = await syncDefaultModel(
-      this.ctx.get('agentDefaultModel') as DefaultModelFace | undefined,
-      primary,
-      (message: string) => this.ctx.logger.warn(message),
-    )
-    this.lastDefaultModelError = outcome.error
-    return await this.defaultModelStatus()
-  }
-
-  /**
    * Arm the scheduled probe. The interval is user config and defaults to 0
    * (off): a probe spends a token on every tick, so whether that is acceptable
    * is the user's call. A config save restarts this fiber, which re-arms with
@@ -570,12 +502,37 @@ export default class ModelRouter extends TypertRemoteService {
   }
 }
 
-function readConfig(config: Config): { profiles: readonly Profile[]; primaryProfileId: string; default: DefaultProfile; health?: HealthConfig } {
+/**
+ * The effective config both the routing path and the load-time audits read.
+ *
+ * `chain` is not `config.chain.get()` verbatim: a config written by an older
+ * build stored the chain as per-model profiles, and {@link effectiveChain} is
+ * the one place that decides which shape wins. `migratedFrom`/`ignoredProfiles`
+ * exist so the Host can say out loud that a legacy config was reinterpreted
+ * instead of silently discarding what the user configured.
+ */
+function readConfig(config: Config): {
+  enabled: boolean
+  chain: ChainConfig
+  health?: HealthConfig
+  migratedFrom: ChainSource
+  ignoredProfiles: number
+} {
+  // The declared fields are Volatile accessors; the legacy keys schemastery
+  // passed through are plain values (they are not in the schema). Build the
+  // migration input explicitly so neither half of that fact is guessed.
+  const legacy = config as unknown as { default?: unknown; profiles?: unknown }
+  const effective = effectiveChain({
+    chain: config.chain.get() as ChainConfig,
+    ...(legacy.default === undefined ? {} : { default: legacy.default }),
+    ...(legacy.profiles === undefined ? {} : { profiles: legacy.profiles }),
+  })
   return {
-    profiles: config.profiles.get() as readonly Profile[],
-    primaryProfileId: config.primaryProfileId.get() as string,
-    default: config.default.get() as DefaultProfile,
+    enabled: config.enabled.get() as boolean,
+    chain: effective.chain,
     health: config.health?.get() as HealthConfig | undefined,
+    migratedFrom: effective.source,
+    ignoredProfiles: effective.ignoredProfiles,
   }
 }
 
@@ -618,14 +575,14 @@ function mayAdvance(
  * 尚未注册的 provider 会被跳过——在本插件之后注册的 always 策略因此逃过加载校验。
  * 运行时拦截是行为变更（跳过候选 + 新通知形状），属另一轮决策，不在本轮。
  */
-function assertNoAlwaysPolicy(ctx: Context, config: { profiles: readonly Profile[]; default: DefaultProfile }): void {
+function assertNoAlwaysPolicy(ctx: Context, config: { chain: ChainConfig }): void {
   const registered = registeredProviderIds(ctx)
-  eachConfiguredCandidate(config, (candidate, where) => {
+  eachConfiguredCandidate(config, (candidate) => {
     if (!registered.has(candidate.provider)) return
     const policy = ctx.llm.providerRetryPolicy(candidate.provider)
     if (policy?.mode === 'always') {
       throw new Error(
-        `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names a provider whose retry policy is "always" — `
+        `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} names a provider whose retry policy is "always" — `
         + 'unbounded same-route retries would make the total attempt cap unenforceable; '
         + 'set that provider back to the normal policy, or remove it from the chain',
       )
@@ -633,13 +590,13 @@ function assertNoAlwaysPolicy(ctx: Context, config: { profiles: readonly Profile
   })
 }
 
-function warnUnregisteredProviders(ctx: Context, config: { profiles: readonly Profile[]; default: DefaultProfile }): void {
+function warnUnregisteredProviders(ctx: Context, config: { chain: ChainConfig }): void {
   const registered = registeredProviderIds(ctx)
-  eachConfiguredCandidate(config, (candidate, where) => {
+  eachConfiguredCandidate(config, (candidate) => {
     if (!registered.has(candidate.provider)) {
       ctx.logger.warn(
-        `model-router: ${where} candidate ${routeKeyOf(candidate.provider, candidate.model)} names an unregistered provider; `
-        + 'that candidate is skipped at runtime and the profile degrades to the remaining chain',
+        `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} names an unregistered provider; `
+        + 'that candidate is skipped at runtime and the chain continues with the rest',
       )
     }
   })
@@ -651,19 +608,15 @@ function registeredProviderIds(ctx: Context): Set<string> {
 }
 
 /**
- * Walk every configured candidate once — profiles in order, then the default
- * pool. Both load-time audits (the always-policy rejection and the
- * unregistered-provider warning) share this walk; they used to each carry
- * their own copy of the loop, and the second copy is where the two drifts.
+ * Walk every configured fallback once. Both load-time audits (the always-policy
+ * rejection and the unregistered-provider warning) share this walk; they used to
+ * each carry their own copy of the loop, and the second copy is where the two drift.
  */
 function eachConfiguredCandidate(
-  config: { profiles: readonly Profile[]; default: DefaultProfile },
-  visit: (candidate: Candidate, where: string) => void,
+  config: { chain: ChainConfig },
+  visit: (candidate: Candidate) => void,
 ): void {
-  for (const profile of config.profiles) {
-    for (const candidate of profile.candidates) visit(candidate, `profile "${profile.id}"`)
-  }
-  for (const candidate of config.default.candidates) visit(candidate, 'default pool')
+  for (const candidate of config.chain.candidates) visit(candidate)
 }
 
 /** The projection registry's read face this plugin uses; structurally typed to keep the service optional. */
@@ -703,4 +656,4 @@ function gatherConditions(
 // The Typert host-face surface: re-exported so the generator's package model
 // collects the @typert-marked declaration from this entry module
 // (packages/typert/generator/src/analyzer.ts:748-789).
-export type { Profile } from './config.ts'
+export type { ChainConfig } from './config.ts'

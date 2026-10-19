@@ -201,17 +201,14 @@ export function GlobalHealthWorkspace(props) {
           title: t('failoverHistoryButton'),
           onClick: props.onOpenDrawer,
         }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory')))),
-      // 时间轴怎么读：一格多长时间、高度与颜色各是什么。放在工作台头部而不是每张
-      // 卡片上——同一套口径重复 20 遍只是噪声；而没有它，24 根高低不一的柱子没有
-      // 任何解释。
-      h('div', { style: S.timelineScopeHint },
+      // 时间轴怎么读：一格多长时间、看多远、高度与颜色各是什么。一行说完，细节进
+      // tooltip——这一行每张卡片上都看得见，写长了就是噪声。
+      h('div', { style: S.timelineScopeHint, title: t('timelineLegend') },
         h(Icon, { d: ICON_CHART, size: 12, style: { color: 'var(--dsh-router-accent-text)' } }),
         h('span', null, fill(t('timelineScopeLine'), {
-          bars: 24,
-          window: formatWindowHours(props.bucketSeconds ?? 600),
           bucket: props.bucketSeconds ?? 600,
-        })),
-        h('span', { style: S.timelineScopeHintMuted }, t('timelineLegend'))),
+          window: formatWindowHours(props.bucketSeconds ?? 600),
+        }))),
       // What the last run found. Kept on screen until the next run: a run whose
       // results match what was already there changes nothing visible, so the
       // counts are what tell the user the click did something.

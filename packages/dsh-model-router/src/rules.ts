@@ -5,10 +5,8 @@
  * whole; the browser half formats every violation into its problem list —
  * the user fixes what the form shows, not what a log says. Both sides used
  * to carry their own copy of these rules, stitched together by comments
- * promising they were in sync, and they had already drifted: the default
- * pool's repeated route was refused by the host and accepted by the form,
- * so a user could save a config that died on the next load with an English
- * error. The rules now exist once, here.
+ * promising they were in sync, and they had already drifted. The rules now
+ * exist once, here.
  *
  * Single-field bounds (an empty provider, maxAttempts out of range) are NOT
  * here and never were: the schema owns them on the host, and the browser's
@@ -19,7 +17,7 @@
  * .agents/notes/implemented/2026-10-17-policy-into-the-decision-core.md
  */
 
-import type { Candidate, DefaultProfile, HealthConfig, Profile } from './config.ts'
+import type { ChainConfig, HealthConfig } from './config.ts'
 import { routeKeyOf } from './routes.ts'
 
 /**
@@ -35,8 +33,7 @@ export interface Violation {
 
 /** The config shape both sides validate: a host Config's plain value, or a browser draft. */
 export type StructuralInput = {
-  profiles: readonly Profile[]
-  default: DefaultProfile
+  chain: ChainConfig
   health?: HealthConfig
 }
 
@@ -47,62 +44,32 @@ export type StructuralInput = {
  */
 export function structuralViolations(config: StructuralInput): Violation[] {
   const violations: Violation[] = []
-  const seenIds = new Set<string>()
-  for (const profile of config.profiles) {
-    if (seenIds.has(profile.id)) {
+  const candidates = config.chain.candidates
+  // 同一条链上重复的 provider/model 没有意义：它会被各打一遍（各含一次退避等待），
+  // 白吃 attempt 预算，而用户看到的是「我配了两条备用」。目录选择和多条目手录都可能
+  // 录出重复，所以在结构校验就挡住。
+  const seen = new Set<string>()
+  candidates.forEach((candidate, index) => {
+    const key = routeKeyOf(candidate.provider, candidate.model)
+    if (seen.has(key)) {
       violations.push({
-        key: 'problemDuplicateId',
-        vars: { id: profile.id },
-        message: `model-router: duplicate profile id "${profile.id}"`,
+        key: 'problemDuplicateRouteInChain',
+        vars: { route: key, index: index + 1 },
+        message: `model-router: the chain names ${key} more than once `
+          + `— a repeated candidate is attempted twice and burns the budget twice`,
       })
     }
-    seenIds.add(profile.id)
-    if (profile.candidates.length === 0) {
-      violations.push({
-        key: 'problemEmptyChain',
-        vars: { id: profile.id },
-        message: `model-router: profile "${profile.id}" has no candidates`,
-      })
-      // 空链已报；未钉 primary / 重复渠道 / 权重提示都建立在「有候选」上，不叠加。
-      continue
-    }
-    const head = profile.candidates[0]!
-    const pinned = routeKeyOf(profile.when.provider, profile.when.model)
-    if (head.provider !== profile.when.provider || head.model !== profile.when.model) {
-      violations.push({
-        key: 'problemUnpinnedPrimary',
-        vars: { id: profile.id, route: pinned },
-        message: `model-router: profile "${profile.id}" candidates[0] must be the when model `
-          + `(${pinned}), got ${routeKeyOf(head.provider, head.model)}`,
-      })
-    }
-    // 同一条链上重复的 provider/model 没有意义：它会被各打一遍（各含一次退避等待），
-    // 白吃 attempt 预算，而用户看到的是「我配了两条备用」。目录选择和多条目手录都可能
-    // 录出重复，所以在结构校验就挡住，和 ID 重复同级。
-    violations.push(...repeatedRouteViolations(profile.candidates, `profile "${profile.id}"`, profile.id))
-  }
-  violations.push(...repeatedRouteViolations(config.default.candidates, 'default pool', undefined))
+    seen.add(key)
+  })
   // A weight strategy with no positive weight has nothing to draw from, and the
-  // failure would surface as every request silently starting at candidate 0.
-  // 空链已经报了 problemEmptyChain，别再叠加一条权重提示；默认兜底池没有「空链」
-  // 这一说，所以它那边不设长度闸（与 host 旧的抛出点一致）。
-  for (const profile of config.profiles) {
-    if (profile.strategy === 'weight'
-      && profile.candidates.length > 0
-      && profile.candidates.every(candidate => !(candidate.weight > 0))) {
-      violations.push({
-        key: 'problemProfileWeightNoPositive',
-        vars: { id: profile.id },
-        message: `model-router: profile "${profile.id}" uses the weight strategy but no candidate has a positive weight`,
-      })
-    }
-  }
-  if (config.default.strategy === 'weight'
-    && config.default.candidates.every(candidate => !(candidate.weight > 0))) {
+  // failure would surface as every request silently starting at the same hop.
+  if (config.chain.strategy === 'weight'
+    && candidates.length > 0
+    && candidates.every(candidate => !(candidate.weight > 0))) {
     violations.push({
       key: 'problemWeightNoPositive',
       vars: {},
-      message: 'model-router: the default pool uses the weight strategy but no candidate has a positive weight',
+      message: 'model-router: the chain uses the weight strategy but no candidate has a positive weight',
     })
   }
   // 一条两个字段都空白的规则永远命中不了任何东西，留着只会让人以为配过了。
@@ -118,27 +85,5 @@ export function structuralViolations(config: StructuralInput): Violation[] {
       })
     }
   }
-  return violations
-}
-
-/** Reject one chain naming the same physical route twice — profile or default pool. */
-function repeatedRouteViolations(
-  candidates: readonly Candidate[],
-  where: string,
-  profileId: string | undefined,
-): Violation[] {
-  const seen = new Set<string>()
-  const violations: Violation[] = []
-  candidates.forEach((candidate, index) => {
-    const key = routeKeyOf(candidate.provider, candidate.model)
-    if (seen.has(key)) {
-      const message = `model-router: ${where} names ${key} more than once `
-        + `— a repeated candidate is attempted twice and burns the budget twice`
-      violations.push(profileId === undefined
-        ? { key: 'problemDuplicateRouteInPool', vars: { route: key, index: index + 1 }, message }
-        : { key: 'problemDuplicateRoute', vars: { id: profileId, route: key, index: index + 1 }, message })
-    }
-    seen.add(key)
-  })
   return violations
 }

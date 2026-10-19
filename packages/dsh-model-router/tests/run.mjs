@@ -104,10 +104,10 @@ const SCENARIOS = [
       // The fold's failover marker, asserted straight from the durable log: the
       // second header records the route change the lineage unit folds.
       eq('header reasons', headerReasons(events), ['initial', 'change'])
-      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT', 'RATE_LIMIT'])
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT'])
       eq('notice count', notices(events).length, 1)
       ok('notice mentions 限流', notices(events)[0]?.text.includes('限流'))
-      ok('notice names candidate 2/2', notices(events)[0]?.text.includes('候选 2/2'))
+      ok('notice names the first fallback', notices(events)[0]?.text.includes('降级 1/1'))
       eq('final route', finalRoute(events), 'stub-backup/stub-model')
       eq('turn end', turnEnd(events), 'completed')
       // Channel health, folded from the same durable log by the production
@@ -120,7 +120,7 @@ const SCENARIOS = [
       eq('health: answering route clears the error', health['stub-backup/stub-model']?.lastError, undefined)
       ok('health: answering route measures a turn cost', typeof health['stub-backup/stub-model']?.latencyMs === 'number')
       ok('health: answering route measures throughput', typeof health['stub-backup/stub-model']?.throughputTps === 'number')
-      eq('health: timeline is bounded', health['stub-primary/stub-model']?.timeline.length, 2)
+      eq('health: timeline is bounded', health['stub-primary/stub-model']?.timeline.length, 1)
       // The failover-history drawer's data, folded by the production lineage
       // projection from the same log: one entry, the throttled route handing
       // over to the route that answered, settled once that route succeeded.
@@ -158,9 +158,11 @@ const SCENARIOS = [
       'stub-backup': { outcomes: ['fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT'] },
     },
     check(events) {
-      eq('headers', headers(events), ['stub-primary/stub-model'])
+      // 第一跳只打一次，所以 TIMEOUT 之后直接降级；备份候选各有 3 次额度，总上限 3
+      // 精确顶住：1（第一跳）+ 2（备份）= 3。
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
       eq('failed attempt count', failedAttempts(events).length, 3)
-      eq('notices', notices(events), [])
+      eq('notice count', notices(events).length, 1)
       eq('turn end', turnEnd(events), 'error')
     },
   },
@@ -190,7 +192,7 @@ const SCENARIOS = [
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-third/stub-model'])
       const texts = notices(events).map(n => n.text)
       eq('notice count', texts.length, 2)
-      ok('failover notice names candidate 3/3', texts.some(t => t.includes('候选 3/3')))
+      ok('failover notice names the last fallback', texts.some(t => t.includes('降级 2/2')))
       ok('skip notice names stub-backup', texts.some(t => t.includes('stub-backup') && t.includes('已跳过')))
       eq('final route', finalRoute(events), 'stub-third/stub-model')
       eq('turn end', turnEnd(events), 'completed')
@@ -226,7 +228,7 @@ const SCENARIOS = [
       const texts = notices(events).map(n => n.text)
       // 一条切换通知 + 三档跳过各一条。
       eq('notice count', texts.length, 4)
-      ok('failover notice names the route that answered', texts.some(t => t.includes('候选 5/5') && t.includes('stub-third')))
+      ok('failover notice names the route that answered', texts.some(t => t.includes('降级 4/4') && t.includes('stub-third')))
       const tier1 = texts.find(t => t.includes('stub-no-reasoning'))
       const tier2 = texts.find(t => t.includes('stub-unregistered'))
       const tier3 = texts.find(t => t.includes('stub-backup'))
@@ -263,19 +265,19 @@ const SCENARIOS = [
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-third/stub-model'])
       const texts = notices(events).map(n => n.text)
       eq('notice count', texts.length, 2)
-      ok('failover notice names candidate 3/3', texts.some(t => t.includes('候选 3/3')))
+      ok('failover notice names the last fallback', texts.some(t => t.includes('降级 2/2')))
       ok('condition skip names stub-backup with the threshold reason', texts.some(t => t.includes('stub-backup') && t.includes('使用条件不满足') && t.includes('999999')))
       eq('final route', finalRoute(events), 'stub-third/stub-model')
       eq('turn end', turnEnd(events), 'completed')
     },
   },
   {
-    name: 'primary-condition-skip',
-    note: '条件对 primary 同样生效：本步不满足其显式条件时跳过，链条继续且留痕',
+    name: 'fallback-condition-skip',
+    note: '降级候选的条件不满足（预估上下文未达门槛）被跳过，链条继续且留痕',
     router: { enabled: true, profiles: [profile([
-      // primary 自己配了条件——显式条件是用户意图，不是插件猜测，跳过它不等于静默改路。
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, needs: { minContextTokens: 999999 } },
-      C('stub-backup', 1),
+      C('stub-primary', 1),
+      // 第一个降级候选配了条件——显式条件是用户意图，不满足就跳过它，不静默改路。
+      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, needs: { minContextTokens: 999999 } },
       C('stub-third', 1),
     ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
     script: {
@@ -284,11 +286,11 @@ const SCENARIOS = [
       'stub-third': { outcomes: ['ok'] },
     },
     check(events) {
-      eq('headers', headers(events), ['stub-backup/stub-model'])
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-third/stub-model'])
       const texts = notices(events).map(n => n.text)
-      eq('notice count', texts.length, 1)
-      ok('condition skip names the primary with the threshold reason', texts.some(t => t.includes('stub-primary') && t.includes('使用条件不满足') && t.includes('999999')))
-      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('notice count', texts.length, 2)
+      ok('condition skip names stub-backup with the threshold reason', texts.some(t => t.includes('stub-backup') && t.includes('使用条件不满足') && t.includes('999999')))
+      eq('final route', finalRoute(events), 'stub-third/stub-model')
       eq('turn end', turnEnd(events), 'completed')
     },
   },
@@ -347,7 +349,7 @@ const SCENARIOS = [
     },
     check(events) {
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
-      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT', 'RATE_LIMIT'])
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT'])
       eq('notice count', notices(events).length, 1)
       ok('notice mentions 限流', notices(events)[0]?.text.includes('限流'))
       // 用户自己选的那一条永远不跳过——禁用名单不该能覆盖人的显式选择。
@@ -411,7 +413,7 @@ const SCENARIOS = [
     note: '候选渠道声明 always 重试策略：加载即拒绝（无上限重试会让总上限失效）',
     // 已记录决策：docs/design/dsh-capability-boundary.md §三 G2 与 open-questions 一.3。
     // 策略是用户在每个渠道的 Models 设置里自己选的，所以必须在加载时挡住。
-    router: { enabled: true, profiles: [profile([C('stub-primary', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { enabled: true, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
     script: { policy: { mode: 'always' }, 'stub-primary': { outcomes: ['ok'] } },
     expectBootFailure: 'retry policy is "always"',
     check() {},
@@ -550,35 +552,27 @@ const SCENARIOS = [
     },
   },
   {
-    name: 'takeover-on-syncs-the-primary-at-load',
-    note: '接管开着：启动时就尝试把新会话默认模型指向主模型，写不进去也不炸插件',
-    // 主模型的 when 与 overlay 的 agent-default-model 不同，所以同步一定会在加载时
-    // 跑一次。这里能观测的是"插件照常加载、照常路由"——写入本身在 tests/remote.mjs
-    // 里对真实 agentDefaultModel 服务断言（那个组合提供 profileContext，configEditor
-    // 真的落盘）；本环境的 logger.warn 不出现在 stdout/stderr，所以不在这里断言日志。
-    router: {
-      enabled: true,
-      primaryProfileId: 'p1',
-      profiles: [profile([C('stub-backup', 2), C('stub-primary', 1)], { when: { provider: 'stub-backup', model: 'stub-model' } })],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
-    },
-    script: { 'stub-primary': { outcomes: ['ok'] } },
-    check(events, combined) {
+    name: 'no-fallback-means-no-takeover',
+    note: '没配降级候选：插件不接管，请求按默认模型原样发出',
+    // 空链是"没有降级可走"的真实配置。这时插件整个不进入请求路径——否则它会把自己
+    // 的第一跳一枪上限强加给一个它没有任何东西可加的请求上。
+    router: { enabled: true, chain: { candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    script: { 'stub-primary': { outcomes: ['fail:SERVER', 'ok'] } },
+    check(events) {
       eq('turn end', turnEnd(events), 'completed')
-      // 请求解析到 stub-primary，没有任何规则的 when 是它，所以插件不接管。
       eq('headers', headers(events), ['stub-primary/stub-model'])
-      eq('final route', finalRoute(events), 'stub-primary/stub-model')
-      eq('notices', notices(events), [])
-      ok('the plugin fiber survived the load-time sync', !combined.includes('model-router:'),
-        'a sync failure must be reported, not thrown into the fiber')
+      eq('notices', notices(events), [], 'no chain was consulted, so no switch notice')
+      // 被动健康与接管无关：它是耐久日志的旁观者，照实记录这次成功。
+      const health = channelHealth(events)
+      eq('health: the untaken step is still observed', health['stub-primary/stub-model']?.status, 'healthy')
     },
   },
   {
     name: 'invalid-config-rejected',
-    note: '结构错误（重复 ID）在加载时响亮失败，不静默跳过',
-    router: { enabled: true, profiles: [profile([C('stub-primary', 1)], { id: 'dup' }), profile([C('stub-backup', 1)], { id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    note: '结构错误（同一条链重复配置同一渠道）在加载时响亮失败，不静默跳过',
+    router: { enabled: true, chain: { candidates: [C('stub-primary', 1), C('stub-primary', 1)], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
     script: { 'stub-primary': { outcomes: ['ok'] } },
-    expectBootFailure: 'duplicate profile id "dup"',
+    expectBootFailure: 'names stub-primary/stub-model more than once',
     check() {},
   },
 ]
@@ -599,6 +593,10 @@ function candidateYaml(c, indent) {
 }
 
 function overlayYaml(router, selection) {
+  // 场景仍按"profile"写（candidates[0] = 用户选中的模型），overlay 生成时转成单链：
+  // 被钉死的第一个候选成为隐式第一跳，其余是降级候选。这正是产品上的迁移规则，
+  // 场景因此不需要为形状变化重写一遍。
+  const chain = chainOf(router)
   return `- id: llm-deepseek
   disabled: true
 
@@ -622,27 +620,43 @@ ${selection?.reasoningEffort === undefined ? '' : `    reasoningEffort: ${select
       name: '${PLUGIN}'
       config:
         enabled: ${router.enabled ?? false}
-        ${router.primaryProfileId === undefined ? '' : `primaryProfileId: ${router.primaryProfileId}\n        `}profiles:
-${router.profiles.map(p => `          - id: ${p.id}
-            when: { provider: ${p.when.provider}, model: ${p.when.model} }
-            candidates:
-${p.candidates.map(c => candidateYaml(c, '              ')).join('\n')}
-            switchOn: { rateLimit: ${p.switchOn.rateLimit}, server: ${p.switchOn.server}, timeout: ${p.switchOn.timeout}, transport: ${p.switchOn.transport}, emptyResponse: ${p.switchOn.emptyResponse}, invalidRequest: ${p.switchOn.invalidRequest} }
-            maxTotalAttempts: ${p.maxTotalAttempts}${p.stickyTurns === undefined ? '' : `
-            stickyTurns: ${p.stickyTurns}`}${p.strategy === undefined ? '' : `
-            strategy: ${p.strategy}`}`).join('\n')}
-        default:
-          enabled: ${router.default.enabled}
+        chain:
           candidates:
-${router.default.candidates.map(c => candidateYaml(c, '            ')).join('\n')}
-          switchOn: { rateLimit: ${router.default.switchOn.rateLimit}, server: ${router.default.switchOn.server}, timeout: ${router.default.switchOn.timeout}, transport: ${router.default.switchOn.transport}, emptyResponse: ${router.default.switchOn.emptyResponse}, invalidRequest: ${router.default.switchOn.invalidRequest} }
-          maxTotalAttempts: ${router.default.maxTotalAttempts}
+${chain.candidates.map(c => candidateYaml(c, '            ')).join('\n')}
+          switchOn: { rateLimit: ${chain.switchOn.rateLimit}, server: ${chain.switchOn.server}, timeout: ${chain.switchOn.timeout}, transport: ${chain.switchOn.transport}, emptyResponse: ${chain.switchOn.emptyResponse}, invalidRequest: ${chain.switchOn.invalidRequest} }
+          maxTotalAttempts: ${chain.maxTotalAttempts}${chain.stickyTurns === undefined ? '' : `
+          stickyTurns: ${chain.stickyTurns}`}${chain.strategy === undefined ? '' : `
+          strategy: ${chain.strategy}`}
 ${router.breaker === undefined ? '' : `        health:
           breaker:
             enabled: ${router.breaker.enabled}
             rules:
 ${router.breaker.rules.map(r => `              - { code: '${r.code}', message: '${r.message}', cooldownSeconds: ${r.cooldownSeconds}, scope: '${r.scope ?? 'route'}' }`).join('\n')}`}
 `
+}
+
+/** A scenario's router config as the single chain the Host executes. */
+function chainOf(router) {
+  if (router.chain !== undefined) return router.chain
+  // Legacy authoring shape: one profile whose candidates[0] is the selected model.
+  const adopted = router.profiles?.[0]
+  if (adopted !== undefined) {
+    return {
+      candidates: adopted.candidates.slice(1),
+      switchOn: adopted.switchOn ?? { ...SWITCH_ON },
+      maxTotalAttempts: adopted.maxTotalAttempts ?? 6,
+      stickyTurns: adopted.stickyTurns,
+      strategy: adopted.strategy,
+    }
+  }
+  // Legacy authoring shape: the pure fallback pool (no pinned head).
+  return {
+    candidates: router.default?.candidates ?? [],
+    switchOn: router.default?.switchOn ?? { ...SWITCH_ON },
+    maxTotalAttempts: router.default?.maxTotalAttempts ?? 3,
+    stickyTurns: router.default?.stickyTurns,
+    strategy: router.default?.strategy,
+  }
 }
 
 function boot(scenario) {
