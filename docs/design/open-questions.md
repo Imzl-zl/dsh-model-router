@@ -88,3 +88,23 @@ last_updated: "2026-10-17"
 
 **前置说明**：第 1、2 项改同一段代码（`index.ts:317-362`、`router.ts`），同一次提交落地；
 第 3、4、5 项互相独立，可并行。
+
+## 六、接管开关与主模型同步（2026-10-19，全部关闭）
+
+背景：用户首次安装后提出四类问题——什么时候接管/有没有开关/开启后是否自动改模型、
+"近期记录"是多久的、探测端点为什么有吞吐、模型名挤压与只能抓握把拖动。其中三条经源码
+核查是缺陷（`onEnabled` 是死入口、时间线是"最近 24 次观测"而非时间桶、探测与被动吞吐
+混印），一条是设计缺口（拖拽起点只有 20px 握把）。
+
+| # | 定案 | 依据与实测 | 影响面 |
+|---|---|---|---|
+| 1 | **接管开关可见，且默认关** | `config.enabled` 原本默认 true，而 `apply.ts` 的 `onEnabled` 从未被渲染——顶栏徽标不可点，"建好规则即接管"没有任何确认步骤。接管会改请求实际打到的渠道（资金/限流后果），默认值必须是显式选择。存量已存 `enabled: true` 的配置不动 | `config.ts` 的 `enabled` 默认值；顶栏 `Switch` |
+| 2 | **开启时把新会话默认模型写成主模型，并跟随变化** | 唯一机制是 DSH 的 `agentDefaultModel.saveSelection()`：`currentSelection()` 只在会话没有 request header、没有 pending pick 时被读（`api/session-controller/src/agent.ts:299-304`），所以影响的恰好只有新会话，运行中的会话留在自己的 header/pick 上。代价：DSH 每次手动换模型都会把默认改掉（`commands.ts:177`），所以插件显示同步状态并给「重新同步」，不在每个请求上重断言 | 新模块 `src/default-model.ts`；`index.ts` 加载时同步；两个 `@Remote` |
+| 3 | **主模型 = 显式标记，默认第一条，悬空回落第一条** | 多条规则时"谁是主"必须看得见；把"第一条"同时当候选链起点与新会话默认，会让改排序顺带改掉新会话从哪开始 | `config.ts` 的 `primaryProfileId`；列表小点 + 详情页徽标与按钮 |
+| 4 | **时间轴 24 格固定 + 桶长可配（默认 10 分钟）** | 旧口径"最近 24 次观测、一格一次调用"没有时间含义：一天调两次与一分钟调两次画出同一张图。新口径柱高=该桶成功率（healthy 1 / degraded 0.5 / unhealthy 0），颜色 ≥99% 绿 / ≥90% 黄 / <90% 红，空桶=无数据。观测点按时间戳保留 24h + 600 条，改桶长不丢历史 | `src/timeline.ts` 重写；`health.ts` 裁剪规则；`health-ui.ts` 仪表盘；`health.timelineBucketSeconds` |
+| 5 | **探测与被动指标分开表述，吞吐只在有真实输出时出现** | 探测只测首字（`probe.ts` 首字节即 abort），不产生输出也就没有吞吐；被动的 `usage.outputTokens ÷ 本步耗时`含首字等待，是端到端输出速率不是解码速率。混印在同一行会被当成同一次测量 | `HealthSignalDot`、`ChannelMetricsDashboard`、三条 hint 字典 |
+| 6 | **整卡可拖，交互控件除外** | `draggable` 原本只挂在 20px 握把上。HTML5 拖放自建指针方案的替代被否（要重做拖影/放置/自动滚动）；触屏仍不可用，上下按钮保留 | `pipeline.ts` 的 `dragstart` 守卫 + 注入 CSS |
+| 7 | **模型名统一可压缩 + title + 中间省略** | 网关模型 ID 常是一整段 UUID，末尾截断后同一网关下一堆模型共用前缀、截出来全都一样。完整标识仍在下方 `provider/model` 路径与 title | `format.ts` 的 `shortModelName`；候选卡/健康工作台/侧栏 |
+
+取舍、被否方案（含每案最强理由）与代价见
+`.agents/notes/implemented/2026-10-19-takeover-switch-primary-sync-and-timeline-buckets.md`。

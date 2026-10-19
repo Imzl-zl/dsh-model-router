@@ -58,7 +58,13 @@ import { channelHealthProjection } from './health.ts'
 import { CircuitBreaker, type RouteBlock } from './breaker.ts'
 import { checkConnectivity, type ConnectivityLlm, type ConnectivitySettings } from './connectivity.ts'
 import { probePromptFor, probeRoute } from './probe.ts'
-import type { ConnectivityRequest, ConnectivityVerdict, ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
+import {
+  primaryRouteOf,
+  sameRoute,
+  syncDefaultModel,
+  type DefaultModelFace,
+} from './default-model.ts'
+import type { ConnectivityRequest, ConnectivityVerdict, DefaultModelStatus, ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
 
 /**
  * No `declare module '@deepseek-ai/cordis'` augmentation here on purpose. The
@@ -100,6 +106,8 @@ export default class ModelRouter extends TypertRemoteService {
   /** Probes currently running (scheduled or manual); a scheduled tick skips while any is in flight. */
   private probeInFlight = 0
   private probeTimerId: ReturnType<typeof setInterval> | undefined
+  /** Why the last default-model sync did not land, for the browser's status line. */
+  private lastDefaultModelError: string | null = null
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'modelRouter', { namespace: 'routerHealth' })
@@ -145,6 +153,20 @@ export default class ModelRouter extends TypertRemoteService {
     // user's own route. This warning is best-effort only — providers registered
     // after this plugin loads are not visible here.
     warnUnregisteredProviders(ctx, readConfig(config))
+
+    // 接管开着就把新会话的默认模型指向主模型。跑在每次 fiber 启动（含配置保存后
+    // 的重启），所以"开启接管"和"换了主模型"都覆盖，不需要第二条更新路径。
+    // 只在新值与现值不同时才写：写一次就会让 DSH 的 HMR 重载一次 profile patch，
+    // 每次都写会让每次启动都多重启一轮。关闭接管不写、也不还原——还原是用旧
+    // 决定覆盖用户此后手动选过的模型。
+    if (config.enabled.get() === true) {
+      const primary = primaryRouteOf(config.profiles.get() as readonly Profile[], config.primaryProfileId.get() as string)
+      void syncDefaultModel(
+        ctx.get('agentDefaultModel') as DefaultModelFace | undefined,
+        primary,
+        (message: string) => ctx.logger.warn(message),
+      ).then((outcome) => { this.lastDefaultModelError = outcome.error })
+    }
 
     // The durable failover ledger and the channel-health fold, both registered
     // through `ctx.get` (the optional-service rule): a composition without the
@@ -475,6 +497,51 @@ export default class ModelRouter extends TypertRemoteService {
   }
 
   /**
+   * Whether DSH's default model is still this plugin's primary model, and why
+   * the last sync did or did not land.
+   *
+   * The browser reads this to show the sync state next to the takeover switch:
+   * DSH saves every manual model pick as the new default, so a pick the user
+   * made in any session moves the default away from the primary, and that has
+   * to be visible rather than looking like the switch silently stopped working.
+   */
+  @Remote
+  async defaultModelStatus(): Promise<DefaultModelStatus> {
+    const config = readConfig(this.config)
+    const primary = primaryRouteOf(config.profiles, this.config.primaryProfileId.get() as string)
+    const face = this.ctx.get('agentDefaultModel') as DefaultModelFace | undefined
+    const current = face?.currentSelection() ?? null
+    return {
+      enabled: this.config.enabled.get() as boolean,
+      primary,
+      current,
+      synced: primary !== null && sameRoute(current, primary),
+      lastError: this.lastDefaultModelError,
+    }
+  }
+
+  /**
+   * Point new sessions at the primary model now, and report what happened.
+   *
+   * Exposed because the sync runs when the config is saved (a save restarts this
+   * fiber), and a manual pick in between overrides it — the user needs a way to
+   * re-assert without editing anything else.
+   */
+  @Remote
+  async syncDefaultModel(): Promise<DefaultModelStatus> {
+    this.lastDefaultModelError = null
+    const config = readConfig(this.config)
+    const primary = primaryRouteOf(config.profiles, this.config.primaryProfileId.get() as string)
+    const outcome = await syncDefaultModel(
+      this.ctx.get('agentDefaultModel') as DefaultModelFace | undefined,
+      primary,
+      (message: string) => this.ctx.logger.warn(message),
+    )
+    this.lastDefaultModelError = outcome.error
+    return await this.defaultModelStatus()
+  }
+
+  /**
    * Arm the scheduled probe. The interval is user config and defaults to 0
    * (off): a probe spends a token on every tick, so whether that is acceptable
    * is the user's call. A config save restarts this fiber, which re-arms with
@@ -503,9 +570,10 @@ export default class ModelRouter extends TypertRemoteService {
   }
 }
 
-function readConfig(config: Config): { profiles: readonly Profile[]; default: DefaultProfile; health?: HealthConfig } {
+function readConfig(config: Config): { profiles: readonly Profile[]; primaryProfileId: string; default: DefaultProfile; health?: HealthConfig } {
   return {
     profiles: config.profiles.get() as readonly Profile[],
+    primaryProfileId: config.primaryProfileId.get() as string,
     default: config.default.get() as DefaultProfile,
     health: config.health?.get() as HealthConfig | undefined,
   }

@@ -36,8 +36,30 @@ export function CandidateNode(props) {
   var canMoveDown = (!isPrimary || props.isDefault) && index < props.total - 1 && !props.disabled
   var canDrag = (!isPrimary || props.isDefault) && props.total > 1 && !props.disabled
 
+  /**
+   * 从卡片内部任何地方都能开始拖，除了控件本身。
+   *
+   * HTML5 拖拽的 draggable 挂在整张卡上，所以起点可能在按钮、数字输入框或已展开
+   * 的条件面板里——那些地方一拖就该是它们自己的行为（点按钮、选中输入框里的文字），
+   * 而不是把卡片搬走。这里在 dragstart 上按起点判定，命中交互元素就取消这次拖拽。
+   *
+   * 为什么不用指针事件自己做一套：HTML5 拖放已经处理了拖影、放置目标与滚动容器
+   * 内的自动滚动，自建一套要把这些重做一遍，而触屏上两者都不可用（上下按钮仍在）。
+   */
+  var handleDragStart = function (e) {
+    if (!canDrag) { e.preventDefault(); return }
+    var target = e.target
+    if (target && typeof target.closest === 'function'
+      && target.closest('button, input, textarea, select, a, [contenteditable="true"], [role="tabpanel"]')) {
+      e.preventDefault()
+      return
+    }
+    if (props.onDragStart) props.onDragStart(e, index)
+  }
+
   return h('div', { style: S.node },
     h('div', {
+      className: 'dsh-router-node-card',
       style: Object.assign(
         {},
         S.nodeCard,
@@ -45,19 +67,20 @@ export function CandidateNode(props) {
         props.isDragging ? S.nodeCardDragging : null,
         props.isDragTarget && !props.isDragging ? S.nodeCardDragOver : null,
       ),
+      draggable: canDrag,
+      onDragStart: handleDragStart,
       onDragOver: function (e) { if (props.onDragOver) props.onDragOver(e, index) },
       onDrop: function (e) { if (props.onDrop) props.onDrop(e, index) },
       onDragEnd: function (e) { if (props.onDragEnd) props.onDragEnd(e) },
     },
       h('div', { style: S.nodeMainRow },
+        // 握把不再是唯一的拖拽起点，而是"这张卡可以拖"的视觉提示；命中区比图标大，
+        // 颜色在手感上给出 grab 反馈。
         !isPrimary ? h('div', {
           className: 'dsh-router-grip-handle',
           style: Object.assign({}, S.gripHandle, !canDrag ? S.gripHandleDisabled : null),
           title: t('dragReorderHint'),
-          draggable: canDrag,
-          onDragStart: function (e) {
-            if (canDrag && props.onDragStart) props.onDragStart(e, index)
-          },
+          'aria-hidden': true,
         }, h(Icon, { d: ICON_GRIP, size: 14 })) : null,
         h('div', { style: Object.assign({}, S.rankBadge, isPrimary ? S.rankBadgePrimary : null) },
           isPrimary ? '★' : String(props.isDefault ? index + 1 : index).padStart(2, '0')),
@@ -319,6 +342,8 @@ export function PipelineEditor(props) {
   var handleDragOver = function (e, index) {
     var minIndex = props.isDefault ? 0 : 1
     if (index < minIndex) return
+    // 拖拽源自己也要能当放置目标之外的"滚回去"目标：不允许落到比最小序号更前面，
+    // 所以第一张（用户选中的模型）永远不会被挤掉。
     e.preventDefault()
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
     if (dragTargetIndex !== index) {

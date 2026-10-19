@@ -60,6 +60,13 @@ export const DEFAULT_PROBE_TIMEOUT_SECONDS = 8
 /** How long a breaker hit takes a route or channel out of rotation, in seconds. */
 export const DEFAULT_BREAKER_COOLDOWN_SECONDS = 300
 
+/**
+ * One timeline bar's width, in seconds. Re-exported from ./timeline.ts, which
+ * owns the window rule both halves read; the default lives here with every
+ * other config default so the schema and the browser draft cannot drift.
+ */
+export { DEFAULT_TIMELINE_BUCKET_SECONDS, TIMELINE_BUCKET_SECONDS } from './timeline.ts'
+
 /** What a breaker hit disables: this route, or the whole provider channel. */
 export const DEFAULT_BREAKER_SCOPE = 'route'
 

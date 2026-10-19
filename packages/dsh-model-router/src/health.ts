@@ -28,16 +28,28 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { z } from 'zod'
 import { failureCodeOfStream } from './lineage.ts'
-import { capTimeline, MAX_TIMELINE_POINTS } from './timeline.ts'
+import { pruneTimeline } from './timeline.ts'
 import { routeKeyOf, routeParts } from './routes.ts'
 
 // The route-key rule lives in ./routes.ts because the browser half builds the
 // same key; re-exported here so existing importers keep one path.
 export { routeKeyOf }
 
-// The window constant lives in ./timeline.ts because the browser half reads the
-// same rule; re-exported here so existing importers keep one path.
-export { MAX_TIMELINE_POINTS } from './timeline.ts'
+/**
+ * Append one timeline point, keeping the window bounded.
+ *
+ * The bound is age first, count second (both in ./timeline.ts): an observation
+ * older than the retention window can never be drawn again, and a route called
+ * far more often than that keeps only its newest points.
+ */
+export function pushTimelinePoint(
+  existingTimeline: readonly ChannelTimelinePoint[] | undefined,
+  point: ChannelTimelinePoint,
+): ChannelTimelinePoint[] {
+  const current = existingTimeline ? existingTimeline.slice() : []
+  current.push(point)
+  return pruneTimeline(current)
+}
 
 /**
  * `unknown` is deliberately absent: a channel with no record is simply
@@ -98,16 +110,6 @@ export function classifyHealth(code: string): ChannelHealthStatus | undefined {
     case 'TRANSPORT': return 'unhealthy'
     default: return undefined
   }
-}
-
-/** Append one timeline point, keeping the window bounded. */
-export function pushTimelinePoint(
-  existingTimeline: readonly ChannelTimelinePoint[] | undefined,
-  point: ChannelTimelinePoint,
-): ChannelTimelinePoint[] {
-  const current = existingTimeline ? existingTimeline.slice() : []
-  current.push(point)
-  return capTimeline(current)
 }
 
 /**

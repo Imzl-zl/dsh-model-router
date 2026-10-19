@@ -10,6 +10,7 @@ import {
   DEFAULT_PROBE_TIMEOUT_SECONDS,
   DEFAULT_STICKY_TURNS,
   DEFAULT_SWITCH_ON,
+  DEFAULT_TIMELINE_BUCKET_SECONDS,
 } from '../defaults.ts'
 import { structuralViolations } from '../rules.ts'
 
@@ -44,6 +45,15 @@ export function normalizeProfiles(value) {
     if (typeof profile.stickyTurns !== 'number' || profile.stickyTurns < 0) profile.stickyTurns = DEFAULT_STICKY_TURNS
     return profile
   })
+}
+
+/**
+ * 主模型标记的归一化：非字符串（旧配置没有这个字段）按"空 = 第一条"处理。
+ * 指向已删规则的悬空值这里**不**修正——UI 与宿主都用同一条回落规则读它，
+ * 在这里偷偷改掉会让两边对"谁是主"各说一套。
+ */
+export function normalizePrimaryProfileId(value) {
+  return typeof value === 'string' ? value : ''
 }
 
 export function normalizeDefault(value) {
@@ -92,6 +102,10 @@ export function normalizeHealth(value) {
   var probeSeconds = typeof probe.intervalSeconds === 'number'
     ? probe.intervalSeconds
     : legacyMinutes !== undefined ? legacyMinutes * 60 : DEFAULT_INTERVAL_SECONDS
+  // 时间轴桶长：旧配置没有这个字段，取默认值（../defaults.ts 与 host schema 同源）。
+  var bucketSeconds = typeof health.timelineBucketSeconds === 'number'
+    ? health.timelineBucketSeconds
+    : DEFAULT_TIMELINE_BUCKET_SECONDS
   return {
     passive: health.passive !== false,
     discover: {
@@ -118,5 +132,6 @@ export function normalizeHealth(value) {
         }
       }) : [],
     },
+    timelineBucketSeconds: bucketSeconds,
   }
 }

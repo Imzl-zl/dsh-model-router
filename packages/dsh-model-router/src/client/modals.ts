@@ -12,10 +12,11 @@ import {
 } from '../defaults.ts'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
-import { fill } from './format.ts'
+import { fill, formatWindowHours } from './format.ts'
 import { Icon, ICON_TRASH } from './icons.ts'
 import { Button, Modal, SegmentedControl, SegmentedTabs, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { BREAKER_CODE_PRESETS } from './validate.ts'
+import { DEFAULT_TIMELINE_BUCKET_SECONDS, TIMELINE_BUCKET_SECONDS } from '../timeline.ts'
 
 export function HealthSettingsModal(props) {
   var t = props.t
@@ -23,6 +24,10 @@ export function HealthSettingsModal(props) {
   var discover = health.discover || {}
   var probe = health.probe || {}
   var [passiveOn, setPassiveOn] = useState(health.passive !== false)
+  // 时间轴桶长：旧配置没有这个字段时取默认值（与 host schema、controller 同源）。
+  var [timelineBucketSeconds, setTimelineBucketSeconds] = useState(
+    typeof health.timelineBucketSeconds === 'number' ? health.timelineBucketSeconds : DEFAULT_TIMELINE_BUCKET_SECONDS,
+  )
   var [discoverOn, setDiscoverOn] = useState(discover.enabled === true)
   var [discoverInterval, setDiscoverInterval] = useState(String(discover.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS))
   var [probeOn, setProbeOn] = useState(probe.enabled === true)
@@ -92,6 +97,27 @@ export function HealthSettingsModal(props) {
           checked: passiveOn,
           label: t('healthPassiveLabel'),
           onChange: function (next) { setPassiveOn(next) },
+        }))),
+    // 时间轴粒度：一格多长时间。格子数固定 24，所以这一项实际定的是"能看多远"——
+    // 1 分钟一格看 1 小时（抓瞬时抖动），60 分钟一格看 24 小时（看趋势）。
+    h('div', { style: Object.assign({}, S.formGroup, { paddingTop: 10, marginTop: 4, borderTop: '0.5px solid var(--dsw-alias-border-l2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }) },
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 220 } },
+        h('span', { style: S.formLabel }, t('timelineBucketLabel')),
+        h('span', { style: S.formHint }, t('timelineBucketHint'))),
+      h('div', { style: { flex: 'none' } },
+        h(SegmentedControl, {
+          id: 'router-timeline-bucket',
+          label: t('timelineBucketLabel'),
+          value: String(timelineBucketSeconds),
+          disabled: props.disabled,
+          options: TIMELINE_BUCKET_SECONDS.map(function (seconds) {
+            return {
+              value: String(seconds),
+              label: seconds >= 60 ? (seconds / 60) + t('timelineBucketMinutes') : seconds + 's',
+              title: fill(t('timelineBucketWindow'), { window: formatWindowHours(seconds) }),
+            }
+          }),
+          onChange: function (next) { setTimelineBucketSeconds(Number(next)) },
         }))))
 
   // ---- Tier 2：连通性检查 ----
@@ -290,6 +316,7 @@ export function HealthSettingsModal(props) {
                 .map(function (entry) { return { route: entry.route, prompt: entry.prompt.trim() } }),
             },
             breaker: { enabled: breakerOn, rules },
+            timelineBucketSeconds: timelineBucketSeconds,
           })
           props.onClose()
         },

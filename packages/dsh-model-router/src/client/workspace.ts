@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { h } from './dom.ts'
 import { routeKeyOf, routeParts } from '../routes.ts'
 import { S } from './styles.ts'
-import { fill, formatLatency, healthToneBadge, healthToneStyle, routeStatus } from './format.ts'
+import { fill, formatLatency, formatWindowHours, healthToneBadge, healthToneStyle, routeStatus, shortModelName } from './format.ts'
 import { ChannelMetricsDashboard } from './health-ui.ts'
+import { bucketTimeline } from '../timeline.ts'
 import { Icon, ICON_BOLT, ICON_CHART, ICON_CLOCK, ICON_GEAR, ICON_SEARCH, ICON_SPINNER } from './icons.ts'
 
 /** What one route's last probe says, as the button's tooltip. */
@@ -200,6 +201,17 @@ export function GlobalHealthWorkspace(props) {
           title: t('failoverHistoryButton'),
           onClick: props.onOpenDrawer,
         }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory')))),
+      // 时间轴怎么读：一格多长时间、高度与颜色各是什么。放在工作台头部而不是每张
+      // 卡片上——同一套口径重复 20 遍只是噪声；而没有它，24 根高低不一的柱子没有
+      // 任何解释。
+      h('div', { style: S.timelineScopeHint },
+        h(Icon, { d: ICON_CHART, size: 12, style: { color: 'var(--dsh-router-accent-text)' } }),
+        h('span', null, fill(t('timelineScopeLine'), {
+          bars: 24,
+          window: formatWindowHours(props.bucketSeconds ?? 600),
+          bucket: props.bucketSeconds ?? 600,
+        })),
+        h('span', { style: S.timelineScopeHintMuted }, t('timelineLegend'))),
       // What the last run found. Kept on screen until the next run: a run whose
       // results match what was already there changes nothing visible, so the
       // counts are what tell the user the click did something.
@@ -268,13 +280,24 @@ export function GlobalHealthWorkspace(props) {
           var isProbingThis = Boolean(probingRoutes[ch.route])
           var status = routeStatus(passive, discover, probe, ch.route)
 
-          // Availability rate calculation from timeline
+          // Metrics & the timeline window. The bucket length is user config, so
+          // the same 24 bars cover 1 hour or 24 depending on what was chosen —
+          // the window label on the card says which.
+          var bucketSeconds = props.bucketSeconds ?? 600
           var timeline = record && Array.isArray(record.timeline) ? record.timeline : []
-          var availRate = '—'
-          if (timeline.length > 0) {
-            var healthyCount = timeline.filter(function (p) { return p.status === 'healthy' }).length
-            availRate = (healthyCount / timeline.length * 100).toFixed(1) + '%'
-          }
+          var bars = bucketTimeline(timeline, bucketSeconds, Date.now())
+          var windowObserved = 0
+          var windowWeighted = 0
+          bars.forEach(function (bar) {
+            if (bar.count === 0) return
+            windowObserved += bar.count
+            windowWeighted += (bar.healthy + bar.degraded / 2) * bar.count
+          })
+          // 可用率与时间轴同一个窗口、同一套权重：两处各算一套就会出现"柱子全是绿、
+          // 旁边写着 62%"这种自相矛盾。没有观测时是 —，不是 0%。
+          var availRate = windowObserved === 0
+            ? null
+            : Math.round((windowWeighted / windowObserved) * 1000) / 10
 
           return h('div', {
             key: ch.route,
@@ -286,10 +309,10 @@ export function GlobalHealthWorkspace(props) {
               h('div', { style: S.channelRouteGroup },
                 h('span', { style: Object.assign({}, S.channelStatusDot, healthToneStyle(status)) }),
                 h('span', { style: S.providerBadge }, ch.provider),
-                h('span', { style: S.channelModelName }, ch.model),
+                h('span', { style: S.channelModelName, title: ch.model }, shortModelName(ch.model)),
                 h('span', { style: Object.assign({}, S.channelStatusPill, healthToneBadge(status)) },
                   status === 'healthy' ? t('healthStatusHealthy') : status === 'degraded' ? t('healthStatusDegraded') : status === 'unhealthy' ? t('healthStatusUnhealthy') : t('compactHealthIdle'),
-                  availRate !== '—' ? ' · ' + t('availabilityRate') + ' ' + availRate : ''),
+                  availRate === null ? null : ' · ' + t('availabilityRate') + ' ' + availRate + '%'),
                 // The probe verdict, on the card. It used to live only in the
                 // button's tooltip, so a user who clicked 测速 and did not hover
                 // saw nothing change — which reads as a dead button. The dot
@@ -362,7 +385,7 @@ export function GlobalHealthWorkspace(props) {
                   h(Icon, { d: isProbingThis ? ICON_SPINNER : ICON_BOLT, size: 11, spin: isProbingThis }),
                   isProbingThis ? t('probingText') : t('probeBtn') + ' (' + t('probeCost') + ')'))),
 
-            // Metrics & 24-point Sparkline
-            h(ChannelMetricsDashboard, { t: t, record: record }))
+            // Metrics & the timeline window
+            h(ChannelMetricsDashboard, { t: t, record: record, bucketSeconds: bucketSeconds }))
           })))
 }

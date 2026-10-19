@@ -27,6 +27,7 @@ import {
   DEFAULT_STICKY_TURNS,
   DEFAULT_STRATEGY,
   DEFAULT_SWITCH_ON,
+  DEFAULT_TIMELINE_BUCKET_SECONDS,
 } from './defaults.ts'
 import { structuralViolations } from './rules.ts'
 
@@ -192,12 +193,16 @@ export const healthSchema = z.object({
   discover: discoverSchema.default({}),
   probe: probeSchema.default({}),
   breaker: breakerSchema.default({}),
+  timelineBucketSeconds: z.number().step(1).min(60).max(3600).default(DEFAULT_TIMELINE_BUCKET_SECONDS)
+    .description('健康时间轴每一格代表多长时间（秒）。格子数固定 24，所以窗口 = 24 × 这一格'),
 })
 
 /** Plugin Config. Every field is volatile: all of them reach the settings form. */
 export const Config = z.object({
-  enabled: z.boolean().default(true).volatile()
-    .description('总闸：关闭时所有模型绕过插件，直接走官方适配器'),
+  enabled: z.boolean().default(false).volatile()
+    .description('接管总闸：关闭时所有模型绕过插件，直接走官方适配器。默认关——接管会改请求实际打到的渠道，必须由用户显式打开'),
+  primaryProfileId: z.string().default('').volatile()
+    .description('哪条规则是主模型：开启接管时，新会话的默认模型会被设为它的第一个候选。留空 = 第一条规则'),
   profiles: z.array(profileSchema).default([]).volatile()
     .description('路由规则列表；按 when 精确匹配'),
   default: defaultSchema.default({}).volatile()
@@ -291,6 +296,8 @@ export interface HealthConfig {
   discover: DiscoverConfig
   probe: ProbeConfig
   breaker: BreakerConfig
+  /** One timeline bar's width, in seconds. The window is 24 × this. */
+  timelineBucketSeconds: number
 }
 
 /** 一条自动禁用规则。 */
@@ -320,6 +327,8 @@ export interface BreakerConfig {
 /** Plugin configuration as `apply` sees it: every field is a Volatile accessor. */
 export interface Config {
   enabled: Volatile<boolean>
+  /** Which profile's pinned model new sessions start on. Empty = the first profile. */
+  primaryProfileId: Volatile<string>
   profiles: Volatile<Profile[]>
   default: Volatile<DefaultProfile>
   health: Volatile<HealthConfig>

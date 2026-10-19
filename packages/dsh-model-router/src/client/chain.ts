@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { h } from './dom.ts'
 import { S } from './styles.ts'
 import { accentBadge, fill } from './format.ts'
-import { Icon, ICON_CLOSE, ICON_GLOBE, ICON_PLUS, ICON_ROUTE, ICON_SAVE, ICON_SHIELD, ICON_UNDO, ICON_WARN } from './icons.ts'
+import { Icon, ICON_BOLT, ICON_CLOSE, ICON_GLOBE, ICON_PLUS, ICON_ROUTE, ICON_SAVE, ICON_SHIELD, ICON_UNDO, ICON_WARN } from './icons.ts'
 import { BudgetRow, PipelineEditor, SwitchOnGrid } from './pipeline.ts'
 import { SegmentedTabs, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -70,6 +70,7 @@ export function ChainView(props) {
     },
   }, '🖼️ ' + t('imageRouteBadge'))
 
+  var isPrimaryProfile = !isDefault && props.primaryProfileId === chainId
   var headerCard = h('section', { style: S.workspaceHeaderCard },
     h('div', { style: S.workspaceHeaderLeft },
       isDefault
@@ -77,12 +78,19 @@ export function ChainView(props) {
         : h('div', { style: S.workspaceAvatar }, (chain.when?.model || 'M').slice(0, 2).toUpperCase()),
       h('div', { style: S.workspaceTitles },
         h('div', { style: S.workspaceTitleRow },
-          h('h2', { style: S.workspaceModelName }, isDefault ? t('defaultProfileTab') : chain.when.model),
+          h('h2', { style: S.workspaceModelName, title: chain.when?.model }, isDefault ? t('defaultProfileTab') : chain.when.model),
           isDefault
             ? h('span', {
                 style: chain.enabled ? Object.assign({}, S.workspaceStatePill, accentBadge()) : S.navStatusInactive,
               }, chain.enabled ? '● ' + t('defaultPoolActiveBadge') : '○ ' + t('defaultPoolInactiveBadge'))
             : h('span', { style: Object.assign({}, S.workspaceStatePill, accentBadge()) }, '● ' + t('activeBadge')),
+          // 主模型标记：接管开着时，新会话的默认模型就是这一条的第一个候选。
+          // 它是显式标记而不是"列表第一条"——多条规则时"谁是主"必须看得见。
+          isPrimaryProfile
+            ? h('span', { style: Object.assign({}, S.primaryProfileBadge, accentBadge()), title: t('primaryProfileBadgeHint') },
+                h(Icon, { d: ICON_BOLT, size: 11 }),
+                t('primaryProfileBadge'))
+            : null,
           !isDefault && chain.when?.provider ? h('span', { style: S.providerBadge }, chain.when.provider) : null,
           h('span', { style: S.countBadge }, fill(t('candidateCountTag'), { n: isDefault ? chain.candidates.length : Math.max(0, chain.candidates.length - 1) })),
           imageBadge))),
@@ -96,7 +104,17 @@ export function ChainView(props) {
             disabled: props.disabled,
             onChange: function (next) { props.onDefaultEnabled(next) },
           }))
-      : null)
+      : h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' } },
+          isPrimaryProfile
+            ? h('span', { style: S.primaryProfileHint }, t('primaryProfileHint'))
+            : h('button', {
+                type: 'button',
+                className: 'dsh-router-catalog-btn',
+                style: S.catalogBtnSm,
+                disabled: props.disabled,
+                title: t('setPrimaryProfileHint'),
+                onClick: function () { props.onSetPrimaryProfile(chainId) },
+              }, h(Icon, { d: ICON_BOLT, size: 12 }), t('setPrimaryProfileBtn'))))
 
   var introBox = isDefault && !chain.enabled
     ? h('div', { style: S.introBox },

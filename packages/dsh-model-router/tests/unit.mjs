@@ -936,9 +936,9 @@ test('projection key is namespaced and stateVersion is a positive integer', () =
 })
 
 // ---- Channel Health unit tests ----
-import { classifyHealth, routeKeyOf, channelHealthProjection, CHANNEL_HEALTH_KEY, pushTimelinePoint, MAX_TIMELINE_POINTS } from '../src/health.ts'
+import { classifyHealth, routeKeyOf, channelHealthProjection, CHANNEL_HEALTH_KEY, pushTimelinePoint } from '../src/health.ts'
 
-test('pushTimelinePoint caps the window at MAX_TIMELINE_POINTS', () => {
+test('pushTimelinePoint keeps the newest observations and drops the oldest past both bounds', () => {
   let timeline
   for (let i = 0; i < 30; i++) {
     timeline = pushTimelinePoint(timeline, {
@@ -947,11 +947,20 @@ test('pushTimelinePoint caps the window at MAX_TIMELINE_POINTS', () => {
       latencyMs: 100,
     })
   }
-  assert.equal(timeline.length, MAX_TIMELINE_POINTS)
-  assert.equal(timeline.length, 24)
-  // The oldest points are the ones dropped, so the survivor is the newest.
+  // 30 次观测都在保留窗口内、也低于条数上限，所以一条不丢——保留规则是年龄
+  // 与条数，不是"最近 24 次"。
+  assert.equal(timeline.length, 30)
   assert.equal(timeline[timeline.length - 1].time, 1000 + 29 * 10)
-  assert.equal(timeline[0].time, 1000 + 6 * 10)
+})
+
+test('pushTimelinePoint drops an observation past the retention window', () => {
+  const now = Date.now()
+  const timeline = pushTimelinePoint(
+    [{ time: now - (TIMELINE_RETENTION_SECONDS + 60) * 1000, status: 'healthy' }],
+    { time: now, status: 'healthy' },
+  )
+  assert.equal(timeline.length, 1)
+  assert.equal(timeline[0].time, now)
 })
 
 test('pushTimelinePoint does not mutate the timeline it was given', () => {
@@ -1819,6 +1828,37 @@ test('the save shortcut label follows the platform, and both keys exist in both 
   }
 })
 
+// 接管开关、主模型同步与时间轴桶化新增的字典键：缺键时 DSH 的 locale 会把键名本身
+// 渲染给用户（"defaultModelSynced"），而英文用户看到的是空——两份字典各写各的已经
+// 漂移过（en 从来没有 problemDuplicateRoute 键，字典覆盖测试当场抓到）。
+test('every takeover, primary and timeline key exists in both locales', () => {
+  const keys = [
+    'takeoverSwitchLabel', 'takeoverOffHint', 'defaultModelNoPrimary', 'defaultModelNoService',
+    'defaultModelSynced', 'defaultModelDrift', 'defaultModelSyncFailed',
+    'defaultModelResync', 'defaultModelRetry', 'defaultModelResyncHint', 'defaultModelRetryHint',
+    'primaryProfileBadge', 'primaryProfileBadgeHint', 'primaryProfileHint',
+    'setPrimaryProfileBtn', 'setPrimaryProfileHint',
+    'timelineWindowLabel', 'timelineNoData', 'timelineBucketEmpty', 'timelineBucketTip',
+    'timelineLegend', 'timelineScopeLine', 'timelineBucketLabel', 'timelineBucketHint',
+    'timelineBucketMinutes', 'timelineBucketWindow',
+    'healthMetricLatencyHint', 'healthMetricThroughputHint', 'healthMetricThroughputNone',
+    'probeFirstToken', 'probeFirstTokenShort',
+  ]
+  for (const key of keys) {
+    assert.ok(typeof zh[key] === 'string' && zh[key].length > 0, `zh has ${key}`)
+    assert.ok(typeof en[key] === 'string' && en[key].length > 0, `en has ${key}`)
+  }
+  // 占位符两边必须一致：{model} 只在一边存在时，另一侧会把 "{model}" 原样印出来。
+  for (const key of ['defaultModelSynced', 'defaultModelDrift', 'defaultModelSyncFailed']) {
+    const placeholders = (text) => (text.match(/\{(\w+)\}/g) ?? []).sort().join(',')
+    assert.equal(placeholders(zh[key]), placeholders(en[key]), `${key} uses the same placeholders in both locales`)
+  }
+  for (const key of ['timelineWindowLabel', 'timelineScopeLine', 'timelineBucketWindow', 'timelineBucketTip']) {
+    const placeholders = (text) => (text.match(/\{(\w+)\}/g) ?? []).sort().join(',')
+    assert.equal(placeholders(zh[key]), placeholders(en[key]), `${key} uses the same placeholders in both locales`)
+  }
+})
+
 test('every breaker preset desc key exists in both locales', () => {
   // M19：预设文案曾在模块里手写中文，英文用户永远看不到。descKey 进字典，
   // 漏一个键这里就红。
@@ -1875,6 +1915,216 @@ test('a route key is built and split in exactly one place', () => {
     }
   }
   assert.deepEqual(found, [], `route keys must go through routes.ts, found ${found.length}:\n${found.join('\n')}`)
+})
+
+import {
+  TIMELINE_BAR_COUNT,
+  TIMELINE_BUCKET_SECONDS,
+  TIMELINE_MAX_POINTS,
+  TIMELINE_RETENTION_SECONDS,
+  bucketTimeline,
+  bucketTone,
+  pruneTimeline,
+} from '../src/timeline.ts'
+
+// ---- 健康时间轴：固定格数 × 时长桶 ----
+// 旧口径是"最近 24 次观测、一格一次调用"：没有时间轴，24 格可能横跨几天，
+// 可用率也不是时间加权。这里钉的是新口径——每格是一个时长桶，高度是该桶的
+// 成功率，颜色按分档；观测点按时间戳保留，改桶长不丢历史。
+
+const MINUTE = 60 * 1000
+const alignedNow = (bucketMinutes) => Math.floor(Date.now() / (bucketMinutes * MINUTE)) * (bucketMinutes * MINUTE)
+const barAt = (bars, time) => bars.find(bar => time >= bar.start && time < bar.end)
+
+test('bucketTimeline draws one bar per bucket, ending at the current one', () => {
+  const now = alignedNow(10)
+  const bars = bucketTimeline([], 600, now)
+  assert.equal(bars.length, TIMELINE_BAR_COUNT)
+  assert.equal(bars[bars.length - 1].end, now + 600 * 1000)
+  assert.equal(bars[0].start, now + 600 * 1000 - TIMELINE_BAR_COUNT * 600 * 1000)
+})
+
+test('bucketTimeline puts every observation in the bucket its timestamp belongs to', () => {
+  const now = alignedNow(10)
+  const bars = bucketTimeline([
+    { time: now - 5 * MINUTE, status: 'healthy' },
+    { time: now - 5 * MINUTE, status: 'unhealthy' },
+    { time: now - 95 * MINUTE, status: 'healthy' },
+  ], 600, now)
+  const near = barAt(bars, now - 5 * MINUTE)
+  assert.equal(near.count, 2)
+  assert.equal(near.healthy, 1)
+  assert.equal(near.unhealthy, 1)
+  const far = barAt(bars, now - 95 * MINUTE)
+  assert.equal(far.count, 1)
+  assert.equal(far.healthy, 1)
+  // 95 分钟前与 5 分钟前不是同一格：一格是十分钟，不是一次调用。
+  assert.notEqual(near.start, far.start)
+})
+
+test('bucketTimeline leaves a bucket with no observation empty, not failed', () => {
+  const now = alignedNow(10)
+  const bars = bucketTimeline([{ time: now - MINUTE, status: 'healthy' }], 600, now)
+  assert.equal(barAt(bars, now - MINUTE).count, 1)
+  assert.equal(bars[bars.length - 1].count, 0)
+  assert.equal(bars[bars.length - 1].successRate, undefined)
+  assert.equal(bucketTone(bars[bars.length - 1]), 'unknown')
+})
+
+test('bucketTimeline scores a degraded observation as half a success', () => {
+  const now = alignedNow(10)
+  const bars = bucketTimeline([
+    { time: now - MINUTE, status: 'healthy' },
+    { time: now - 2 * MINUTE, status: 'degraded' },
+  ], 600, now)
+  assert.equal(barAt(bars, now - MINUTE).successRate, 0.75)
+})
+
+test('bucketTone bands the success rate: green at 99%, yellow at 90%, red below', () => {
+  assert.equal(bucketTone({ successRate: 1 }), 'healthy')
+  assert.equal(bucketTone({ successRate: 0.99 }), 'healthy')
+  assert.equal(bucketTone({ successRate: 0.98 }), 'degraded')
+  assert.equal(bucketTone({ successRate: 0.9 }), 'degraded')
+  assert.equal(bucketTone({ successRate: 0.89 }), 'unhealthy')
+})
+
+test('bucketTimeline ignores an observation outside the drawn window', () => {
+  const now = alignedNow(10)
+  const bars = bucketTimeline([{ time: now - 10 * MINUTE * TIMELINE_BAR_COUNT - MINUTE, status: 'healthy' }], 600, now)
+  assert.equal(bars.reduce((sum, bar) => sum + bar.count, 0), 0)
+})
+
+test('pruneTimeline drops observations older than the retention window, measured from the newest', () => {
+  const newest = Date.now()
+  const kept = pruneTimeline([
+    { time: newest - (TIMELINE_RETENTION_SECONDS + 1) * 1000, status: 'healthy' },
+    { time: newest - TIMELINE_RETENTION_SECONDS * 1000, status: 'healthy' },
+    { time: newest, status: 'healthy' },
+  ])
+  assert.equal(kept.length, 2)
+  assert.equal(kept[0].time, newest - TIMELINE_RETENTION_SECONDS * 1000)
+})
+
+test('pruneTimeline keeps the newest TIMELINE_MAX_POINTS observations', () => {
+  const newest = Date.now()
+  const many = Array.from({ length: TIMELINE_MAX_POINTS + 5 }, (_, index) => ({
+    time: newest - index * 1000,
+    status: 'healthy',
+  }))
+  const kept = pruneTimeline(many)
+  assert.equal(kept.length, TIMELINE_MAX_POINTS)
+  assert.equal(kept[kept.length - 1].time, newest)
+})
+
+test('pruneTimeline does not mutate the timeline it was given', () => {
+  const original = [{ time: 2, status: 'healthy' }]
+  const next = pruneTimeline(original)
+  assert.notEqual(next, original)
+  assert.deepEqual(original, [{ time: 2, status: 'healthy' }])
+})
+
+test('every offered bucket length is a divisor-free option the dashboard can render', () => {
+  assert.ok(TIMELINE_BUCKET_SECONDS.includes(600))
+  assert.equal(TIMELINE_BUCKET_SECONDS.length > 1, true)
+})
+
+// ---- 接管开关与主模型同步 ----
+// 接管开关（config.enabled）在 UI 里从来没有控件：apply.ts 的 onEnabled 是个死
+// 入口，所以"装完就直接接管"。主模型同步走 DSH 自己的 agentDefaultModel——
+// 它只在没有 request header、没有 pending pick 的会话里被读，所以写它影响的
+// 恰好只有新会话，旧会话留在自己的 header/pick 上。
+
+import {
+  primaryRouteOf,
+  resolvePrimaryProfile,
+  sameRoute,
+  syncDefaultModel,
+} from '../src/default-model.ts'
+
+const modelProfile = (id, provider, model) => ({
+  id,
+  when: { provider, model },
+  candidates: [{ provider, model, maxAttempts: 1, weight: 0 }],
+  switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true },
+  maxTotalAttempts: 6,
+  stickyTurns: 0,
+  strategy: 'order',
+})
+
+test('resolvePrimaryProfile picks the marked profile, and the first when the marker is empty or stale', () => {
+  const profiles = [modelProfile('a', 'p', 'm1'), modelProfile('b', 'p', 'm2')]
+  assert.equal(resolvePrimaryProfile(profiles, 'b')?.id, 'b')
+  assert.equal(resolvePrimaryProfile(profiles, '')?.id, 'a')
+  // 标记指向被删掉的规则时回落第一条：一个悬空 id 不该让同步静默失效。
+  assert.equal(resolvePrimaryProfile(profiles, 'gone')?.id, 'a')
+  assert.equal(resolvePrimaryProfile([], 'a'), undefined)
+})
+
+test('primaryRouteOf is the primary profile pinned model, or null without any profile', () => {
+  const profiles = [modelProfile('a', 'wb/global', 'deepseek-v4.1-flash'), modelProfile('b', 'stepfun', 'step-5-preview')]
+  assert.deepEqual(primaryRouteOf(profiles, 'b'), { provider: 'stepfun', model: 'step-5-preview' })
+  assert.equal(primaryRouteOf([], 'b'), null)
+})
+
+test('sameRoute compares provider and model, never the reasoning effort', () => {
+  assert.equal(sameRoute({ provider: 'p', model: 'm' }, { provider: 'p', model: 'm', reasoningEffort: 'high' }), true)
+  assert.equal(sameRoute({ provider: 'p', model: 'm' }, { provider: 'q', model: 'm' }), false)
+  assert.equal(sameRoute(null, { provider: 'p', model: 'm' }), false)
+})
+
+test('syncDefaultModel writes the primary model and keeps the configured effort', async () => {
+  const saved = []
+  const face = {
+    currentSelection: () => ({ provider: 'old', model: 'old-model', reasoningEffort: 'high' }),
+    saveSelection: async (next) => { saved.push(next) },
+  }
+  const outcome = await syncDefaultModel(face, { provider: 'wb/global', model: 'deepseek-v4.1-flash' }, () => {})
+  assert.equal(outcome.synced, true)
+  assert.equal(outcome.error, null)
+  // 换模型不该顺手改掉用户配的推理档位。
+  assert.deepEqual(saved, [{ provider: 'wb/global', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' }])
+})
+
+test('syncDefaultModel does not write when the default already is the primary', async () => {
+  let writes = 0
+  const face = {
+    currentSelection: () => ({ provider: 'p', model: 'm' }),
+    saveSelection: async () => { writes += 1 },
+  }
+  const outcome = await syncDefaultModel(face, { provider: 'p', model: 'm' }, () => {})
+  assert.equal(outcome.synced, true)
+  assert.equal(writes, 0)
+})
+
+test('syncDefaultModel reports a refused save instead of swallowing it', async () => {
+  const logged = []
+  const face = {
+    currentSelection: () => ({ provider: 'old', model: 'old-model' }),
+    // overlay / home patch 覆盖了这一行时 DSH 的 configEditor 就是这样拒绝的。
+    saveSelection: async () => { throw new Error('Configuration for "agent-default-model" is overridden by a home patch or command-line overlay') },
+  }
+  const outcome = await syncDefaultModel(face, { provider: 'p', model: 'm' }, (message) => logged.push(message))
+  assert.equal(outcome.synced, false)
+  assert.match(outcome.error ?? '', /overridden by a home patch/)
+  assert.equal(logged.length, 1)
+})
+
+test('syncDefaultModel does nothing without a primary, and says so', async () => {
+  let writes = 0
+  const face = {
+    currentSelection: () => ({ provider: 'p', model: 'm' }),
+    saveSelection: async () => { writes += 1 },
+  }
+  const outcome = await syncDefaultModel(face, null, () => {})
+  assert.equal(outcome.synced, false)
+  assert.equal(outcome.error, null)
+  assert.equal(writes, 0)
+})
+
+test('syncDefaultModel reports a Host that carries no default-model service', async () => {
+  const outcome = await syncDefaultModel(undefined, { provider: 'p', model: 'm' }, () => {})
+  assert.equal(outcome.synced, false)
+  assert.equal(outcome.error, 'no-default-model-service')
 })
 
 await Promise.all(pending)

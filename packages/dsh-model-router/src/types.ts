@@ -13,6 +13,30 @@
  * .agents/notes/implemented/2026-10-15-plugin-remote-probe.md
  */
 
+import type { PrimaryRoute } from './default-model.ts'
+
+/**
+ * What the browser is told about the takeover switch's default-model sync.
+ *
+ * `current` is what DSH would start a brand-new session on right now. `synced`
+ * says whether that is still the plugin's primary model — DSH saves every manual
+ * pick as the new default (`packages/api/session-controller/src/commands.ts:177`),
+ * so a manual pick moves `current` away from `primary` and this is the only
+ * place the user can see it happened.
+ */
+export interface DefaultModelStatus {
+  /** The takeover switch's saved state: the feature this status belongs to. */
+  enabled: boolean
+  /** The primary model new sessions would be pointed at, or null without a profile. */
+  primary: PrimaryRoute | null
+  /** DSH's current default selection, or null when the Host carries no such service. */
+  current: { provider: string; model: string; reasoningEffort?: string } | null
+  /** Whether `current` and `primary` are the same route. */
+  synced: boolean
+  /** Why the last sync attempt did not land, or null when it did or never ran. */
+  lastError: string | null
+}
+
 /** One physical route a run addresses. Identity is DSH's own provider/model. */
 export interface ProbeRoute {
   provider: string

@@ -82,6 +82,26 @@ export function formatTime(ts) {
   return hh + ':' + mm + ':' + ss
 }
 
+/**
+ * 模型名的可读截断：长的保留头尾、中间省略。
+ *
+ * 网关渠道的模型 ID 常常是一整段 UUID，末尾截断会把它变成"前 12 个十六进制"——
+ * 同一网关下一堆模型共用前缀，截出来全都一样。保留头尾至少还能分辨。完整名字
+ * 始终在 title 与下方 provider/model 路径里，所以这里只负责"这一行放得下"。
+ */
+export function shortModelName(model, head = 14, tail = 8) {
+  var name = typeof model === 'string' ? model : ''
+  if (name.length <= head + tail + 1) return name
+  return name.slice(0, head) + '…' + name.slice(name.length - tail)
+}
+
+/** 时间轴窗口的人类可读长度：24 格 × 每格时长。 */
+export function formatWindowHours(bucketSeconds) {
+  var hours = (24 * bucketSeconds) / 3600
+  if (hours < 1) return Math.round(hours * 60) + 'm'
+  return (Math.round(hours * 10) / 10) + 'h'
+}
+
 
 /**
  * The one mapping from a health tone to its colour. The colour itself lives in

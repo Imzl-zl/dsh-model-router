@@ -106,7 +106,8 @@ default:                        # 没匹配到任何 when 时
 ## 三、配置示例（canonical schema，已定稿）
 
 ```yaml
-enabled: true                 # 总闸：关掉后所有模型绕过插件（默认开）
+enabled: false                # 接管总闸：关掉后所有模型绕过插件（默认关）
+primaryProfileId: ''          # 哪条规则是主模型；空 = 第一条。开启接管时新会话默认模型被设为它
 profiles:                     # 数组；按 when 精确匹配
   - id: coding-main
     when: { provider: deepseek-official, model: deepseek-v4-flash }
@@ -130,6 +131,9 @@ default:                      # 纯备用池：primary 永远是运行时用户�
     - { provider: deepseek-official, model: deepseek-chat, maxAttempts: 1 }
   switchOn: [RATE_LIMIT, SERVER, TIMEOUT]
   maxTotalAttempts: 3
+
+health:
+  timelineBucketSeconds: 600  # 健康时间轴一格代表多少秒；格数固定 24，窗口 = 24 × 它
 ```
 
 配置走 DSH 的 `Config` + `Volatile<T>`，放在 Plugins 页，改完即时生效，不用重启。校验分级见第九节。
@@ -203,6 +207,10 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 | 2 | 第一版就要中文通知 | **要**。成本低，见 4.2 |
 | 3 | `default.enabled` 默认 | **关**。只接管显式配置的模型 |
 | 4 | 辅助调用选路 | **不做**。DSH 已自带且更完整，见第十一节 |
+| 5 | `enabled`（接管总闸）默认 | **关**。接管会改请求实际打到的渠道（资金/限流后果），默认值必须是用户的显式选择；开关在弹窗顶栏常驻可见 |
+| 6 | 开启接管时是否自动改新会话默认模型 | **要，且跟随主模型变化**。机制是 DSH 的 `agentDefaultModel.saveSelection()`，只影响没有 request header / pending pick 的新会话；DSH 每次手动换模型都会覆盖默认，所以插件显示同步状态并提供「重新同步」，不在每个请求上重断言 |
+| 7 | 主模型怎么定 | **显式标记**（`primaryProfileId`），默认第一条，标记悬空回落第一条 |
+| 8 | 健康时间轴口径 | **固定 24 格 × 可配时长桶**（默认 10 分钟）。一格是一段时间，柱高是该桶成功率，空桶是无数据；观测点按时间戳保留 24 小时，改桶长不丢历史 |
 
 ## 九、Schema 与界面设计的三个硬约束
 
@@ -237,12 +245,13 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 
 | 区块 | 字段 |
 |---|---|
-| 总闸 | 启用渠道路由（默认开；关掉后所有模型绕过插件） |
+| 接管总闸 | 「接管路由」开关（默认关；关闭时所有模型绕过插件）+ 主模型同步状态行（已同步 / 已被手动选择更改 / 写入失败 + 重新同步） |
 | 全局 | 是否接管未配置的模型（默认关；开启后配纯备用池） |
-| 备份链（每个 profile） | 有序候选列表：provider / 模型 ID，可增删与排序；`candidates[0]` 钉死为 when 模型 |
+| 备份链（每个 profile） | 有序候选列表：provider / 模型 ID，可增删与排序（整卡可拖，交互控件除外）；`candidates[0]` 钉死为 when 模型；「主模型」标记与「设为主模型」 |
 | 候选高级条件 | 图片 / 最小上下文门槛（仅备用候选可配）；推理档位徽标为自动维度 |
 | 切换条件 | 限流 / 服务端错误 / 超时 / 网络传输 / 空回复（复选框，默认对齐 DSH 自己的 normal policy）+ 请求被拒绝（默认不勾） |
 | 硬上限 | 单请求最多尝试次数 |
+| 渠道健康 | 时间轴 24 格 × 每格时长（1/5/10/30/60 分钟，默认 10 分钟）；柱高=该桶成功率，空槽=无数据 |
 
 Chat 侧零自建成本：一条 `form:'notice'` 的中文通知 + 复用 DSH Trajectory 视图（已实测通知可发、Trajectory 本就渲染 attempt 链）。
 

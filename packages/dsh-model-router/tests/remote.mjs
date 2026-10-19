@@ -20,7 +20,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   boot,
@@ -84,7 +84,17 @@ const overlay = `- insert:
       name: '${PKG.replaceAll('\\', '/')}/lib/index.js'
       config:
         enabled: true
-        profiles: []
+        # 一条规则，主模型就是它：接管开启时新会话默认模型要被写成它的第一个候选。
+        # 这个组合提供 profileContext，所以 configEditor 真的落盘——同步因此是
+        # 可观测的真实写入，不是单测里的假 face。
+        primaryProfileId: p1
+        profiles:
+          - id: p1
+            when: { provider: stub-primary, model: stub-model }
+            candidates:
+              - { provider: stub-primary, model: stub-model, maxAttempts: 1 }
+            switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
+            maxTotalAttempts: 6
         default:
           enabled: false
           candidates:
@@ -116,6 +126,10 @@ const overlay = `- insert:
 `
 writeFileSync(`${HERE}remote-overlay.yml`, overlay)
 
+// 每次跑都从干净的家开始：同步会真的把 agent-default-model 写进 profile patch，
+// 留着上一次的产物会让"默认本来就不是主模型"这个前提在第二次运行时就不成立——
+// 测试因此开始依赖自己的历史，那正是它该钉住的反面。
+rmSync(HOME, { recursive: true, force: true })
 mkdirSync(HOME, { recursive: true })
 process.env.DSH_HOME = HOME
 
@@ -190,8 +204,10 @@ test('the generated artifact passes the loader’s own registration validator', 
   const ids = artifact.TYPERT.invocations.map(invocation => invocation.id)
   assert.deepEqual(ids, [
     'dsh-model-router#routerHealth/checkConnectivity',
+    'dsh-model-router#routerHealth/defaultModelStatus',
     'dsh-model-router#routerHealth/probeAll',
     'dsh-model-router#routerHealth/probeReport',
+    'dsh-model-router#routerHealth/syncDefaultModel',
   ])
 })
 
@@ -348,6 +364,40 @@ test('a per-route probe prompt override reaches the wire, and the shared prompt 
   assert.equal(overridden?.text, 'override prompt', 'the override prompt was sent for its route')
   assert.equal(shared?.text, 'shared prompt', 'the route without an override got the shared prompt')
   assert.equal(overridden?.maxTokens, 1, 'the probe asks for one token, so the cost stays bounded')
+})
+
+// ---- 接管开关与主模型同步，对着真实的 agentDefaultModel ----
+// 这是同步唯一能被真实观测的地方：这个组合提供 profileContext，DSH 的 configEditor
+// 因此真的把新默认写进 profile patch，而 agentDefaultModel.currentSelection() 会读回
+// 来。子进程组合（run.mjs）够不到 Remote，单测里的 face 是假的。
+
+test('the default-model sync writes the primary into DSH own default model, and the service reads it back', async () => {
+  // 一个用例按顺序讲完整件事：这里的 test() 不保证先后（同步体会先跑完），分开写
+  // 会让后一个用例读到前一个的结果——那是测试顺序的偶然而不是产品行为。
+  const before = await invoke('defaultModelStatus', {})
+  assert.equal(before.enabled, true)
+  assert.deepEqual(before.primary, { provider: 'stub-primary', model: 'stub-model' })
+  assert.equal(before.lastError, null)
+
+  const face = ctx.get('agentDefaultModel')
+  // 这个组合的 agent-default-model 没被 overlay 改过，所以默认还不是主模型。
+  const composed = face.currentSelection()
+  assert.notDeepEqual(composed, before.primary, 'the composed default is expected to differ from the primary')
+
+  const status = await invoke('syncDefaultModel', {})
+  assert.equal(status.synced, true, `sync reported ${JSON.stringify(status)}`)
+  // 读回真实服务，而不是只看插件自己的返回值：写没写进去只有它知道。
+  assert.deepEqual(face.currentSelection(),
+    { provider: 'stub-primary', model: 'stub-model' },
+    'DSH own default-model service must hold the primary now')
+
+  // 值已经相同，所以第二次同步不再写：每次都写会让 HMR 每次启动都多重启一轮。
+  const again = await invoke('syncDefaultModel', {})
+  assert.equal(again.synced, true)
+  assert.equal(again.lastError, null)
+  assert.deepEqual(face.currentSelection(), { provider: 'stub-primary', model: 'stub-model' })
+  const after = await invoke('defaultModelStatus', {})
+  assert.equal(after.synced, true)
 })
 
 await Promise.all(pending)

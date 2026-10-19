@@ -532,6 +532,48 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'takeover-off-means-no-takeover',
+    note: '没写 enabled（默认关）时插件完全不动：请求按默认模型原样发出',
+    // 默认值从 true 改成 false 后，"默认关"必须被钉住——否则新装一次就被接管，
+    // 而界面上曾经没有任何开关能关掉它（apply.ts 的 onEnabled 是死入口）。
+    router: { profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    script: { 'stub-primary': { outcomes: ['fail:SERVER', 'ok'] } },
+    check(events) {
+      // 同一条路由上的 llm-retry 重试不产生新的 request/header（header 只在路由变化时
+      // 记），所以这里能观测到的只有"没有第二个候选被打"。
+      eq('headers', headers(events), ['stub-primary/stub-model'])
+      eq('header reasons', headerReasons(events), ['initial'])
+      eq('notices', notices(events), [], 'no chain was consulted, so no switch notice')
+      // 被动健康与接管无关：它是耐久日志的旁观者，路由没接管也照实记录这次成功。
+      const health = channelHealth(events)
+      eq('health: the untaken step is still observed', health['stub-primary/stub-model']?.status, 'healthy')
+    },
+  },
+  {
+    name: 'takeover-on-syncs-the-primary-at-load',
+    note: '接管开着：启动时就尝试把新会话默认模型指向主模型，写不进去也不炸插件',
+    // 主模型的 when 与 overlay 的 agent-default-model 不同，所以同步一定会在加载时
+    // 跑一次。这里能观测的是"插件照常加载、照常路由"——写入本身在 tests/remote.mjs
+    // 里对真实 agentDefaultModel 服务断言（那个组合提供 profileContext，configEditor
+    // 真的落盘）；本环境的 logger.warn 不出现在 stdout/stderr，所以不在这里断言日志。
+    router: {
+      enabled: true,
+      primaryProfileId: 'p1',
+      profiles: [profile([C('stub-backup', 2), C('stub-primary', 1)], { when: { provider: 'stub-backup', model: 'stub-model' } })],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
+    },
+    script: { 'stub-primary': { outcomes: ['ok'] } },
+    check(events, combined) {
+      eq('turn end', turnEnd(events), 'completed')
+      // 请求解析到 stub-primary，没有任何规则的 when 是它，所以插件不接管。
+      eq('headers', headers(events), ['stub-primary/stub-model'])
+      eq('final route', finalRoute(events), 'stub-primary/stub-model')
+      eq('notices', notices(events), [])
+      ok('the plugin fiber survived the load-time sync', !combined.includes('model-router:'),
+        'a sync failure must be reported, not thrown into the fiber')
+    },
+  },
+  {
     name: 'invalid-config-rejected',
     note: '结构错误（重复 ID）在加载时响亮失败，不静默跳过',
     router: { enabled: true, profiles: [profile([C('stub-primary', 1)], { id: 'dup' }), profile([C('stub-backup', 1)], { id: 'dup', when: { provider: 'stub-backup', model: 'stub-model' } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
@@ -579,8 +621,8 @@ ${selection?.reasoningEffort === undefined ? '' : `    reasoningEffort: ${select
     - id: model-router
       name: '${PLUGIN}'
       config:
-        enabled: ${router.enabled}
-        profiles:
+        enabled: ${router.enabled ?? false}
+        ${router.primaryProfileId === undefined ? '' : `primaryProfileId: ${router.primaryProfileId}\n        `}profiles:
 ${router.profiles.map(p => `          - id: ${p.id}
             when: { provider: ${p.when.provider}, model: ${p.when.model} }
             candidates:
@@ -771,7 +813,7 @@ for (const scenario of SCENARIOS) {
     failures.push(`${scenario.name}: boot produced no session events`)
     continue
   }
-  scenario.check(events)
+  scenario.check(events, combined)
   // fork/resume 一致性对每个场景都成立——投影状态必须是已提交事件序列的确定性函数。
   // 各场景的事件形态不同（纯成功 / 跨候选 / 熔断 / 条件跳过），合起来才是完整覆盖。
   assertFoldIsForkSafe(events)

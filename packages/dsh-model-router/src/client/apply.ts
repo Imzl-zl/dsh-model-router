@@ -148,6 +148,8 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onSave: function () { controller.save() },
     onDiscard: function () { controller.discard() },
     onEnabled: function (value) { controller.setEnabled(value) },
+    onSetPrimaryProfile: function (id) { controller.setPrimaryProfile(id) },
+    onSyncDefaultModel: function () { controller.syncDefaultModel() },
     onActive: function (id) { controller.setActive(id) },
     onDefaultEnabled: function (value) { controller.setDefaultEnabled(value) },
     onMaxAttempts: function (profileId, index, value, isDefault) { controller.setMaxAttempts(profileId, index, value, isDefault) },

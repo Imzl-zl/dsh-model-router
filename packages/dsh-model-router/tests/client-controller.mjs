@@ -1451,19 +1451,143 @@ test('the plugin accent has one source, and DSH brand ink is never borrowed', as
     'the logo gradient must key off the plugin accent, not the brand-ink token')
 })
 
-// 时间线窗口只有一个常数（../timeline.ts 的 MAX_TIMELINE_POINTS）：投影按它截断，
-// 仪表盘按它画柱子。浏览器半包曾经自己写 24——窗口一调，柱子数和存下来的观测数
-// 就对不上，而可用率算的是投影那一套，用户看到的是"柱子比记录少"。
-test('the timeline window is one constant: the dashboard reads it, never a bare 24', async () => {
+// 时间轴窗口只有一个真值（../timeline.ts）：格数是 TIMELINE_BAR_COUNT，一格的时长是
+// 用户配的 timelineBucketSeconds，观测点的保留规则是 pruneTimeline。浏览器半包曾经
+// 自己写 24——窗口一调，柱子数和存下来的观测数就对不上，而可用率算的是投影那一套，
+// 用户看到的是"柱子比记录少"。
+test('the timeline window is one rule: the dashboard reads the shared module, never a bare 24', async () => {
   const source = sourceOf('health-ui.ts')
-  assert.ok(source.includes('MAX_TIMELINE_POINTS'),
-    'the dashboard must read the shared window constant')
-  assert.ok(!/Math\.max\(0, 24\b/.test(source) && !/slice\(-24\)/.test(source) && !/> 24 \?/.test(source),
-    'no bare 24 may size the slot math — the bars would drift from the projection\'s own window')
-  // 控制器侧同一件事：合并去重也按共享常量截断（它 import 的是同一个符号）。
+  assert.ok(source.includes("from '../timeline.ts'"),
+    'the dashboard must bucket through the shared module')
+  // 代码里不许出现字面 24：格数来自 bucketTimeline 返回的数组长度，写死就会在窗口
+  // 规则调整时与投影里存的观测数脱节。注释里提 24 是说明，不算。
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(!/\b24\b/.test(code),
+    'no bare 24 may size the bar math — the bars would drift from the projection\'s own window')
+  // 控制器侧同一件事：合并去重也走同一个 pruneTimeline（它 import 的是同一个符号）。
   const controller = sourceOf('controller.ts')
-  assert.ok(/points\.length > MAX_TIMELINE_POINTS/.test(controller),
-    'the browser-side merge must cap by the same constant')
+  assert.ok(controller.includes('pruneTimeline'),
+    'the browser-side merge must prune by the same rule')
+})
+
+// ---- 接管开关与主模型同步（浏览器侧） ----
+// 开关此前没有控件：apply.ts 的 onEnabled 是个死入口，顶栏徽标只是状态展示。这里
+// 钉住三件事：草稿带得上 primaryProfileId、保存载荷带得上、同步状态来自宿主而不是
+// 从草稿推。
+
+test('the takeover switch edits the draft, and the save payload carries it', async () => {
+  const h = await mount({ value: config({ enabled: false }) })
+  assert.equal(h.state().draft.enabled, false)
+  h.actions.onEnabled(true)
+  assert.equal(h.state().draft.enabled, true)
+  assert.equal(h.state().dirty, true)
+  h.actions.onSave()
+  await flush()
+  const saved = h.mutateCalls.at(-1).ops
+  assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'enabled' && op.value === true),
+    'the takeover switch must reach the Host through the save payload')
+})
+
+test('a fresh draft defaults the takeover switch off, like the host schema', async () => {
+  const h = await mount({ value: { profiles: [profile()], default: defaultPool() } })
+  assert.equal(h.state().draft.enabled, false)
+})
+
+test('the primary marker follows an explicit pick, and the first profile by default', async () => {
+  const two = [
+    profile(),
+    profile({
+      id: 'p2',
+      when: { provider: 'gw', model: 'other' },
+      candidates: [{ provider: 'gw', model: 'other', maxAttempts: 1, weight: 0 }],
+    }),
+  ]
+  const h = await mount({ value: config({ profiles: two }) })
+  // 没存标记时草稿是空串，宿主按"空 = 第一条"解析；浏览器不做第二种解释。
+  assert.equal(h.state().draft.primaryProfileId, '')
+  h.actions.onSetPrimaryProfile('p2')
+  assert.equal(h.state().draft.primaryProfileId, 'p2')
+  h.actions.onSave()
+  await flush()
+  const saved = h.mutateCalls.at(-1).ops
+  assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'primaryProfileId' && op.value === 'p2'),
+    'the primary marker must reach the Host through the save payload')
+})
+
+test('creating the first profile marks it primary, and deleting the primary clears the marker', async () => {
+  const h = await mount({ value: config({ profiles: [] }) })
+  h.actions.onCreateProfile({ provider: 'gw', model: 'fresh' })
+  const created = h.state().draft.profiles[0]
+  assert.equal(h.state().draft.primaryProfileId, created.id)
+  h.actions.onSetPrimaryProfile(created.id)
+  h.actions.onDeleteProfile(created.id)
+  h.actions.onConfirmDelete(created.id)
+  assert.equal(h.state().draft.primaryProfileId, '', 'a dangling marker would make the two halves disagree')
+})
+
+test('the sync status is read from the Host, not derived from the draft', async () => {
+  let statusCalls = 0
+  const h = await mount({
+    value: config({ enabled: true }),
+    remote: {
+      routerHealth: {
+        defaultModelStatus: () => {
+          statusCalls += 1
+          return Promise.resolve({
+            ok: true,
+            value: {
+              enabled: true,
+              primary: { provider: 'deepseek', model: 'm' },
+              current: { provider: 'gw', model: 'other' },
+              synced: false,
+              lastError: null,
+            },
+          })
+        },
+        syncDefaultModel: () => Promise.resolve({
+          ok: true,
+          value: {
+            enabled: true,
+            primary: { provider: 'deepseek', model: 'm' },
+            current: { provider: 'deepseek', model: 'm' },
+            synced: true,
+            lastError: null,
+          },
+        }),
+      },
+    },
+  })
+  await flush()
+  assert.equal(statusCalls > 0, true, 'the status line has no other source than the Host')
+  assert.equal(h.state().ui.defaultModel.synced, false)
+  // 草稿里开开关不会让状态行谎称已同步。
+  assert.equal(h.state().draft.enabled, true)
+  h.actions.onSyncDefaultModel()
+  await flush()
+  assert.equal(h.state().ui.defaultModel.synced, true)
+})
+
+test('an accepted save re-reads the sync status, so the line shows what the restart did', async () => {
+  const h = await mount({
+    value: config({ enabled: false }),
+    remote: {
+      routerHealth: {
+        defaultModelStatus: () => Promise.resolve({
+          ok: true,
+          value: { enabled: false, primary: { provider: 'deepseek', model: 'm' }, current: null, synced: false, lastError: null },
+        }),
+      },
+    },
+  })
+  await flush()
+  const before = h.state().ui.defaultModel
+  h.actions.onEnabled(true)
+  h.actions.onSave()
+  await flush()
+  assert.equal(h.state().failed, false)
+  assert.notEqual(h.state().ui.defaultModel, null)
+  assert.equal(h.state().ui.defaultModel.enabled, false, 'the status comes from the Host, which has not restarted yet in this stub')
+  assert.notEqual(h.state().ui.defaultModel, before)
 })
 
 await Promise.all(pending)

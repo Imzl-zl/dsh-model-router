@@ -11,7 +11,7 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, summarize } from './format.ts'
 import { defaultSwitchOn, normalizeDefault, normalizeHealth, normalizeProfiles, validate } from './validate.ts'
-import { capTimeline, MAX_TIMELINE_POINTS } from '../timeline.ts'
+import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
 import { DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STICKY_TURNS, NEW_PROFILE_MAX_ATTEMPTS } from '../defaults.ts'
 
@@ -19,7 +19,9 @@ export function createController(ctx, scope, t) {
   var seed = function () {
     var value = scope.getSnapshot().value ?? {}
     return {
-      enabled: value.enabled ?? true,
+      // 与 host schema 的默认值同源：接管会改请求实际打到的渠道，默认关。
+      enabled: value.enabled ?? false,
+      primaryProfileId: typeof value.primaryProfileId === 'string' ? value.primaryProfileId : '',
       profiles: normalizeProfiles(value.profiles),
       default: normalizeDefault(value.default),
       // A config saved by an older build carries the flat health shape; the
@@ -61,6 +63,11 @@ export function createController(ctx, scope, t) {
     // counts are the feedback, not the dots.
     checkSummary: null,
     probeSummary: null,
+    // 接管开关与主模型同步的状态（宿主 agentDefaultModel 的现值 + 是否还指向
+    // 主模型）。DSH 每次手动换模型都会把默认改掉，所以这个状态必须单独读，
+    // 不能从 draft 推。
+    defaultModel: null,
+    defaultModelLoading: false,
   }
   var saving = false
   var failed = false
@@ -107,6 +114,8 @@ export function createController(ctx, scope, t) {
         probingRoutes: ui.probingRoutes,
         checkSummary: ui.checkSummary,
         probeSummary: ui.probeSummary,
+        defaultModel: ui.defaultModel,
+        defaultModelLoading: ui.defaultModelLoading,
       },
     }
   }
@@ -188,8 +197,11 @@ export function createController(ctx, scope, t) {
         return true
       })
       .sort(function (a, b) { return a.time - b.time })
-    if (points.length > MAX_TIMELINE_POINTS) points = capTimeline(points)
-    return Object.assign({}, newer, { timeline: points })
+    // 窗口规则与 host 的 pushTimelinePoint 同源（../timeline.ts 的 pruneTimeline：
+    // 按时间戳保留 24 小时 + 条数上限）。此前这里是"最近 24 次观测"，与 host 的
+    // 同一句注释说的是两件事——合并后看到的比投影里存的多/少，而时间轴现在画的是
+    // 固定格数 × 时长桶，裁剪规则不一致就会让柱子与可用率各算一套。
+    return Object.assign({}, newer, { timeline: pruneTimeline(points) })
   }
 
   /** 把一批会话的记录按旧→新合进 ui.passive。 */
@@ -349,6 +361,41 @@ export function createController(ctx, scope, t) {
     /** Whether our workbench is mounted at all — the shortcut command's gate. */
     surfaceActive: function () { return surfaceCount > 0 },
     setEnabled: function (value) { draft.enabled = value; publish() },
+    setPrimaryProfile: function (id) { draft.primaryProfileId = id; publish() },
+    /**
+     * 读宿主侧的接管同步状态。只有 Host face 挂上才有答案——没挂的时候保持
+     * null，UI 显示"未知"，不猜一个"已同步"。
+     */
+    loadDefaultModelStatus: function () {
+      var health = ctx.remote && ctx.remote.routerHealth
+      if (!health || typeof health.defaultModelStatus !== 'function') return
+      if (ui.defaultModelLoading) return
+      ui.defaultModelLoading = true
+      publish()
+      health.defaultModelStatus().then(function (result) {
+        ui.defaultModelLoading = false
+        if (result && result.ok === true) ui.defaultModel = result.value ?? null
+        publish()
+      }).catch(function () {
+        ui.defaultModelLoading = false
+        publish()
+      })
+    },
+    /** 一键重新同步：宿主侧写一次 agentDefaultModel，再把新状态读回来。 */
+    syncDefaultModel: function () {
+      var health = ctx.remote && ctx.remote.routerHealth
+      if (!health || typeof health.syncDefaultModel !== 'function') return
+      ui.defaultModelLoading = true
+      publish()
+      health.syncDefaultModel().then(function (result) {
+        ui.defaultModelLoading = false
+        if (result && result.ok === true) ui.defaultModel = result.value ?? null
+        publish()
+      }).catch(function () {
+        ui.defaultModelLoading = false
+        publish()
+      })
+    },
     setActive: function (id) {
       ui.activeId = id
       autoActive = false
@@ -375,6 +422,7 @@ export function createController(ctx, scope, t) {
       // 会让保存按钮永久转圈，且用户看不到任何失败原因。
       scope.mutate([
         { op: 'set', path: ['enabled'], value: draft.enabled },
+        { op: 'set', path: ['primaryProfileId'], value: draft.primaryProfileId },
         { op: 'set', path: ['profiles'], value: draft.profiles },
         { op: 'set', path: ['default'], value: draft.default },
         { op: 'set', path: ['health'], value: draft.health },
@@ -382,6 +430,9 @@ export function createController(ctx, scope, t) {
         saving = false
         failed = !accepted
         publish()
+        // 保存成功 = fiber 重启 = 宿主按新配置同步一次默认模型；这里把新状态读
+        // 回来，同步行因此立刻反映结果，而不是留在旧值上。
+        if (accepted) controller.loadDefaultModelStatus()
       }, function () {
         saving = false
         failed = true
@@ -406,12 +457,18 @@ export function createController(ctx, scope, t) {
         maxTotalAttempts: DEFAULT_MAX_TOTAL_ATTEMPTS,
         stickyTurns: DEFAULT_STICKY_TURNS,
       })
+      // 第一条规则自动成为主模型：开启接管时新会话要有一个明确的起点，而"空标记
+      // = 第一条"这条回落规则让第一次创建不需要额外问一句。
+      if (draft.profiles.length === 1) draft.primaryProfileId = id
       ui.activeId = id
       ui.modal = null
       publish()
     },
     deleteProfile: function (id) {
       draft.profiles = draft.profiles.filter(function (profile) { return profile.id !== id })
+      // 删掉的正是主模型时清标记，让"空 = 第一条"接管；留着一个悬空 id 会让
+      // 宿主与 UI 对"谁是主"给出不同答案。
+      if (draft.primaryProfileId === id) draft.primaryProfileId = ''
       ui.modal = null
       ui.riskAck = false
       ensureActive()
@@ -749,6 +806,9 @@ export function createController(ctx, scope, t) {
       checkAborts.clear()
     },
   }
+  // 接管同步状态一建好就读：宿主侧它是独立事实（DSH 的默认模型会被任何一次手动
+  // 换模型改掉），不能从 draft 推，而状态行不该在用户第一次打开弹窗时还是空的。
+  controller.loadDefaultModelStatus()
   return controller
 }
 

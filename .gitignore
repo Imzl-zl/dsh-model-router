@@ -46,8 +46,12 @@ packages/dsh-model-router/tests/overlay.yml
 packages/dsh-model-router/tests/overlay-real.yml
 packages/dsh-model-router/tests/remote-overlay.yml
 packages/dsh-model-router/tests/web-real.overlay.yml
+packages/dsh-model-router/tests/web-view.overlay.yml
 packages/dsh-model-router/tests/stub-script.json
 packages/dsh-model-router/tests/vision-test.png
+
+# Serena MCP local project cache; not project content
+.serena/
 
 # Delivery-path rehearsal: a copy of the package installed into a scratch profile
 spike/delivery-pkg/

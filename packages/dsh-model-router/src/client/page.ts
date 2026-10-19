@@ -256,6 +256,11 @@ export function RouterPage(props) {
                           h('div', { style: S.navItemTitleRow },
                             h('span', { style: S.navItemTitle, title: profile.when.model }, profile.when.model),
                             h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+                              // 主模型在列表里也标出来：它是接管开启时新会话的起点，
+                              // 只在详情页标会让用户在列表里认不出哪条是主。
+                              profile.id === draft.primaryProfileId
+                                ? h('span', { style: Object.assign({}, S.navPrimaryDot, accentBadge()), title: t('primaryProfileBadgeHint') })
+                                : null,
                               worstCandStatus !== 'unknown'
                                 ? h('span', {
                                     style: Object.assign({}, S.navMicroDot, healthToneStyle(worstCandStatus)),
@@ -321,6 +326,7 @@ export function RouterPage(props) {
                   probeSummary: state.ui.probeSummary,
                   focusRoute: focusRoute,
                   disabled: disabled,
+                  bucketSeconds: draft.health.timelineBucketSeconds,
                   onCheckAll: props.onCheckAll,
                   onProbeAll: props.onProbeAll,
                   onOpenHealthModal: props.onOpenHealthModal,
@@ -366,6 +372,9 @@ export function RouterPage(props) {
                   onDefaultEnabled: props.onDefaultEnabled,
                   onDeleteProfile: props.onDeleteProfile,
                   onJumpHealth: handleJumpHealth,
+                  primaryProfileId: draft.primaryProfileId,
+                  onSetPrimaryProfile: props.onSetPrimaryProfile,
+                  defaultModel: state.ui.defaultModel,
                   // 保存条复用的是顶栏那一对动作，不新增状态源。
                   dirty: state.dirty,
                   saving: state.saving,
