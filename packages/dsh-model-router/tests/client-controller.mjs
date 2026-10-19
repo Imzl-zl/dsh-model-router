@@ -750,6 +750,43 @@ test('a channel with real volume renders a rate that is still a percentage', asy
   assert.ok(text.includes('timelineWindowLabel'), 'fixture: the metrics header reached the tree')
 })
 
+// 回归（显示层）：健康大盘的渠道清单曾读 `draft.profiles` / `draft.default`——单链化
+// 之后那两个键不复存在，整段变成死代码，**配置的降级候选一个都不进大盘**：新加的候选
+// 既不能被连通性检查也不能被探测，用户看到的大盘只有"用过的"。这条用例让"配了就要
+// 出现在大盘里"成为被守住的契约。
+test('a configured but never-used candidate still appears in the health dashboard', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({
+    value: config({
+      chain: chainValue([
+        cand('configured-unused', 'never-called'),
+        cand('other-unused', 'also-never-called'),
+      ]),
+    }),
+    // 没有任何被动观测、没有任何发现、没有任何探测：纯粹的"配了但没用过"。
+    remote: {
+      session: {
+        list: () => Promise.resolve({ ok: true, value: { items: [] } }),
+        projections: () => Promise.resolve({ ok: true, value: { values: {} } }),
+      },
+    },
+  })
+  h.actions.onActive('__health__')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  const text = collectText(tree).join(' ')
+
+  assert.ok(text.includes('configured-unused'), 'the configured candidate must reach the dashboard')
+  assert.ok(text.includes('never-called'), 'and its model id must be printed')
+  assert.ok(text.includes('other-unused'), 'every configured candidate, not just the first')
+  // 位次徽标说清它在这条链里的顺序；没有观测时不是"历史留痕"。
+  assert.ok(text.includes('channelUsedInChain'), 'the badge must name the chain, not a rule')
+  assert.ok(!text.includes('noChannelsConfigured'), 'the empty state must not fire while the chain has candidates')
+})
+
 // 回归：addCandidates 曾把用户在手录面板填的 maxAttempts 写死成 1（目录选择没有这个
 // 字段，1 是它的默认值；手录带了就必须按用户填的走）。
 test('a manually added candidate keeps the attempt count the user typed', async () => {

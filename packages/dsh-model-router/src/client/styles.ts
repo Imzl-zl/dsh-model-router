@@ -1945,19 +1945,6 @@ export var S = {
     border: '0.5px solid var(--dsw-alias-border-l3)',
     color: 'var(--dsw-alias-label-secondary)',
   },
-  // 用途徽标可点：从健康页跳回它在哪条链里的哪个位置。悬停时才给出可点的
-  // 视觉，避免一屏静态文本里突然出现一堆按钮 —— 见 ui-review.md P0-3。
-  channelUsageBadgeButton: {
-    fontSize: 10.5,
-    padding: '1px 7px',
-    borderRadius: 6,
-    background: 'var(--dsw-alias-bg-layer-2)',
-    border: '0.5px solid var(--dsw-alias-border-l3)',
-    color: 'var(--dsw-alias-label-secondary)',
-    cursor: 'pointer',
-    font: 'inherit',
-    transition: 'border-color 0.15s, color 0.15s',
-  },
   channelActionGroup: {
     display: 'flex',
     alignItems: 'center',

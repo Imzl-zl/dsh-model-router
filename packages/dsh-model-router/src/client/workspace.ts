@@ -80,7 +80,21 @@ export function GlobalHealthWorkspace(props) {
     }
   }, [props.focusRoute])
 
-  // Collect all physical channels across configuration and history
+  // Collect all physical channels across configuration and history.
+  //
+  // What "all" means, in one place: the chain's configured fallbacks (so a
+  // candidate you just added but never used is still listed — otherwise there is
+  // nothing to probe or check), plus every route that has actually been observed
+  // (passive fold), discovered, or probed. The first hop is deliberately absent
+  // from the configured half: it is whatever model the user picked in DSH, which
+  // the plugin does not know until a request arrives, so it can only appear once
+  // it has been observed.
+  //
+  // Note: 这里曾读 `draft.profiles` / `draft.default`——单链化之后那两个键不复
+  // 存在，整段变成死代码，配置的降级候选因此一个都不进大盘（用户问"是所有配置的
+  // 还是你咋获取的"时发现的）。
+  // Note: 为何第一跳不在"配置的那一半"、以及为何不改成只显示配置的 —— 见
+  // .agents/notes/implemented/2026-10-19-health-dashboard-lost-its-configured-half.md
   var allChannels = useMemo(function () {
     var map = {}
     var ensure = function (provider, model) {
@@ -97,24 +111,15 @@ export function GlobalHealthWorkspace(props) {
       return map[key]
     }
 
-    if (draft && draft.profiles) {
-      draft.profiles.forEach(function (p) {
-        (p.candidates || []).forEach(function (c, idx) {
-          var ch = ensure(c.provider, c.model)
-          if (ch) ch.usages.push({
-            name: p.when.model,
-            label: (idx === 0 ? '👑 ' : '') + p.when.model,
-          })
-        })
-      })
-    }
-
-    if (draft && draft.default && draft.default.candidates) {
-      draft.default.candidates.forEach(function (c, idx) {
+    if (draft && draft.chain && draft.chain.candidates) {
+      draft.chain.candidates.forEach(function (c, idx) {
         var ch = ensure(c.provider, c.model)
+        // 单链之下没有"哪条规则"可跳：所有候选都属于同一条链。所以 usage 只说明
+        // 它在这条链里的位次，不再做按规则的跳转（那个 action 已随规则一起删除，
+        // 点下去是 undefined 调用）。
         if (ch) ch.usages.push({
-          name: '__default__',
-          label: t('channelUsedInDefault') + ' #' + (idx + 1),
+          name: '__chain__',
+          label: t('channelUsedInChain') + ' #' + (idx + 1),
         })
       })
     }
@@ -326,16 +331,13 @@ export function GlobalHealthWorkspace(props) {
                 ch.usages.length === 0
                   ? h('span', { style: S.channelUsageBadge }, t('channelNotUsed'))
                   : ch.usages.map(function (u, i) {
-                      // 跳回这条渠道被哪条链用：usages 里已经存了 profile id
-                      // （默认池是 '__default__'），此前只拿它当 tooltip。
-                      // 见 ui-review.md P0-3。
-                      return h('button', {
+                      // 位次徽标，不是跳转按钮：单链之下"这条渠道被哪条规则用"
+                      // 这个问题没有第二个答案，跳转也就没有目标。做成按钮却调
+                      // 一个不存在的 action，点一次就是 TypeError。
+                      return h('span', {
                         key: i,
-                        type: 'button',
-                        className: 'dsh-router-usage-jump',
-                        style: S.channelUsageBadgeButton,
-                        title: t('channelUsedIn') + ' ' + u.name,
-                        onClick: function () { props.onJumpProfile(u.name) },
+                        style: S.channelUsageBadge,
+                        title: t('channelUsedInChainTip'),
                       }, u.label)
                     })),
 
