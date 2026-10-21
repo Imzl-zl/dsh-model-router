@@ -49,6 +49,7 @@ packages/dsh-model-router/tests/web-real.overlay.yml
 packages/dsh-model-router/tests/web-view.overlay.yml
 packages/dsh-model-router/tests/web-save.overlay.yml
 packages/dsh-model-router/tests/stub-script.json
+packages/dsh-model-router/tests/.binding-observed.json
 packages/dsh-model-router/tests/vision-test.png
 
 # Serena MCP local project cache; not project content

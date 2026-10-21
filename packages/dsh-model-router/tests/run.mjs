@@ -26,9 +26,12 @@ const ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 // browser and a real install would load. `npm run bundle` must have run.
 const PLUGIN = `${ROOT}packages/dsh-model-router/lib/index.js`.replaceAll('\\', '/')
 const STUB = `${HERE}stub-adapter.mjs`.replaceAll('\\', '/')
+const BINDING_STUB = `${HERE}stub-session-binding.mjs`.replaceAll('\\', '/')
 const DSH_BIN = `${ROOT}node_modules/@deepseek-ai/dsh/lib/bin.js`
 const HOME = `${HERE}.dshhome`
 const SESSIONS = `${HERE}.sessions`
+/** What the binding fixture observed inside the booted process (rewritten per scenario). */
+const BINDING_OBSERVED = `${HERE}.binding-observed.json`
 
 const SWITCH_ON = {
   rateLimit: true, server: true, timeout: true, transport: true,
@@ -49,6 +52,16 @@ function profile(candidates, overrides = {}) {
 // The second argument is CALLS (what every assertion below counts); the config
 // stores retries, so the fixture converts once — exactly like `resolveChain`.
 const C = (provider, calls = 1, over = {}) => ({ provider, model: 'stub-model', maxRetries: calls - 1, ...over })
+
+// One chain config shared by the three session-binding scenarios. The first hop
+// retries five times (six calls) and one fallback answers, so the ONLY thing the
+// session can change is how many times the first hop is really fired — which is
+// what makes "same config, different session" observable as 1 vs 6 failures.
+const BOUND_CHAIN = {
+  candidates: [C('stub-backup', 1)],
+  firstHopMaxRetries: 5,
+  switchOn: { ...SWITCH_ON },
+}
 
 // The health projection folds the real durable log, so the fold is asserted
 // against events a real boot produced rather than a hand-made fixture. This is
@@ -199,6 +212,77 @@ const SCENARIOS = [
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
       eq('no llm/retry records: the router performed them', events.filter(e => e.type === 'llm/retry').length, 0)
       eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
+    name: 'session-binding-override-zero',
+    note: '同一份链配置，会话 A 把第一跳覆盖成 0 次重试：只打 1 次就切走，绑定落盘可读回',
+    // 判据的一半：链写的是 5 次重试（6 次调用），会话覆盖成 0，实测就只打 1 次。
+    // 覆盖从写入到生效走的是产品路径：stub-session-binding 调插件自己的
+    // setSessionBinding（浏览器 chip 调的是同一个方法），路由在请求时同步读回。
+    router: { enabled: true, chain: BOUND_CHAIN },
+    binding: { retries: { 'stub-primary/stub-model': 0 } },
+    script: {
+      // provider 策略的 0 次重试保证 llm-retry 不参与：这个数字只可能来自会话覆盖。
+      policy: { maxRetries: 0 },
+      'stub-primary': { outcomes: Array.from({ length: 8 }, () => 'fail:RATE_LIMIT') },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('failed attempts', failedAttempts(events).length, 1)
+      eq('no llm/retry records: the router performed them', events.filter(e => e.type === 'llm/retry').length, 0)
+      const observed = bindingObservation()
+      eq('the fixture stored a binding', observed?.stored?.retries, { 'stub-primary/stub-model': 0 })
+      eq('the Host reads it back', observed?.readBack?.retries, { 'stub-primary/stub-model': 0 })
+      eq('the binding survives a restart', observed?.readBack?.persistent, true)
+      eq('an unbound chain field reads back as "follow the default"', observed?.readBack?.chain, null)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
+    name: 'session-binding-override-five',
+    note: '同一份链配置，会话 B 把第一跳覆盖成 5 次重试：实测打满 6 次才切换',
+    // 判据的另一半。两个场景的 `chain` 是同一个对象字面量 BOUND_CHAIN：配置没变，
+    // 变的只有会话绑定，所以 1 与 6 的差别只可能来自覆盖。
+    router: { enabled: true, chain: BOUND_CHAIN },
+    binding: { retries: { 'stub-primary/stub-model': 5 } },
+    script: {
+      policy: { maxRetries: 0 },
+      'stub-primary': { outcomes: Array.from({ length: 8 }, () => 'fail:RATE_LIMIT') },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('failed attempts', failedAttempts(events).length, 6)
+      eq('no llm/retry records: the router performed them', events.filter(e => e.type === 'llm/retry').length, 0)
+      eq('the Host reads the override back', bindingObservation()?.readBack?.retries, { 'stub-primary/stub-model': 5 })
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
+    name: 'session-binding-without-storage-domain',
+    note: '组合里没有 storageDomain：绑定退回内存，行为与有存储时完全一致',
+    // 同一份配置、同一份覆盖，只把 storage-domain 这一行停用。退回内存后路由必须
+    // 读得到刚写的绑定（1 次失败），而且宿主要如实回答"重启会丢"。
+    router: { enabled: true, chain: BOUND_CHAIN },
+    binding: { retries: { 'stub-primary/stub-model': 0 } },
+    noStorage: true,
+    script: {
+      policy: { maxRetries: 0 },
+      'stub-primary': { outcomes: Array.from({ length: 8 }, () => 'fail:RATE_LIMIT') },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('failed attempts (same as with storage)', failedAttempts(events).length, 1)
+      const observed = bindingObservation()
+      eq('the write still succeeds', observed?.stored?.retries, { 'stub-primary/stub-model': 0 })
+      eq('the read still answers', observed?.readBack?.retries, { 'stub-primary/stub-model': 0 })
+      eq('the Host says it is not durable', observed?.readBack?.persistent, false)
       eq('turn end', turnEnd(events), 'completed')
     },
   },
@@ -594,12 +678,24 @@ function candidateYaml(c, indent) {
   return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxRetries: ${c.maxRetries}${weight}${extra} }`
 }
 
-function overlayYaml(router, selection) {
+function overlayYaml(router, selection, binding, noStorage) {
   // 场景仍按"profile"写（candidates[0] = 用户选中的模型），overlay 生成时转成单链：
   // 被钉死的第一个候选成为隐式第一跳，其余是降级候选。这正是产品上的迁移规则，
   // 场景因此不需要为形状变化重写一遍。
   const chain = chainOf(router)
-  return `- id: llm-deepseek
+  // 绑定夹具：它调的就是插件自己的服务方法，所以只在有绑定的场景里出现。
+  const bindingRow = binding === undefined ? '' : `    - id: stub-session-binding
+      name: '${BINDING_STUB}'
+      config:
+        chain: ${binding.chain === undefined ? 'null' : `'${binding.chain}'`}
+        retries:
+${Object.entries(binding.retries ?? {}).map(([route, retries]) => `          '${route}': ${retries}`).join('\n') || '          {}'}
+        observe: '${BINDING_OBSERVED}'
+`
+  return `${noStorage ? `- id: storage-domain
+  disabled: true
+
+` : ''}- id: llm-deepseek
   disabled: true
 
 - id: llm-deepseek-account
@@ -618,7 +714,7 @@ ${selection?.reasoningEffort === undefined ? '' : `    reasoningEffort: ${select
 - insert:
     - id: stub-adapter
       name: '${STUB}'
-    - id: model-router
+${bindingRow}    - id: model-router
       name: '${PLUGIN}'
       config:
         enabled: ${router.enabled ?? false}
@@ -665,8 +761,9 @@ function chainOf(router) {
 
 function boot(scenario) {
   rmSync(SESSIONS, { recursive: true, force: true })
+  rmSync(BINDING_OBSERVED, { force: true })
   writeFileSync(`${HERE}stub-script.json`, JSON.stringify(scenario.script, null, 2))
-  writeFileSync(`${HERE}overlay.yml`, overlayYaml(scenario.router, scenario.selection))
+  writeFileSync(`${HERE}overlay.yml`, overlayYaml(scenario.router, scenario.selection, scenario.binding, scenario.noStorage === true))
   // spawnSync over execFileSync: dsh writes load warnings to stderr even when
   // it exits 0, and an error-terminal turn exits non-zero — neither fact says
   // anything about the plugin, so capture both streams and read the log.
@@ -712,6 +809,19 @@ const failedAttempts = events => events.filter(e => e.type === 'assistant/attemp
 
 const notices = events => events.filter(e => e.type === 'user/message' && e.data.source?.kind === 'model-router')
   .map(e => ({ text: e.data.content.find(c => c.type === 'text')?.text ?? '', summary: e.data.source.summary }))
+
+/**
+ * What the binding fixture saw inside the booted process: the write's answer
+ * and the read-back. Undefined when the fixture never ran (the check then fails
+ * loudly instead of silently reading a stale file).
+ */
+const bindingObservation = () => {
+  try {
+    return JSON.parse(readFileSync(BINDING_OBSERVED, 'utf8'))
+  } catch {
+    return undefined
+  }
+}
 
 const finalRoute = events => {
   const last = events.filter(e => e.type === 'assistant/message').at(-1)

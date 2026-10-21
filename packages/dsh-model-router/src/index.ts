@@ -54,10 +54,19 @@ import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
 import { channelHealthProjection } from './health.ts'
 import { CircuitBreaker, type RouteBlock } from './breaker.ts'
 import { waitBeforeRetry } from './backoff.ts'
+import { SessionBindings } from './bindings.ts'
 import { checkConnectivity, type ConnectivityLlm, type ConnectivitySettings } from './connectivity.ts'
 import { probePromptFor, probeRoute } from './probe.ts'
 import { effectiveChain, type ChainSource } from './chain.ts'
-import type { ConnectivityRequest, ConnectivityVerdict, ProbeReport, ProbeRequest, ProbeRoute } from './types.ts'
+import type {
+  ConnectivityRequest,
+  ConnectivityVerdict,
+  ProbeReport,
+  ProbeRequest,
+  ProbeRoute,
+  SessionBindingRequest,
+  SessionBindingView,
+} from './types.ts'
 
 /**
  * No `declare module '@deepseek-ai/cordis'` augmentation here on purpose. The
@@ -92,6 +101,12 @@ export default class ModelRouter extends TypertRemoteService {
   private readonly config: Config
   private readonly states = new RouterState()
   private readonly breaker = new CircuitBreaker()
+  /**
+   * Per-session bindings (which chain, which per-route retry overrides). Its
+   * storage domain opens asynchronously; reads fall back to memory until then,
+   * and writes await the open so a durable store is never skipped by a race.
+   */
+  private readonly bindings: SessionBindings
   /** Live agents by session, so the session/event feed can reach their state. */
   private readonly agentsBySession = new WeakMap<Session, Agent>()
   /** The last scheduled probe's report, held for the browser's read. */
@@ -103,6 +118,7 @@ export default class ModelRouter extends TypertRemoteService {
   constructor(ctx: Context, config: Config) {
     super(ctx, 'modelRouter', { namespace: 'routerHealth' })
     this.config = config
+    this.bindings = new SessionBindings(ctx)
     this.install()
     this.armProbeTimer()
   }
@@ -114,6 +130,7 @@ export default class ModelRouter extends TypertRemoteService {
     const config = this.config
     const states = this.states
     const breaker = this.breaker
+    const bindings = this.bindings
     const agentsBySession = this.agentsBySession
 
     // Structural validation at load: wrong in every environment, so it fails loud.
@@ -208,7 +225,10 @@ export default class ModelRouter extends TypertRemoteService {
 
           let state = states.current(agent, turn, step)
           if (state === undefined) {
-            const chain = resolveChain(resolved, readConfig(config).chain)
+            // 本会话的重试覆盖按路由键控；读取是同步的（storage 域的内存权威），
+            // 因此这个请求看到的一定是"上一次写入已落盘"的状态。覆盖在 step 首次
+            // 请求时冻结：进行中的 step 不换次数，下一次请求才按新值走。
+            const chain = resolveChain(resolved, readConfig(config).chain, bindings.retriesOf(agent.session.id))
             if (chain === undefined) return resolved
             states.setStickyTurns(agent, chain.stickyTurns)
             // 策略只决定第一跳失败后从哪条降级候选开始；第一跳恒在链首，不参与抽签。
@@ -495,6 +515,42 @@ export default class ModelRouter extends TypertRemoteService {
     // signal 是 Typert 的取消通道（描述符声明末参即注入，与 probeAll 同一机制）：
     // 浏览器卸载时在飞的发现调用随它中止，不继续打端点。
     return await Promise.all(wanted.map(route => checkConnectivity(this.ctx.llm, settings, route, signal)))
+  }
+
+  /**
+   * One session's routing binding, as the browser's chip reads it.
+   *
+   * A session that never wrote one reads as "follow the default chain, no
+   * overrides" rather than as an error: an absent binding is a state, not a
+   * failure. `persistent` is the Host's answer about where that state lives —
+   * a composition without the storage domain keeps it in memory only, and the
+   * UI has to be able to say so instead of promising durability it cannot give.
+   *
+   * Note: 会话绑定的存储、写入承诺与 0..9 边界 —— 见
+   * .agents/notes/implemented/2026-10-21-per-session-bindings.md
+   */
+  @Remote
+  async sessionBinding(sessionId: string): Promise<SessionBindingView> {
+    const binding = this.bindings.read(sessionId)
+    return {
+      chain: binding?.chain ?? null,
+      retries: { ...(binding?.retries ?? {}) },
+      persistent: this.bindings.persistent,
+    }
+  }
+
+  /**
+   * Store one session's routing binding. Resolves only after the write is
+   * durable (or, without a storage domain, after it reached process memory) —
+   * a storage failure is rethrown unchanged, because the caller's contract is
+   * "success means saved": a swallowed error would leave the chip showing a
+   * binding that does not exist.
+   */
+  @Remote
+  async setSessionBinding(request: SessionBindingRequest): Promise<SessionBindingView> {
+    const binding = { chain: request.chain, retries: { ...request.retries } }
+    await this.bindings.write(request.sessionId, binding)
+    return { chain: binding.chain, retries: { ...binding.retries }, persistent: this.bindings.persistent }
   }
 
   /**

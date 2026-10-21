@@ -79,13 +79,17 @@ export function rotate<T>(list: readonly T[], start: number): T[] {
  * fallbacks after it.
  *
  * This is the ONE place the config's vocabulary becomes the step's: retries
- * (`maxRetries` / `firstHopMaxRetries`) become call counts (`retries + 1`),
- * because that is what `planFire` counts. No other module adds or subtracts
- * that one. The first hop is the selected model; the chain exists to move ON,
- * and same-route retries belong to DSH's `llm-retry`; the plugin only decides
- * how many fires it will allow on that hop. A fallback that names the selected
- * route is dropped: it is already the first hop, and trying it twice would bill
- * the same channel twice for one request.
+ * (`maxRetries` / `firstHopMaxRetries`, or the session's per-route override)
+ * become call counts (`retries + 1`), because that is what `planFire` counts.
+ * No other module adds or subtracts that one. The first hop is the selected
+ * model; the chain exists to move ON, and same-route retries belong to the
+ * plugin since 2026-10-21; the plugin only decides how many fires it will allow
+ * on that hop. A fallback that names the selected route is dropped: it is
+ * already the first hop, and trying it twice would bill the same channel twice
+ * for one request.
+ *
+ * `retries` carries the session's overrides, keyed by route. It is a lookup
+ * table, not a merge: a route it does not name keeps the candidate's own count.
  *
  * Returns undefined when there is nothing to fall back to — an empty chain, or
  * one that only names the selected route. The plugin then stays out of the
@@ -94,15 +98,21 @@ export function rotate<T>(list: readonly T[], start: number): T[] {
  *
  * Note: 首跳尝试次数与 DSH 原生重试协调 —— 见
  * .agents/notes/implemented/2026-10-19-first-hop-attempts-and-dsh-retry-coordination.md
+ * Note: 会话覆盖与候选次数的取值顺序（`??` 而不是 `||`）—— 见
+ * .agents/notes/implemented/2026-10-21-per-session-bindings.md
  */
-export function resolveChain(resolved: LlmCallConfig, chain: ChainConfig): StepChain | undefined {
+export function resolveChain(
+  resolved: LlmCallConfig,
+  chain: ChainConfig,
+  retries: Readonly<Record<string, number>> = {},
+): StepChain | undefined {
   const selected = routeKeyOf(resolved.provider, resolved.model)
   const fallbacks = chain.candidates.filter(candidate => routeKeyOf(candidate.provider, candidate.model) !== selected)
   if (fallbacks.length === 0) return undefined
   const implicit: StepCandidate = {
     provider: resolved.provider,
     model: resolved.model,
-    maxAttempts: chain.firstHopMaxRetries + 1,
+    maxAttempts: attemptBudget(retries, selected, chain.firstHopMaxRetries),
     weight: 0,
   }
   const candidates: StepCandidate[] = [
@@ -110,7 +120,7 @@ export function resolveChain(resolved: LlmCallConfig, chain: ChainConfig): StepC
     ...fallbacks.map(candidate => ({
       provider: candidate.provider,
       model: candidate.model,
-      maxAttempts: candidate.maxRetries + 1,
+      maxAttempts: attemptBudget(retries, routeKeyOf(candidate.provider, candidate.model), candidate.maxRetries),
       weight: candidate.weight,
       ...(candidate.needs === undefined ? {} : { needs: candidate.needs }),
     })),
@@ -123,6 +133,19 @@ export function resolveChain(resolved: LlmCallConfig, chain: ChainConfig): StepC
     stickyTurns: chain.stickyTurns,
     strategy: chain.strategy,
   }
+}
+
+/**
+ * How many real calls one candidate may take: the session's override for this
+ * route when it names one, otherwise the candidate's own `maxRetries`; both are
+ * "retries after the first call", so this is the `+1`.
+ *
+ * `??` and not `||`: an override of 0 is a choice ("do not retry here"), and
+ * must not be read as "unset". The key is DSH's own route identity
+ * (`provider/model`, ./routes.ts), which is what the browser lists.
+ */
+function attemptBudget(overrides: Readonly<Record<string, number>>, route: string, configRetries: number): number {
+  return (overrides[route] ?? configRetries) + 1
 }
 
 /**

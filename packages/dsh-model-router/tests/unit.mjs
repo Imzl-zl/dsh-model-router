@@ -41,6 +41,7 @@ import { probePromptFor, probeRoute } from '../src/probe.ts'
 import { checkConnectivity } from '../src/connectivity.ts'
 import { routeParts } from '../src/routes.ts'
 import { precheckTierOf } from '../src/precheck.ts'
+import { emptyBinding, SESSION_BINDINGS_DOMAIN, SessionBindings, sessionBindingsDomain } from '../src/bindings.ts'
 
 let passed = 0
 const pending = []
@@ -2216,6 +2217,119 @@ test('resolveChain has nothing to route when no fallback is configured', () => {
   assert.equal(resolveChain({ provider: 'a', model: 'm' }, chainValue()), undefined)
   // 只配了"选中模型"自己，等于没有降级可走。
   assert.equal(resolveChain({ provider: 'a', model: 'm' }, chainValue({ candidates: [cand('a')] })), undefined)
+})
+
+// ---- 会话覆盖的重试次数（解析点只有 resolveChain 一处） ----
+
+test('a session override replaces the candidate retries, and 0 stays distinct from unset', () => {
+  const chain = chainValue({ candidates: [cand('a', 'm', { maxRetries: 2 })], firstHopMaxRetries: 3 })
+  const resolved = { provider: 'selected', model: 'm' }
+  const routes = value => value.candidates.map(c => `${c.provider}/${c.model}`)
+
+  // 未覆盖：候选自己的次数（3 次重试 = 4 次调用 / 2 次重试 = 3 次调用）。
+  const untouched = resolveChain(resolved, chain)
+  assert.deepEqual(untouched.candidates.map(c => c.maxAttempts), [4, 3])
+
+  // 覆盖了第一跳与降级候选各一个：覆盖值取代配置值，仍然只在这里 +1。
+  const overridden = resolveChain(resolved, chain, { 'selected/m': 0, 'a/m': 5 })
+  assert.deepEqual(overridden.candidates.map(c => c.maxAttempts), [1, 6])
+  assert.deepEqual(routes(overridden), ['selected/m', 'a/m'], 'the override never changes which route is tried')
+
+  // 0 = 不重试，不能被当成"没填"回落成 3 次重试。
+  const zero = resolveChain(resolved, chain, { 'selected/m': 0 })
+  assert.equal(zero.candidates[0].maxAttempts, 1)
+  assert.equal(zero.candidates[1].maxAttempts, 3, 'a route the session does not name keeps the candidate count')
+})
+
+// ---- 会话绑定的存储（storageDomain 侧车 / 内存回退） ----
+
+/** A fake storage domain that records opens and writes, and can be made to fail. */
+function fakeStorage(options = {}) {
+  const records = new Map()
+  const opened = []
+  const facility = {
+    async open(spec) {
+      opened.push(spec.name)
+      if (options.openError !== undefined) throw options.openError
+      return {
+        table: name => ({
+          get: key => records.get(key),
+          put: async (key, value) => {
+            if (options.writeError !== undefined) throw options.writeError
+            records.set(key, value)
+          },
+        }),
+        close: async () => {},
+      }
+    },
+  }
+  return { facility, records, opened }
+}
+
+const fakeContext = (storage, errors = []) => ({
+  get: name => (name === 'storageDomain' ? storage : undefined),
+  logger: { error: message => errors.push(message) },
+  effect: () => {},
+})
+
+test('without a storage domain, bindings live in memory and behave identically', async () => {
+  const bindings = new SessionBindings(fakeContext(undefined))
+  assert.equal(bindings.persistent, false)
+  assert.equal(bindings.read('s1'), undefined, 'an absent binding is a state, not a failure')
+  await bindings.write('s1', { chain: null, retries: { 'p/m': 0 } })
+  assert.deepEqual(bindings.read('s1'), { chain: null, retries: { 'p/m': 0 } })
+  assert.deepEqual(bindings.retriesOf('s1'), { 'p/m': 0 })
+  assert.deepEqual(bindings.retriesOf('unknown'), {})
+})
+
+test('with a storage domain, the write goes through it and reads come back from it', async () => {
+  const { facility, records, opened } = fakeStorage()
+  const bindings = new SessionBindings(fakeContext(facility))
+  // §open 是异步的：write 必须等它，否则会绕过持久层写进内存。
+  await bindings.write('s1', { chain: 'coding', retries: { 'p/m': 5 } })
+  assert.deepEqual(opened, [SESSION_BINDINGS_DOMAIN], 'the declared domain name is what opens')
+  assert.deepEqual(records.get('s1'), { chain: 'coding', retries: { 'p/m': 5 } })
+  assert.equal(bindings.persistent, true)
+  assert.deepEqual(bindings.read('s1'), { chain: 'coding', retries: { 'p/m': 5 } })
+})
+
+test('a storage failure reaches the caller unchanged and leaves the previous value in place', async () => {
+  const failure = new Error('disk is full')
+  const { facility } = fakeStorage({ writeError: failure })
+  const bindings = new SessionBindings(fakeContext(facility))
+  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 1 } }), failure)
+  assert.equal(bindings.read('s1'), undefined, 'a rejected write must not look saved')
+})
+
+test('a domain that cannot open falls back to memory and says so', async () => {
+  const errors = []
+  const { facility } = fakeStorage({ openError: new Error('invalid-record') })
+  const bindings = new SessionBindings(fakeContext(facility, errors))
+  await bindings.write('s1', { chain: null, retries: { 'p/m': 2 } })
+  assert.equal(bindings.persistent, false)
+  assert.deepEqual(bindings.read('s1'), { chain: null, retries: { 'p/m': 2 } })
+  assert.equal(errors.length, 1, 'the fallback is announced, not silent')
+  assert.match(errors[0], /model_router_sessions/)
+})
+
+test('a binding outside 0..9 or keyed by a non-route is rejected, not clamped', async () => {
+  const bindings = new SessionBindings(fakeContext(undefined))
+  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 10 } }), /integer in 0\.\.9/)
+  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 1.5 } }), /integer in 0\.\.9/)
+  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { pm: 1 } }), /provider\/model/)
+  assert.equal(bindings.read('s1'), undefined)
+})
+
+test('the session binding domain declares the shape the routing path reads', () => {
+  // 域在模块加载时由 defineDomain 校验（名字受 UNIT_NAME_RE 约束），记录 schema
+  // 与 wire 类型同源；这里断言的是"用户写进去的就是路由读到的"。
+  assert.equal(sessionBindingsDomain.name, 'model_router_sessions')
+  assert.equal(sessionBindingsDomain.version, 1)
+  assert.deepEqual(sessionBindingsDomain.tables.bindings.valueSchema.parse({ chain: null, retries: { 'p/m': 0 } }),
+    { chain: null, retries: { 'p/m': 0 } })
+  assert.throws(() => sessionBindingsDomain.tables.bindings.valueSchema.parse({ chain: null, retries: { 'p/m': 10 } }))
+  // 0 与"没填"在存储层也是两件事：前者是键存在、值为 0。
+  assert.deepEqual(emptyBinding(), { chain: null, retries: {} })
 })
 
 test('the chain rules reject a repeated route and a weight strategy with nothing to draw', () => {

@@ -33,6 +33,16 @@ export const DEFAULT_FIRST_HOP_MAX_RETRIES = 0
  */
 export const MAX_RETRIES = 99
 
+/**
+ * The upper bound of a SESSION override for one route's retries (0..9).
+ *
+ * Deliberately narrower than {@link MAX_RETRIES}: that one bounds the chain's
+ * own budget, which a user configures once, while an override is a per-session
+ * on-the-spot adjustment. Both mean the same thing — retries after the first
+ * call — so neither is a second "max attempts" setting.
+ */
+export const MAX_SESSION_RETRIES = 9
+
 /** After an image turn, keep routing to the vision model for this many text turns. */
 export const DEFAULT_STICKY_TURNS = 0
 

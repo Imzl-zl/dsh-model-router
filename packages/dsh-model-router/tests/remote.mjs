@@ -20,7 +20,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   boot,
@@ -194,6 +194,8 @@ test('the generated artifact passes the loader’s own registration validator', 
     'dsh-model-router#routerHealth/checkConnectivity',
     'dsh-model-router#routerHealth/probeAll',
     'dsh-model-router#routerHealth/probeReport',
+    'dsh-model-router#routerHealth/sessionBinding',
+    'dsh-model-router#routerHealth/setSessionBinding',
   ])
 })
 
@@ -225,6 +227,61 @@ test('the generated strict codec refuses a malformed probe request', async () =>
   assert.throws(() => schema.parse({ routes: 'not-an-array' }))
   assert.deepEqual(schema.parse({ routes: [{ provider: 'p', model: 'm' }] }),
     { routes: [{ provider: 'p', model: 'm' }] })
+})
+
+test('the generated strict codec refuses a malformed session-binding write', async () => {
+  // 写入的线形状：sessionId + chain（null 或 id）+ retries（对象）。0..9 不在线
+  // 形状里——那是宿主的业务边界（bindings.ts），所以这里只钉"形状不对"。
+  const client = await import(pathToFileURL(`${PKG}/lib/typert.remote-client.js`).href)
+  const descriptor = Object.values(client.default.descriptors)
+    .find(entry => entry.method === 'setSessionBinding')
+  assert.notEqual(descriptor, undefined, 'the remote client carries a setSessionBinding descriptor')
+  const schema = descriptor.parameters[0].codec.create()
+  assert.throws(() => schema.parse({ sessionId: 's', chain: null, retries: 'not-an-object' }))
+  assert.throws(() => schema.parse({ sessionId: 's', retries: {} }), 'a missing chain is not a binding')
+  assert.deepEqual(schema.parse({ sessionId: 's', chain: null, retries: { 'p/m': 5 } }),
+    { sessionId: 's', chain: null, retries: { 'p/m': 5 } })
+  assert.deepEqual(schema.parse({ sessionId: 's', chain: 'coding', retries: {} }),
+    { sessionId: 's', chain: 'coding', retries: {} })
+})
+
+// ---- 会话绑定：两个 Remote 走真网关 ----
+
+test('sessionBinding reads a session that never wrote one as "follow the default chain"', async () => {
+  // 没有绑定是一种状态，不是失败：读回默认值，并如实说明它存在哪。
+  const view = await invoke('sessionBinding', { sessionId: 'session-never-written' })
+  assert.deepEqual(view, { chain: null, retries: {}, persistent: true })
+})
+
+test('setSessionBinding writes durably, answers what it stored, and reads back', async () => {
+  const request = { sessionId: 'session-remote-test', chain: 'coding', retries: { 'stub-primary/stub-model': 5 } }
+  const stored = await invoke('setSessionBinding', { request })
+  assert.deepEqual(stored, { chain: 'coding', retries: { 'stub-primary/stub-model': 5 }, persistent: true })
+  const readBack = await invoke('sessionBinding', { sessionId: 'session-remote-test' })
+  assert.deepEqual(readBack, { chain: 'coding', retries: { 'stub-primary/stub-model': 5 }, persistent: true })
+  // "落盘成功才算成功"：真 json 后端把它写进了 home 的 storage 树，重启读的是这份。
+  const file = JSON.parse(readFileSync(`${HOME}/storages/model_router_sessions.json`, 'utf8'))
+  assert.deepEqual(file.tables.bindings['session-remote-test'],
+    { chain: 'coding', retries: { 'stub-primary/stub-model': 5 } })
+})
+
+test('a zero override is stored as zero, not as "unset"', async () => {
+  const request = { sessionId: 'session-remote-zero', chain: null, retries: { 'stub-primary/stub-model': 0 } }
+  await invoke('setSessionBinding', { request })
+  const readBack = await invoke('sessionBinding', { sessionId: 'session-remote-zero' })
+  assert.deepEqual(readBack.retries, { 'stub-primary/stub-model': 0 })
+  assert.equal(Object.hasOwn(readBack.retries, 'stub-primary/stub-model'), true)
+})
+
+test('setSessionBinding refuses an out-of-range count instead of clamping it', async () => {
+  // 静默夹到 9 会让用户以为他写的 10 生效了。原样拒绝。
+  await assert.rejects(
+    () => invoke('setSessionBinding', {
+      request: { sessionId: 'session-remote-bad', chain: null, retries: { 'stub-primary/stub-model': 10 } },
+    }),
+    /0\.\.9/,
+  )
+  assert.equal((await invoke('sessionBinding', { sessionId: 'session-remote-bad' })).retries['stub-primary/stub-model'], undefined)
 })
 
 test('probeAll measures a live route: reachable with a TTFT number', async () => {

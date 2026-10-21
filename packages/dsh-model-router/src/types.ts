@@ -83,3 +83,29 @@ export interface ConnectivityVerdict {
   /** How many models the endpoint advertised, when it answered. */
   advertised?: number
 }
+
+// ---- per-session routing bindings ----
+
+/**
+ * One session's routing binding, as the Host stores it and the browser reads it.
+ *
+ * `chain` names a chain and `null` means "follow the default chain". `retries`
+ * is keyed by route (`provider/model`) and holds retries AFTER the first call —
+ * so 0 ("do not retry") and "no entry" ("use the candidate's own count") are
+ * two different answers, and the type keeps them apart.
+ */
+export interface SessionBinding {
+  chain: string | null
+  retries: Record<string, number>
+}
+
+/** A binding plus the one fact the browser cannot know: whether it survives a restart. */
+export interface SessionBindingView extends SessionBinding {
+  /** False when the Host offers no storage domain: the binding lives in process memory only. */
+  persistent: boolean
+}
+
+/** What the browser writes: the session plus the whole binding (no partial merge). */
+export interface SessionBindingRequest extends SessionBinding {
+  sessionId: string
+}
