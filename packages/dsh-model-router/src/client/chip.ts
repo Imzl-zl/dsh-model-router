@@ -33,6 +33,8 @@ import { h } from './dom.ts'
 import { fill } from './format.ts'
 import { Icon, ICON_DOWN, ICON_ROUTE } from './icons.ts'
 import { effectiveChains } from '../chain.ts'
+import { MAX_SESSION_RETRIES } from '../defaults.ts'
+import { routeKeyOf } from '../routes.ts'
 import { CONFIG_NS } from './locales.ts'
 
 /** Popover row id for "follow the default chain": the stored binding is `chain: null` then. */
@@ -51,6 +53,8 @@ function freshChipView() {
     error: null,
     chains: [],
     defaultChainId: '',
+    /** 正在输入、还没提交的重试次数，按路由键控（空串 = 用户清空了这一行）。 */
+    retryDraft: {},
   }
 }
 
@@ -143,6 +147,8 @@ export function createSessionChip(ctx, t) {
           loading: false,
           chain: view.chain,
           retries: view.retries !== undefined ? view.retries : {},
+          // 读到的值就是输入框的值：未提交的编辑不能盖住刚落库的状态。
+          retryDraft: {},
           // 老宿主（没有这个字段）按"能持久化"显示：它是默认行为，而不是新事实。
           persistent: view.persistent !== false,
           error: null,
@@ -167,6 +173,64 @@ export function createSessionChip(ctx, t) {
 
     toggle: function (sessionId) {
       return stateOf(sessionId).open ? this.close(sessionId) : this.open(sessionId)
+    },
+
+    /** 记录一行重试次数正在输入的值（提交前只活在视图里）。 */
+    setRetryText: function (sessionId, route, text) {
+      var draft = Object.assign({}, stateOf(sessionId).retryDraft)
+      draft[route] = text === undefined || text === null ? '' : String(text)
+      set(sessionId, { retryDraft: draft })
+    },
+
+    /**
+     * Persist one route's retry override.
+     *
+     * 空 = 跟随链（删掉这个键），0..9 = 覆盖（0 是"这条路由不重试"）。越界值不猜、
+     * 不夹：夹到 9 会让用户以为他写的 10 生效了。写入失败时保留用户输入并原地报错——
+     * 与换链同一条契约（成功才刷新）。
+     *
+     * Note: 为何提交在失焦/回车、为何只列本会话那条链的候选 —— 见
+     * .agents/notes/implemented/2026-10-21-retry-overrides-and-chain-management.md
+     */
+    commitRetry: function (sessionId, route) {
+      var current = stateOf(sessionId)
+      var raw = String(Object.hasOwn(current.retryDraft, route) ? current.retryDraft[route] : '').trim()
+      var retries = Object.assign({}, current.retries)
+      if (raw === '') {
+        delete retries[route]
+      } else {
+        var value = Number(raw)
+        if (!Number.isInteger(value) || value < 0 || value > MAX_SESSION_RETRIES) {
+          set(sessionId, { error: fill(t('sessionRetryInvalid'), { max: MAX_SESSION_RETRIES }) })
+          return Promise.resolve(stateOf(sessionId))
+        }
+        retries[route] = value
+      }
+      var remote = health()
+      if (remote === undefined) {
+        set(sessionId, { error: t('sessionChainUnavailable') })
+        return Promise.resolve(stateOf(sessionId))
+      }
+      set(sessionId, { saving: true, error: null })
+      return Promise.resolve(remote.setSessionBinding({
+        sessionId: sessionId,
+        chain: current.chain,
+        retries: retries,
+      })).then(unwrap).then(function (view) {
+        var draft = Object.assign({}, stateOf(sessionId).retryDraft)
+        delete draft[route]
+        set(sessionId, {
+          saving: false,
+          retries: view.retries !== undefined ? view.retries : {},
+          retryDraft: draft,
+          persistent: view.persistent !== false,
+          error: null,
+        })
+        return stateOf(sessionId)
+      }, function (error) {
+        set(sessionId, { saving: false, error: describeError(error) })
+        return stateOf(sessionId)
+      })
     },
 
     /**
@@ -258,6 +322,38 @@ export function SessionChainChip(props) {
   ]
 
   var extras = []
+  // 每路由的重试覆盖：行来自"本会话会走的那条链"的候选——给一条用不上的路由配次数
+  // 只会写进一个永远不生效的键。
+  var activeChain = view.chains.filter(function (entry) {
+    return entry.id === (view.chain === null ? view.defaultChainId : view.chain)
+  })[0]
+  var retryRows = activeChain === undefined ? [] : activeChain.candidates.map(function (candidate) {
+    var route = routeKeyOf(candidate.provider, candidate.model)
+    var typed = Object.hasOwn(view.retryDraft, route)
+      ? view.retryDraft[route]
+      : Object.hasOwn(view.retries, route) ? String(view.retries[route]) : ''
+    return h('div', { key: route, className: 'dsh-router-session-chip-retry' },
+      h('span', { className: 'dsh-router-session-chip-route', title: route }, route),
+      h('input', {
+        type: 'text',
+        inputMode: 'numeric',
+        className: 'dsh-router-session-chip-retry-input',
+        'aria-label': fill(t('sessionRetryRowLabel'), { route: route }),
+        title: fill(t('sessionRetryFollowsChain'), { retries: candidate.maxRetries }),
+        placeholder: t('sessionRetryFollow'),
+        disabled: view.saving === true,
+        value: typed,
+        onChange: function (event) { chip.setRetryText(sessionId, route, event.target.value) },
+        onBlur: function () { chip.commitRetry(sessionId, route) },
+        onKeyDown: function (event) { if (event.key === 'Enter') chip.commitRetry(sessionId, route) },
+      }))
+  })
+  if (retryRows.length > 0) {
+    extras.push(h('div', { key: 'retries', className: 'dsh-router-session-chip-retries' },
+      h('div', { className: 'dsh-router-session-chip-note' }, t('sessionRetryTitle')),
+      retryRows,
+      h('div', { className: 'dsh-router-session-chip-note' }, fill(t('sessionRetryHint'), { max: MAX_SESSION_RETRIES }))))
+  }
   if (view.error !== null) {
     extras.push(h('div', { key: 'error', className: 'dsh-router-session-chip-error', role: 'alert' }, view.error))
   }

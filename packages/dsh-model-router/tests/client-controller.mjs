@@ -1771,6 +1771,99 @@ test('a Host without durable storage says so in the popover', async () => {
   assert.ok(collectText(renderChip(h)).includes('sessionChainMemoryOnly'))
 })
 
+// ---- 链管理：编辑哪一条、改名、默认、增删 ----
+
+test('adding a chain selects it for editing, and saving carries the whole list', async () => {
+  const h = await mount({ value: chipConfig() })
+  h.actions.onAddChain()
+  const draft = h.state().draft
+  assert.deepEqual(draft.chains.map((c) => c.id), ['default', 'coding', 'chain-2'])
+  assert.equal(draft.chain.id, 'chain-2', 'the new chain becomes the edit target')
+  h.actions.onSave()
+  await flush()
+  const op = h.mutateCalls.at(-1).ops.find((entry) => entry.op === 'set' && entry.path[0] === 'chains')
+  assert.deepEqual(op.value.map((c) => c.id), ['default', 'coding', 'chain-2'])
+})
+
+test('renaming a chain changes its display name, never its id', async () => {
+  const h = await mount({ value: chipConfig() })
+  h.actions.onRenameChain('coding', '写文档')
+  const draft = h.state().draft
+  assert.equal(draft.chains[1].name, '写文档')
+  assert.equal(draft.chains[1].id, 'coding', 'sessions bind by id, so a rename must not touch it')
+  assert.equal(h.state().dirty, true)
+})
+
+test('the edit target follows the default chain until the user picks one', async () => {
+  const h = await mount({ value: chipConfig() })
+  // 没显式选过链时，页面编辑的就是默认链——"设为默认"之后编辑目标自然跟着走。
+  h.actions.onSetDefaultChain('coding')
+  assert.equal(h.state().draft.defaultChainId, 'coding')
+  assert.equal(h.state().draft.chain.id, 'coding')
+  // 显式选一条之后，编辑目标跟选择走，不跟默认走。
+  h.actions.onSelectChain('default')
+  assert.equal(h.state().draft.chain.id, 'default')
+  assert.equal(h.state().draft.defaultChainId, 'coding')
+})
+
+test('the last chain cannot be removed', async () => {
+  const h = await mount({ value: config({ chains: [{ id: 'default', name: '', ...chainValue() }], defaultChainId: 'default' }) })
+  h.actions.onRemoveChain('default')
+  assert.deepEqual(h.state().draft.chains.map((c) => c.id), ['default'])
+})
+
+test('removing the default chain moves the default to the first remaining one', async () => {
+  const h = await mount({ value: chipConfig() })
+  h.actions.onRemoveChain('default')
+  const draft = h.state().draft
+  assert.deepEqual(draft.chains.map((c) => c.id), ['coding'])
+  assert.equal(draft.defaultChainId, 'coding')
+  assert.equal(draft.chain.id, 'coding', 'the edit target follows when its chain is gone')
+})
+
+// ---- 会话内 chip：每路由重试覆盖 ----
+
+test('a retry override is written per route, and an empty box removes it again', async () => {
+  const h = await mount({ value: chipConfig() })
+  await h.chip.model.open('s1')
+  h.chip.model.setRetryText('s1', 'b/m', '5')
+  await h.chip.model.commitRetry('s1', 'b/m')
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: { 'b/m': 5 } })
+  assert.deepEqual(h.chip.model.view('s1').retries, { 'b/m': 5 })
+  // 清空 = 跟随链：键被删掉，而不是写成 0。
+  h.chip.model.setRetryText('s1', 'b/m', '')
+  await h.chip.model.commitRetry('s1', 'b/m')
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: {} })
+})
+
+test('an out-of-range retry is refused without a write, and the typed value stays', async () => {
+  const h = await mount({ value: chipConfig() })
+  await h.chip.model.open('s1')
+  h.chip.model.setRetryText('s1', 'b/m', '10')
+  await h.chip.model.commitRetry('s1', 'b/m')
+  assert.match(h.chip.model.view('s1').error, /sessionRetryInvalid/)
+  assert.equal(h.chip.bindings.get('s1'), undefined, '10 must not be clamped to 9 and saved')
+  assert.equal(h.chip.model.view('s1').retryDraft['b/m'], '10', 'the user can fix what he typed')
+  // 0 是合法值：这条路由不重试。
+  h.chip.model.setRetryText('s1', 'b/m', '0')
+  await h.chip.model.commitRetry('s1', 'b/m')
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: { 'b/m': 0 } })
+})
+
+test('the popover lists one retry row per candidate of the chain this session uses', async () => {
+  const h = await mount({ value: chipConfig() })
+  await h.chip.model.open('s1')
+  const menu = renderChip(h)
+  const block = menu.props.children.find((node) => node.props?.className === 'dsh-router-session-chip-retries')
+  assert.notEqual(block, undefined, 'the retry block is rendered inside the popover')
+  const rows = block.props.children.filter(Array.isArray).flat()
+  // 未绑定时走默认链，所以只列默认链的候选：给用不上的路由配次数只会写进死键。
+  assert.deepEqual(rows.map((row) => row.props.children[0].props.children), ['a/m'])
+  const input = rows[0].props.children[1]
+  assert.equal(input.props.inputMode, 'numeric')
+  assert.equal(input.props.placeholder, 'sessionRetryFollow', 'an empty box means "follow the chain"')
+})
+
 await Promise.all(pending)
 console.log(`${passed} client-controller test(s) passed`)
 

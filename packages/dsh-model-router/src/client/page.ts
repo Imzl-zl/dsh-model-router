@@ -182,6 +182,8 @@ export function RouterPage(props) {
               : h(ChainView, {
                   t: t,
                   chain: draft.chain,
+                  chains: draft.chains,
+                  defaultChainId: draft.defaultChainId,
                   disabled: disabled,
                   catalog: state.ui.catalog,
                   passive: state.ui.passive,
@@ -199,6 +201,11 @@ export function RouterPage(props) {
                   onNeeds: props.onNeeds,
                   onOpenAddCandidate: props.onOpenAddCandidate,
                   onJumpHealth: handleJumpHealth,
+                  onSelectChain: props.onSelectChain,
+                  onRenameChain: props.onRenameChain,
+                  onSetDefaultChain: props.onSetDefaultChain,
+                  onRemoveChain: props.onRemoveChain,
+                  onAddChain: props.onAddChain,
                 }))
         : null),
     modal !== null && modal.kind === 'health' ? h(HealthSettingsModal, {

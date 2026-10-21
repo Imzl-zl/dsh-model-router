@@ -10,7 +10,7 @@
 
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, fill, summarize } from './format.ts'
-import { normalizeNamedChain, normalizeHealth, validate } from './validate.ts'
+import { defaultChainValue, normalizeNamedChain, normalizeHealth, validate } from './validate.ts'
 import { defaultChainOf, effectiveChains } from '../chain.ts'
 import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
@@ -37,6 +37,9 @@ export function createController(ctx, scope, t) {
   var draft = seed()
   var ui = {
     activeId: null,
+    // 链列表里正在编辑的那一条（null = 默认链）。这是视图状态，不是配置：不写进 draft，
+    // 也不参与脏检查——"我在看哪条链"与"配置改了什么"是两件事。
+    chainId: null,
     modal: null,
     riskAck: false,
     catalog: null,
@@ -94,7 +97,7 @@ export function createController(ctx, scope, t) {
     // 默认链在快照里还有一份别名 `chain`：界面按"一条链"编辑，而链列表里的哪一条
     // 是默认链只有 draft 知道。它是派生的视图、不是第二份状态——draft 上并没有这个
     // 键，`dirty` 比较的也是没有它的那一份；冻结发生在 clone 之后，所以草稿不受影响。
-    published.chain = defaultChainOf(published)
+    published.chain = edited(published)
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable,
@@ -366,7 +369,22 @@ export function createController(ctx, scope, t) {
    * settings panel's chain list does; it edits `draft.chains` directly.
    */
   function edited(target) {
-    return defaultChainOf(target)
+    var picked = ui.chainId === null
+      ? undefined
+      : target.chains.filter(function (chain) { return chain.id === ui.chainId })[0]
+    return picked !== undefined ? picked : defaultChainOf(target)
+  }
+
+  /** 链名的上限：够写清任务，又不至于把链列表撑爆。 */
+  var CHAIN_NAME_MAX = 40
+
+  /** 新链的 id：chain-2、chain-3… 取第一个没被占用的（id 是身份，不能撞）。 */
+  function nextChainId(chains) {
+    for (var index = 2; index < 1000; index += 1) {
+      var candidate = 'chain-' + index
+      if (!chains.some(function (chain) { return chain.id === candidate })) return candidate
+    }
+    return 'chain-' + String(Date.now())
   }
 
   var controller = {
@@ -378,6 +396,35 @@ export function createController(ctx, scope, t) {
     /** Whether our workbench is mounted at all — the shortcut command's gate. */
     surfaceActive: function () { return surfaceCount > 0 },
     setEnabled: function (value) { draft.enabled = value; publish() },
+    /** 选一条链来编辑（五个分区改的就是它）。 */
+    selectChain: function (id) { ui.chainId = id; publish() },
+    /** 新增一条空链，并立刻切到它上面编辑。 */
+    addChain: function () {
+      var id = nextChainId(draft.chains)
+      draft.chains.push(Object.assign({ id: id, name: '' }, defaultChainValue()))
+      ui.chainId = id
+      publish()
+    },
+    renameChain: function (id, value) {
+      var chain = draft.chains.filter(function (entry) { return entry.id === id })[0]
+      if (chain === undefined) return
+      // 名字只是显示；id 才是身份，所以改名不会动任何会话绑定。
+      chain.name = String(value === undefined || value === null ? '' : value).slice(0, CHAIN_NAME_MAX)
+      publish()
+    },
+    setDefaultChain: function (id) {
+      if (!draft.chains.some(function (entry) { return entry.id === id })) return
+      draft.defaultChainId = id
+      publish()
+    },
+    removeChain: function (id) {
+      // 最后一条链不能删：没有链的配置等于"插件完全不接管"，那不是用户点删除时想要的。
+      if (draft.chains.length <= 1) return
+      draft.chains = draft.chains.filter(function (entry) { return entry.id !== id })
+      if (draft.defaultChainId === id) draft.defaultChainId = draft.chains[0].id
+      if (ui.chainId === id) ui.chainId = null
+      publish()
+    },
     setActive: function (id) {
       ui.activeId = id
       // 打开健康工作台时重取一次被动快照。它原本只在控制器创建时读一次，
@@ -390,6 +437,7 @@ export function createController(ctx, scope, t) {
     },
     discard: function () {
       draft = seed()
+      ui.chainId = null
       failed = false
       publish()
     },
