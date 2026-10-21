@@ -82,7 +82,7 @@
 
 
 - **发布至 npm + 发布链路正规化（2026-10-21）**：包名 dsh-models-router@0.2.0 已上线（GitHub 仓库也已改名 Imzl-zl/dsh-models-router，旧 URL 自动重定向）。npm 上 dsh-model-router 属他人（0.7.1），所以全员改名：package/目录/imports/patch/客户端模块 id/locale ns/样式标记/README/CHANGELOG/LICENSE/banner，测试改为**从 package.json 读包名**不再手抄。新增 .github/workflows/ci.yml（workspace + 包内依赖 → bundle → host tsc → 四个套件各一个 step）与 elease.yml（tag *.*.* 驱动：断言 tag==version → build → 
-pm publish --provenance --access public → scripts/release-notes.mjs 抽 CHANGELOG 一节建 GitHub Release；唯一 secret NPM_TOKEN）。npm 元数据补齐（keywords/homepage/bugs/author/engines/publishConfig/prepublishOnly）。新增 CONTRIBUTING.md、README 的 Project layout / Development / Releasing 三节、决策笔记 2026-10-21-release-pipeline.md。**遗留**：npm 上还挂着 npm 11 staged publish 留下的  .0.0-stage 占位版本（删除需 2FA）；0.2.0 的 tarball 里 README 是加徽章前的版本，元数据改动要等下一个版本。验证：改名后 build 通过、unit 169 / client-controller 73 / remote 22 / 组合 28 场景 0 失败 / tsc 0。
+pm publish --provenance --access public → scripts/release-notes.mjs 抽 CHANGELOG 一节建 GitHub Release；唯一 secret NPM_TOKEN）。npm 元数据补齐（keywords/homepage/bugs/author/engines/publishConfig/prepublishOnly）。新增 CONTRIBUTING.md、README 的 Project layout / Development / Releasing 三节、决策笔记 2026-10-21-release-pipeline.md。**遗留**：npm 上还挂着 npm 11 staged publish 留下的  .0.0-stage 占位版本（删除需 2FA）；0.2.0 的 tarball 里 README 是加徽章前的版本，元数据改动要等下一个版本。验证：改名后 build 通过、unit 169 / client-controller 74 / remote 22 / 组合 28 场景 0 失败 / tsc 0。**CI 首跑抓到两个只在干净 checkout 暴露的问题**：① tsdown 两个 config 并行 → client 的自引用 ``dsh-models-router/remote`` 在 typert 产物生成前退化成外部 require（修：``tsdown --concurrency 1`` + 守卫测试）；② 旧配置组合场景用的静态 overlay 里是 Windows 绝对路径（修：``router.raw`` 运行时生成，fixture 删除）。第三次运行 Ubuntu 上四套件全绿（run 39564316249）。
 
 ## 最近活跃窗口
 
