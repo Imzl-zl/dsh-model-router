@@ -2327,6 +2327,24 @@ test('a session override replaces the candidate retries, and 0 stays distinct fr
   assert.equal(zero.candidates[1].maxAttempts, 3, 'a route the session does not name keeps the candidate count')
 })
 
+// ---- 监听器的生命周期：插件 fiber 是唯一 owner ----
+
+test('per-agent seams are registered on the plugin fiber, never on agent.ctx', () => {
+  // 实测故障（桌面实例）：注册在 `agent.ctx` 上的 listener 属于 **agent** 的生命周期，
+  // 插件 fiber 重启（任何配置保存）后旧 listener 会留在活着的 agent 上，继续用旧实例
+  // 已经关闭的 storage 域——之后每一轮都在 `agent/request` 里抛
+  // `domain 'model_router_sessions' is closed`（连续 5 轮失败，且禁用插件也不管用，
+  // 因为旧 listener 还在）。这条守卫钉住 owner：两个 per-agent 缝必须挂在插件 ctx 上，
+  // agent 从 payload 取。
+  const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|\s)\/\/.*$/gm, '')
+  assert.equal(/agent\.ctx\.on\(/.test(source), false,
+    'an agent-owned listener outlives the fiber that registered it')
+  assert.match(source, /ctx\.on\(\s*'agent\/request'/)
+  assert.match(source, /ctx\.on\(\s*'agent\/pre-step'/)
+})
+
 // ---- 会话重试输入：空与 0 是两件事 ----
 
 test('an empty retry box means "follow the chain", zero means "do not retry"', () => {

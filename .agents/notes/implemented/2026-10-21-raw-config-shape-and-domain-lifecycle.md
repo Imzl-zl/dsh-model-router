@@ -36,6 +36,13 @@ Status: implemented
 5. 空 `chains` 列表的含义随之改回"显式的新形状"（一条空链，不回头看旧键）：键存在与否现在
    是真实的，不再需要拿"空"当"没写"。
 
+3. **旧实例的 per-agent 监听器从不卸载。** 两个路由缝原本注册在 `agent.ctx` 上，owner 是
+   **agent**：插件 fiber 重启后它们仍在，握着一个已经关闭的 storage 域。用户现场因此连续 5 轮
+   （14:07–14:23）在 `agent/request` 里抛 `domain 'model_router_sessions' is closed`，且**在
+   插件被禁用之后仍然失败**——因为禁用的是 fiber，不是这些 listener。修法：两个缝改挂插件 ctx、
+   agent 从 payload 取（与 `agent/request-error` 一致），fiber 成为唯一 owner；加源级守卫
+   （`index.ts` 里不许出现 `agent.ctx.on(`）。
+
 ## Alternatives considered
 
 1. **继续用"空就是没写过"的推断**（第 2 步的做法）。

@@ -215,177 +215,189 @@ export default class ModelRouter extends TypertRemoteService {
       // 工具结果里的图片经 session/event 进来，而该事件只有 session 没有 agent；
       // 这张表把两者接上，条目随 agent 消亡。
       agentsBySession.set(agent.session, agent)
-      // Conditions are gathered once per step, before route selection: pre-step
-      // sees the admitted user messages (the images gate) and the
-      // context-pressure projection answers for the next request (the token
-      // gate). The image flag accumulates across the turn's steps and is
-      // extended by the sticky window, so it stays stable across a step's
-      // retries without pretending later steps claimed the same input. This
-      // listener only observes.
-      agent.ctx.on('agent/pre-step', async (payload, next) => {
-        const decision = await next()
-        states.noteConditions(agent, payload.turn, payload.step, gatherConditions(projections, agent.session, payload.messages))
-        return decision
-      })
+    })
 
-      // Outermost on agent/request: the override applied after next() wins over
-      // installModelSelection's write-back of the user's selection.
-      agent.ctx.on(
-        'agent/request',
-        async (payload, next) => {
-          const { turn, step, signal } = payload
-          const resolved = await next()
-          if (!config.enabled.get()) return resolved
+    // The per-agent seams live on THIS fiber's ctx and take `agent` from the payload.
+    //
+    // They used to be registered on `agent.ctx` inside `agent/created`, which made the
+    // AGENT their owner: after a plugin reload (any config save restarts this fiber)
+    // the old listeners stayed attached to live agents, still holding the disposed
+    // instance's storage handle. Measured in the desktop app: five consecutive turns
+    // failed with `domain 'model_router_sessions' is closed` because the leftover
+    // `agent/request` listener read a domain its own fiber had already closed.
+    // Registering here makes the fiber the single owner — unload removes them, reload
+    // replaces them, and live sessions keep working across a config save.
+    //
+    // Conditions are gathered once per step, before route selection: pre-step sees the
+    // admitted user messages (the images gate) and the context-pressure projection
+    // answers for the next request (the token gate). The image flag accumulates across
+    // the turn's steps and is extended by the sticky window, so it stays stable across
+    // a step's retries without pretending later steps claimed the same input. This
+    // listener only observes.
+    ctx.on('agent/pre-step', async (payload, next) => {
+      const { agent } = payload
+      const decision = await next()
+      states.noteConditions(agent, payload.turn, payload.step, gatherConditions(projections, agent.session, payload.messages))
+      return decision
+    })
 
-          let state = states.current(agent, turn, step)
-          if (state === undefined) {
-            // 本会话绑定的是哪条链、每条路由重试几次。读取是同步的（storage 域的内存
-            // 权威），因此这个请求看到的一定是"上一次写入已落盘"的状态；绑定在 step
-            // 首次请求时冻结，进行中的 step 不换链也不换次数。
-            const effective = readConfig(config, this.raw)
-            const bound = bindings.read(agent.session.id)
-            const sessionChain = chainForSession(effective, bound?.chain ?? null)
-            if (sessionChain.missing !== undefined
-              && states.shouldNoteSkip(agent, turn, `binding:${sessionChain.missing}`)) {
-              // 绑定的链被删了：按默认链路由，但必须说出来。会话保留原来的绑定 id，
-              // 用户重建同名链就能恢复——静默改成"没绑定"会把一次删除变成一次改道。
-              agent.session.append(
-                'user/message',
-                bindingMissingNotice(sessionChain.missing, chainLabel(sessionChain.chain)),
-                { surfaceOp: 'append' },
-              )
-            }
-            const chain = resolveChain(resolved, sessionChain.chain, bound?.retries ?? {})
-            if (chain === undefined) return resolved
-            states.setStickyTurns(agent, chain.stickyTurns)
-            // 策略只决定第一跳失败后从哪条降级候选开始；第一跳恒在链首，不参与抽签。
-            // 起点之后的前进逻辑与策略无关。
-            const fallbacks = chain.candidates.slice(1)
-            const start = resolveStartIndex(fallbacks, chain.strategy, states.nextCursor(agent.session, fallbacks.length))
-            state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step), start)
-            states.start(agent, state)
-          }
+    // Outermost on agent/request: the override applied after next() wins over
+    // installModelSelection's write-back of the user's selection.
+    ctx.on(
+      'agent/request',
+      async (payload, next) => {
+        const { agent, turn, step, signal } = payload
+        const resolved = await next()
+        if (!config.enabled.get()) return resolved
 
-          const plan = planFire(state, mayAdvance(states, agent, turn, step, state.chain))
-          const candidates = plan.state.chain.candidates
-
-          // Walk forward from the planned index, skipping candidates this exact
-          // request cannot be served by: an unmet `needs` condition first, then a
-          // capability rejection. Conditions apply to EVERY candidate — including
-          // the user's own route: an explicit `needs` is the user's stated intent,
-          // and skipping a candidate that fails it honors the configuration instead
-          // of silently ignoring it. What the user's own route stays exempt from
-          // is the automatic machinery: breaker cooldowns and capability
-          // pre-validation, which DSH already settled when the selection was made.
-          let index = plan.state.index
-          const skipped: { candidate: StepCandidate; tier: PrecheckTier | undefined; code: string | undefined }[] = []
-          const conditionSkipped: { candidate: StepCandidate; reason: string }[] = []
-          const blocked: { candidate: StepCandidate; block: RouteBlock }[] = []
-          let outgoing: LlmCallConfig | undefined
-          const now = Date.now()
-          breaker.sweep(now)
-          while (index < candidates.length) {
-            const candidate = candidates[index]!
-            const unmet = unmetCondition(candidate, plan.state.conditions)
-            if (unmet !== undefined) {
-              conditionSkipped.push({ candidate, reason: unmet })
-              index += 1
-              continue
-            }
-            // 禁用的渠道直接跳过——但用户自己选的那一条永远不跳过：那是他明确
-            // 要用的，禁用名单不该能覆盖人的显式选择。
-            if (candidate.provider === resolved.provider && candidate.model === resolved.model) {
-              outgoing = candidateConfig(resolved, candidate)
-              break
-            }
-            const block = breaker.blockedUntil(candidate.provider, candidate.model, now)
-            if (block !== undefined) {
-              blocked.push({ candidate, block })
-              index += 1
-              continue
-            }
-            try {
-              outgoing = await ctx.llm.resolveCallConfig(candidateConfig(resolved, candidate), signal)
-              break
-            } catch (error) {
-              // 预检的抛出按「用户该去哪儿修」分三档（./precheck.ts）：请求形状 /
-              // 路由不存在 / 适配器违约。压成一句"不支持当前请求参数"会把一个配错
-              // 的 provider 说成链的问题——而这条 notice 是 durable 的，错了就
-              // 一直在历史里。分不出档的码保留原通用文案：插件不知道谁能修它，
-              // 编一档就是换一种说法的谎。
-              const code = (error as { code?: unknown }).code
-              const tier = typeof code === 'string' ? precheckTierOf(code) : undefined
-              if (tier === 'adapter-defect') {
-                ctx.logger.error(
-                  `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} adapter broke its contract (${String(code)}): ${String(error)}`,
-                )
-              } else {
-                ctx.logger.warn(
-                  `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} cannot serve this request, skipping: ${String(error)}`,
-                )
-              }
-              skipped.push({ candidate, tier, code: typeof code === 'string' ? code : undefined })
-              index += 1
-            }
-          }
-          // 跳过通知在"落回用户原路由"之前发：那条路径上没有任何切换 Notice，
-          // 而"为什么链上没人能接这一击"恰恰是用户最需要看到的。三类跳过都按
-          // (turn, 跳过组) 去重——工具循环轮次每步都重决一遍，同样的跳过发一次就够；
-          // 这些 notice 是 durable 的 user 消息且进模型上下文，重复发就是重复花钱。
-          if (conditionSkipped.length > 0 && states.shouldNoteSkip(agent, turn, `condition:${conditionSkipKey(conditionSkipped)}`)) {
-            for (const entry of conditionSkipped) {
-              agent.session.append('user/message', conditionSkipNotice(entry.candidate, entry.reason), { surfaceOp: 'append' })
-            }
-          }
-          for (const entry of skipped) {
-            if (!states.shouldNoteSkip(agent, turn, `capability:${routeKeyOf(entry.candidate.provider, entry.candidate.model)}`)) continue
-            // 档二/档三各有自己的文案与指向（./precheck.ts 的三档）；同一档内
-            // 每轮每路由只发一次，去重键与档一共用——那是同一次"调用前跳过"事件。
-            const built = entry.tier === 'route-missing' && entry.code !== undefined
-              ? routeMissingNotice(entry.candidate, entry.code)
-              : entry.tier === 'adapter-defect' && entry.code !== undefined
-                ? adapterDefectNotice(entry.candidate, entry.code)
-                : skipNotice(entry.candidate)
-            agent.session.append('user/message', built, { surfaceOp: 'append' })
-          }
-          for (const entry of blocked) {
-            if (!states.shouldNoteSkip(agent, turn, `breaker:${routeKeyOf(entry.candidate.provider, entry.candidate.model)}`)) continue
-            agent.session.append('user/message', breakerNotice(entry.candidate, entry.block), { surfaceOp: 'append' })
-          }
-          if (outgoing === undefined) {
-            // Nothing in the chain can serve this request. Fall through to the
-            // user's own route so the real failure surfaces there instead of a
-            // silent swap. The chain is spent for this step: record it, or every
-            // retry re-walks the same dead chain, the recovery listener keeps
-            // answering "continue", and the step never ends.
-            // Note: 这个 exhausted 修复的来龙去脉 —— 见
-            // .agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md
-            states.start(agent, { ...plan.state, exhausted: true })
-            return resolved
-          }
-          states.start(agent, skipped.length === 0 && conditionSkipped.length === 0 && index === plan.state.index ? plan.state : skipTo(plan.state, index))
-
-          if (plan.advanced) {
-            const order = plan.state.chain.order
+        let state = states.current(agent, turn, step)
+        if (state === undefined) {
+          // 本会话绑定的是哪条链、每条路由重试几次。读取是同步的（storage 域的内存
+          // 权威），因此这个请求看到的一定是"上一次写入已落盘"的状态；绑定在 step
+          // 首次请求时冻结，进行中的 step 不换链也不换次数。
+          const effective = readConfig(config, this.raw)
+          const bound = bindings.read(agent.session.id)
+          const sessionChain = chainForSession(effective, bound?.chain ?? null)
+          if (sessionChain.missing !== undefined
+            && states.shouldNoteSkip(agent, turn, `binding:${sessionChain.missing}`)) {
+            // 绑定的链被删了：按默认链路由，但必须说出来。会话保留原来的绑定 id，
+            // 用户重建同名链就能恢复——静默改成"没绑定"会把一次删除变成一次改道。
             agent.session.append(
               'user/message',
-              failoverNotice(
-                candidates[plan.fromIndex]!,
-                candidates[index]!,
-                // 用户自己排的降级编号（order[0] 是第一跳，1..N 是降级），不是策略
-                // 旋转后的位置；总数是降级候选数，不含第一跳。
-                order[index] ?? index,
-                Math.max(0, order.length - 1),
-                states.failureCodeOf(agent.session, turn, step),
-              ),
+              bindingMissingNotice(sessionChain.missing, chainLabel(sessionChain.chain)),
               { surfaceOp: 'append' },
             )
           }
-          return outgoing
-        },
-        { prepend: true },
-      )
-    })
+          const chain = resolveChain(resolved, sessionChain.chain, bound?.retries ?? {})
+          if (chain === undefined) return resolved
+          states.setStickyTurns(agent, chain.stickyTurns)
+          // 策略只决定第一跳失败后从哪条降级候选开始；第一跳恒在链首，不参与抽签。
+          // 起点之后的前进逻辑与策略无关。
+          const fallbacks = chain.candidates.slice(1)
+          const start = resolveStartIndex(fallbacks, chain.strategy, states.nextCursor(agent.session, fallbacks.length))
+          state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step), start)
+          states.start(agent, state)
+        }
+
+        const plan = planFire(state, mayAdvance(states, agent, turn, step, state.chain))
+        const candidates = plan.state.chain.candidates
+
+        // Walk forward from the planned index, skipping candidates this exact
+        // request cannot be served by: an unmet `needs` condition first, then a
+        // capability rejection. Conditions apply to EVERY candidate — including
+        // the user's own route: an explicit `needs` is the user's stated intent,
+        // and skipping a candidate that fails it honors the configuration instead
+        // of silently ignoring it. What the user's own route stays exempt from
+        // is the automatic machinery: breaker cooldowns and capability
+        // pre-validation, which DSH already settled when the selection was made.
+        let index = plan.state.index
+        const skipped: { candidate: StepCandidate; tier: PrecheckTier | undefined; code: string | undefined }[] = []
+        const conditionSkipped: { candidate: StepCandidate; reason: string }[] = []
+        const blocked: { candidate: StepCandidate; block: RouteBlock }[] = []
+        let outgoing: LlmCallConfig | undefined
+        const now = Date.now()
+        breaker.sweep(now)
+        while (index < candidates.length) {
+          const candidate = candidates[index]!
+          const unmet = unmetCondition(candidate, plan.state.conditions)
+          if (unmet !== undefined) {
+            conditionSkipped.push({ candidate, reason: unmet })
+            index += 1
+            continue
+          }
+          // 禁用的渠道直接跳过——但用户自己选的那一条永远不跳过：那是他明确
+          // 要用的，禁用名单不该能覆盖人的显式选择。
+          if (candidate.provider === resolved.provider && candidate.model === resolved.model) {
+            outgoing = candidateConfig(resolved, candidate)
+            break
+          }
+          const block = breaker.blockedUntil(candidate.provider, candidate.model, now)
+          if (block !== undefined) {
+            blocked.push({ candidate, block })
+            index += 1
+            continue
+          }
+          try {
+            outgoing = await ctx.llm.resolveCallConfig(candidateConfig(resolved, candidate), signal)
+            break
+          } catch (error) {
+            // 预检的抛出按「用户该去哪儿修」分三档（./precheck.ts）：请求形状 /
+            // 路由不存在 / 适配器违约。压成一句"不支持当前请求参数"会把一个配错
+            // 的 provider 说成链的问题——而这条 notice 是 durable 的，错了就
+            // 一直在历史里。分不出档的码保留原通用文案：插件不知道谁能修它，
+            // 编一档就是换一种说法的谎。
+            const code = (error as { code?: unknown }).code
+            const tier = typeof code === 'string' ? precheckTierOf(code) : undefined
+            if (tier === 'adapter-defect') {
+              ctx.logger.error(
+                `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} adapter broke its contract (${String(code)}): ${String(error)}`,
+              )
+            } else {
+              ctx.logger.warn(
+                `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} cannot serve this request, skipping: ${String(error)}`,
+              )
+            }
+            skipped.push({ candidate, tier, code: typeof code === 'string' ? code : undefined })
+            index += 1
+          }
+        }
+        // 跳过通知在"落回用户原路由"之前发：那条路径上没有任何切换 Notice，
+        // 而"为什么链上没人能接这一击"恰恰是用户最需要看到的。三类跳过都按
+        // (turn, 跳过组) 去重——工具循环轮次每步都重决一遍，同样的跳过发一次就够；
+        // 这些 notice 是 durable 的 user 消息且进模型上下文，重复发就是重复花钱。
+        if (conditionSkipped.length > 0 && states.shouldNoteSkip(agent, turn, `condition:${conditionSkipKey(conditionSkipped)}`)) {
+          for (const entry of conditionSkipped) {
+            agent.session.append('user/message', conditionSkipNotice(entry.candidate, entry.reason), { surfaceOp: 'append' })
+          }
+        }
+        for (const entry of skipped) {
+          if (!states.shouldNoteSkip(agent, turn, `capability:${routeKeyOf(entry.candidate.provider, entry.candidate.model)}`)) continue
+          // 档二/档三各有自己的文案与指向（./precheck.ts 的三档）；同一档内
+          // 每轮每路由只发一次，去重键与档一共用——那是同一次"调用前跳过"事件。
+          const built = entry.tier === 'route-missing' && entry.code !== undefined
+            ? routeMissingNotice(entry.candidate, entry.code)
+            : entry.tier === 'adapter-defect' && entry.code !== undefined
+              ? adapterDefectNotice(entry.candidate, entry.code)
+              : skipNotice(entry.candidate)
+          agent.session.append('user/message', built, { surfaceOp: 'append' })
+        }
+        for (const entry of blocked) {
+          if (!states.shouldNoteSkip(agent, turn, `breaker:${routeKeyOf(entry.candidate.provider, entry.candidate.model)}`)) continue
+          agent.session.append('user/message', breakerNotice(entry.candidate, entry.block), { surfaceOp: 'append' })
+        }
+        if (outgoing === undefined) {
+          // Nothing in the chain can serve this request. Fall through to the
+          // user's own route so the real failure surfaces there instead of a
+          // silent swap. The chain is spent for this step: record it, or every
+          // retry re-walks the same dead chain, the recovery listener keeps
+          // answering "continue", and the step never ends.
+          // Note: 这个 exhausted 修复的来龙去脉 —— 见
+          // .agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md
+          states.start(agent, { ...plan.state, exhausted: true })
+          return resolved
+        }
+        states.start(agent, skipped.length === 0 && conditionSkipped.length === 0 && index === plan.state.index ? plan.state : skipTo(plan.state, index))
+
+        if (plan.advanced) {
+          const order = plan.state.chain.order
+          agent.session.append(
+            'user/message',
+            failoverNotice(
+              candidates[plan.fromIndex]!,
+              candidates[index]!,
+              // 用户自己排的降级编号（order[0] 是第一跳，1..N 是降级），不是策略
+              // 旋转后的位置；总数是降级候选数，不含第一跳。
+              order[index] ?? index,
+              Math.max(0, order.length - 1),
+              states.failureCodeOf(agent.session, turn, step),
+            ),
+            { surfaceOp: 'append' },
+          )
+        }
+        return outgoing
+      },
+      { prepend: true },
+    )
 
     // 最外层 on agent/request-error（`prepend: true`，注册在 root ctx 一次，agent 从
     // payload 取——按 agent/created 逐个注册会让每个 agent 漏一条 root listener）。
