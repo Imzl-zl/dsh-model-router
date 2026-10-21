@@ -42,11 +42,11 @@
   </tr>
   <tr>
     <td><img src="docs/assets/session-chains/chain-management.png" alt="Named chains" width="100%"></td>
-    <td><img src="docs/assets/session-chains/session-bindings.png" alt="Session bindings" width="100%"></td>
+    <td><img src="docs/assets/session-chains/update-notes.png" alt="Release notes after an update" width="100%"></td>
   </tr>
   <tr>
     <td><sub>Named chains, each with its own candidates, switch-on rules and budgets.</sub></td>
-    <td><sub>The same bindings, listed per session in the settings panel.</sub></td>
+    <td><sub>After an update, the workbench shows once what changed in that version.</sub></td>
   </tr>
 </table>
 

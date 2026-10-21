@@ -42,11 +42,11 @@
   </tr>
   <tr>
     <td><img src="docs/assets/session-chains/chain-management.png" alt="命名链管理" width="100%"></td>
-    <td><img src="docs/assets/session-chains/session-bindings.png" alt="会话绑定列表" width="100%"></td>
+    <td><img src="docs/assets/session-chains/update-notes.png" alt="更新后弹一次更新日志" width="100%"></td>
   </tr>
   <tr>
     <td><sub>命名链，各自有候选、失败切换规则和预算。</sub></td>
-    <td><sub>同一份绑定，在设置面板里按会话列出。</sub></td>
+    <td><sub>更新到新版本后，工作台弹一次这一版改了什么。</sub></td>
   </tr>
 </table>
 
