@@ -378,11 +378,11 @@ export var ROUTER_CSS = [
 
 export function ensureStyles() {
   if (typeof document === 'undefined') return function () {}
-  var id = 'dsh-model-router-styles'
-  var tag = document.querySelector('style[data-plugin="dsh-model-router"]')
+  var id = 'dsh-models-router-styles'
+  var tag = document.querySelector('style[data-plugin="dsh-models-router"]')
   if (!tag) {
     tag = document.createElement('style')
-    tag.dataset.plugin = 'dsh-model-router'
+    tag.dataset.plugin = 'dsh-models-router'
     tag.dataset.pluginCss = id
     tag.textContent = ROUTER_CSS
     document.head.appendChild(tag)

@@ -1,5 +1,5 @@
 /**
- * Pure routing decisions for dsh-model-router.
+ * Pure routing decisions for dsh-models-router.
  *
  * Everything here is a function of its arguments: the mutable cursor lives in
  * `state.ts` and is updated by returning new objects, so the decision logic

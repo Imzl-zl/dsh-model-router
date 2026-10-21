@@ -15,7 +15,7 @@
  * spawn `dsh headless` and read the durable log, so nothing there can invoke a
  * Remote. The browser sweep covers the client half against the real gateway.
  *
- * Usage: node packages/dsh-model-router/tests/remote.mjs
+ * Usage: node packages/dsh-models-router/tests/remote.mjs
  * Requires `npm run bundle` in the package directory first.
  */
 
@@ -34,7 +34,9 @@ import { validateTypertManifest } from '@deepseek-ai/dsh-typert-loader'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url))
-const PKG = `${ROOT}packages/dsh-model-router`
+const PKG = `${ROOT}packages/dsh-models-router`
+/** The package's own name (package.json), never re-typed: a rename must not drift. */
+const PACKAGE_NAME = JSON.parse(readFileSync(`${PKG}/package.json`, 'utf8')).name
 const DSH_INSTALL = `${ROOT}node_modules/@deepseek-ai/dsh/package.json`
 const STUB = `${HERE}stub-adapter.mjs`.replaceAll('\\', '/')
 const STUB_DISCOVERY = `${HERE}stub-discovery.mjs`.replaceAll('\\', '/')
@@ -110,7 +112,7 @@ const overlay = `- insert:
   # mode rather than falling back to SRC prototype markers.
   config:
     packages:
-      - dsh-model-router
+      - ${PACKAGE_NAME}
 `
 writeFileSync(`${HERE}remote-overlay.yml`, overlay)
 
@@ -187,17 +189,17 @@ test('the generated artifact passes the loader’s own registration validator', 
   // codecs with the cancellation parameter named. An artifact it rejects would
   // fail a real install's boot, so this is the registration gate, run directly.
   const artifact = await import(pathToFileURL(`${PKG}/lib/typert.host.js`).href)
-  assert.equal(artifact.TYPERT.package, 'dsh-model-router')
-  validateTypertManifest('dsh-model-router', artifact.TYPERT)
+  assert.equal(artifact.TYPERT.package, PACKAGE_NAME)
+  validateTypertManifest(PACKAGE_NAME, artifact.TYPERT)
   const ids = artifact.TYPERT.invocations.map(invocation => invocation.id)
   assert.deepEqual(ids, [
-    'dsh-model-router#routerHealth/checkConnectivity',
-    'dsh-model-router#routerHealth/deleteSessionBinding',
-    'dsh-model-router#routerHealth/probeAll',
-    'dsh-model-router#routerHealth/probeReport',
-    'dsh-model-router#routerHealth/sessionBinding',
-    'dsh-model-router#routerHealth/sessionBindings',
-    'dsh-model-router#routerHealth/setSessionBinding',
+    `${PACKAGE_NAME}#routerHealth/checkConnectivity`,
+    `${PACKAGE_NAME}#routerHealth/deleteSessionBinding`,
+    `${PACKAGE_NAME}#routerHealth/probeAll`,
+    `${PACKAGE_NAME}#routerHealth/probeReport`,
+    `${PACKAGE_NAME}#routerHealth/sessionBinding`,
+    `${PACKAGE_NAME}#routerHealth/sessionBindings`,
+    `${PACKAGE_NAME}#routerHealth/setSessionBinding`,
   ])
 })
 
@@ -218,7 +220,7 @@ test('the generated strict codec refuses a malformed probe request', async () =>
   // re-typed shape.
   const client = await import(pathToFileURL(`${PKG}/lib/typert.remote-client.js`).href)
   const contribution = client.default
-  assert.equal(contribution.package, 'dsh-model-router')
+  assert.equal(contribution.package, PACKAGE_NAME)
   const probeAll = Object.values(contribution.descriptors)
     .find(descriptor => descriptor.method === 'probeAll')
   assert.notEqual(probeAll, undefined, 'the remote client carries a probeAll descriptor')

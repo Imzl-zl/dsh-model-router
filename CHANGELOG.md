@@ -8,6 +8,54 @@ Versions below `1.0.0` are pre-stable: the minor digit marks a delivery
 milestone, and the plugin's DSH peer range (`0.2.0-rc.2`) moves together with
 it.
 
+## [0.2.0] — 2026-10-21
+
+The release that makes routing per-conversation: several named chains, a session
+that can pick one, and retry counts that can be overridden per session. Published
+under the name `dsh-models-router` (`dsh-model-router` on npm belongs to another
+publisher).
+
+### Added
+
+- **Named chains.** `chains[]` + `defaultChainId`; a chain carries its own
+  candidates, switch-on rules, first-hop budget, sticky window and start
+  strategy. The settings page can add, rename, copy (candidates and budgets come
+  along), make default and remove chains; the last one cannot be removed.
+- **Per-session chain binding.** A chip in the composer tool row (after the Plan
+  and permission controls, before the model selector) picks the chain for the
+  current conversation, and a "session routing" tab lists every session so
+  several can be assigned without opening them. Bindings live in the
+  `model_router_sessions` storageDomain sidecar, keyed by `sessionId`; without
+  the storage domain they fall back to process memory and the UI says so.
+- **Per-route retry overrides** in the session popover and the session tab:
+  `session override ?? candidate maxRetries`, keyed by `provider/model`, 0..9.
+  Empty follows the chain; `0` means "do not retry this route".
+- **Batch binding read/write Remotes** (`sessionBindings`,
+  `deleteSessionBinding`) for the session list and its cleanup of deleted
+  sessions.
+
+### Changed
+
+- **Retries on a routed step are executed by this plugin.** For a code listed in
+  `switchOn`, the configured `maxRetries` is the real number, with no
+  provider-policy ceiling on top; the wait copies DSH's curve. Codes outside
+  `switchOn` still go to `llm-retry`.
+- A chain's `needs` gates the fallbacks; the first hop is the user's selection
+  and is never gated (README documents the consequence for image routing).
+
+### Fixed
+
+- **Legacy configs are actually adopted.** The shape is now read from the raw
+  config (`chains` → `chain` → `profiles` → `default`), so a user whose config
+  predates the named chains keeps routing instead of silently being read as an
+  empty chain.
+- **A reloading or disabled plugin no longer breaks turns.** The per-agent seams
+  are owned by the plugin fiber and take the agent from the payload, so they are
+  removed on unload and replaced on reload; a closed storage domain now answers
+  "no binding" on reads and a plain retryable error on writes instead of leaking
+  `DomainError('closed')`, and a restart retries a transiently `already-open`
+  domain.
+
 ## [0.1.0] — 2026-10-19
 
 First tagged release. The plugin has been feature-complete since 2026-10-16 and

@@ -9,7 +9,7 @@
  *
  *   $env:HTTPS_PROXY = 'http://127.0.0.1:7890'   # machine proxy, see tools.md
  *   $env:NODE_USE_ENV_PROXY = '1'
- *   node packages/dsh-model-router/tests/real-run.mjs [server|transport]
+ *   node packages/dsh-models-router/tests/real-run.mjs [server|transport]
  *
  * `server` (default): the user's selection is a channel-B model that answers
  * every request with an upstream 500. `transport`: the selection is a
@@ -105,7 +105,7 @@ ${scenario === 'transport' ? `      real-dead:
 
 - insert:
     - id: model-router
-      name: '${path.join(repo, 'packages', 'dsh-model-router', 'src', 'index.ts').replace(/\\/g, '/')}'
+      name: '${path.join(repo, 'packages', 'dsh-models-router', 'src', 'index.ts').replace(/\\/g, '/')}'
       config:
         enabled: true
         profiles:

@@ -21,9 +21,9 @@
 
 - insert:
     - id: stub-adapter
-      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-model-router/tests/stub-adapter.mjs'
+      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-models-router/tests/stub-adapter.mjs'
     - id: model-router
-      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-model-router/src/index.ts'
+      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-models-router/src/index.ts'
       config:
         enabled: true
         profiles:

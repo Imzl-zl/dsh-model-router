@@ -14,7 +14,7 @@ last_updated: "2026-10-18"
 > 具体偏差：挂载点已从 `plugins.bundle.config` 页面改为**侧栏按钮 → 快捷弹窗**（单一载体）；
 > 识图粘滞已从预算区移出、候选节点已改为紧凑布局、健康监控已独立成工作台。以下正文保留提案原貌，不逐处改写。
 
-本页是 `dsh-model-router` 插件在 DSH 客户端配置界面的设计提案。原设计挂载点为 **Plugins 页 → 已安装插件 → `dsh-model-router` → 配置面板**（Slot: `plugins.bundle.config`），该形态已于 2026-10-16 删除，现为侧栏 `sidebar.footer.action` 打开的弹窗（见 [ui-review.md](ui-review.md) §一）。
+本页是 `dsh-models-router` 插件在 DSH 客户端配置界面的设计提案。原设计挂载点为 **Plugins 页 → 已安装插件 → `dsh-model-router` → 配置面板**（Slot: `plugins.bundle.config`），该形态已于 2026-10-16 删除，现为侧栏 `sidebar.footer.action` 打开的弹窗（见 [ui-review.md](ui-review.md) §一）。
 
 **设计理念**：
 - **拒绝粗暴表格**：彻底抛弃死板文本框堆砌的“简陋表格”排版，建立以**有序降级流水线（Fallback Chain Pipeline）**为核心的直观心智模型；

@@ -7,7 +7,7 @@
  */
 
 
-export var NS = 'dsh-model-router'
+export var NS = 'dsh-models-router'
 
 export var CONFIG_NS = 'model-router'
 

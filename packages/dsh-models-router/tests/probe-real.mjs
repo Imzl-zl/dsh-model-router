@@ -4,7 +4,7 @@
  * connection-error. Read-only reconnaissance for the real-provider failover
  * test — the credentials file is gitignored, this script carries no secrets.
  *
- *   node packages/dsh-model-router/tests/probe-real.mjs [timeoutMs] [--ua]
+ *   node packages/dsh-models-router/tests/probe-real.mjs [timeoutMs] [--ua]
  *
  * `--ua` sends a browser User-Agent: the gateway rejects some requests without
  * one, so the two runs answer different questions — what a bare client sees

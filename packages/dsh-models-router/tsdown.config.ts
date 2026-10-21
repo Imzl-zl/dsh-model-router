@@ -1,5 +1,5 @@
 /**
- * Build pipeline for dsh-model-router.
+ * Build pipeline for dsh-models-router.
  *
  * DSH's shared client-bundle preset lives in packages/client/tsdown.client.ts,
  * which is not part of any published package, so a package outside that
@@ -44,7 +44,7 @@ import { defineConfig } from 'tsdown'
 import { typertPlugin } from '@deepseek-ai/dsh-typert-generator/tsdown'
 
 /** Plugin id: the package name, stamped onto the loader row and the client bundle. */
-const id = 'dsh-model-router'
+const id = 'dsh-models-router'
 
 interface PluginManifest {
   readonly name: string

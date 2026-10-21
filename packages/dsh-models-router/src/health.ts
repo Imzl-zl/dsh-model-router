@@ -1,5 +1,5 @@
 /**
- * Channel Health for dsh-model-router.
+ * Channel Health for dsh-models-router.
  *
  * One fact, one store. Every channel-health fact the UI shows comes from the
  * `router/channel-health` session projection; there is no second in-memory copy.

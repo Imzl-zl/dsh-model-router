@@ -7,7 +7,7 @@
  * context. What these cover is the logic the Loader composition tests exercise
  * only through one deterministic path (minContextTokens); the rest is here.
  *
- * Usage: node packages/dsh-model-router/tests/unit.mjs
+ * Usage: node packages/dsh-models-router/tests/unit.mjs
  */
 
 import assert from 'node:assert/strict'

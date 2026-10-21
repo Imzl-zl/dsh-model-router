@@ -13,7 +13,7 @@ Thumbs.db
 node_modules/
 dist/
 coverage/
-packages/dsh-model-router/lib/
+packages/dsh-models-router/lib/
 
 # Spike runtime artifacts: the installed dsh CLI, the pinned Harness home,
 # local session logs and probe evidence. None of it is a deliverable.
@@ -33,24 +33,24 @@ spike/split/
 setup-collaboration-files.backup/
 
 # Plugin test runtime: pinned DSH home, session logs, generated overlay/script
-packages/dsh-model-router/tests/.dshhome/
-packages/dsh-model-router/tests/.dshhome-web/
-packages/dsh-model-router/tests/.dshhome-delivery/
-packages/dsh-model-router/tests/.dshhome-real/
-packages/dsh-model-router/tests/.dshhome-real-web/
-packages/dsh-model-router/tests/.dshhome-view/
-packages/dsh-model-router/tests/.dshhome-remote/
-packages/dsh-model-router/tests/*.log
-packages/dsh-model-router/tests/.sessions/
-packages/dsh-model-router/tests/overlay.yml
-packages/dsh-model-router/tests/overlay-real.yml
-packages/dsh-model-router/tests/remote-overlay.yml
-packages/dsh-model-router/tests/web-real.overlay.yml
-packages/dsh-model-router/tests/web-view.overlay.yml
-packages/dsh-model-router/tests/web-save.overlay.yml
-packages/dsh-model-router/tests/stub-script.json
-packages/dsh-model-router/tests/.binding-observed.json
-packages/dsh-model-router/tests/vision-test.png
+packages/dsh-models-router/tests/.dshhome/
+packages/dsh-models-router/tests/.dshhome-web/
+packages/dsh-models-router/tests/.dshhome-delivery/
+packages/dsh-models-router/tests/.dshhome-real/
+packages/dsh-models-router/tests/.dshhome-real-web/
+packages/dsh-models-router/tests/.dshhome-view/
+packages/dsh-models-router/tests/.dshhome-remote/
+packages/dsh-models-router/tests/*.log
+packages/dsh-models-router/tests/.sessions/
+packages/dsh-models-router/tests/overlay.yml
+packages/dsh-models-router/tests/overlay-real.yml
+packages/dsh-models-router/tests/remote-overlay.yml
+packages/dsh-models-router/tests/web-real.overlay.yml
+packages/dsh-models-router/tests/web-view.overlay.yml
+packages/dsh-models-router/tests/web-save.overlay.yml
+packages/dsh-models-router/tests/stub-script.json
+packages/dsh-models-router/tests/.binding-observed.json
+packages/dsh-models-router/tests/vision-test.png
 
 # Serena MCP local project cache; not project content
 .serena/

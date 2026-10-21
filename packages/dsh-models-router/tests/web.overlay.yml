@@ -37,4 +37,4 @@
 
 - insert:
     - id: stub-adapter
-      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-model-router/tests/stub-adapter.mjs'
+      name: 'D:/sudy/myproject/dsh-model-router/packages/dsh-models-router/tests/stub-adapter.mjs'

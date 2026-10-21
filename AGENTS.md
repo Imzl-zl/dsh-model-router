@@ -11,9 +11,9 @@
 
 - 环境：Windows；参考 DSH checkout 为 `D:\sudy\github\deepseek-harness`（只读）。
 - 语言/运行时：设计文档以中文为主；插件技术栈遵循 DSH 当前 Cordis/TypeScript 包规范（schemastery Config、函数插件形态、`Volatile` 配置访问）。
-- 当前交付：Markdown 设计 + Phase 1 插件实现（`packages/dsh-model-router/`，host 侧最小闭环：选路、两层交接、候选索引、预校验、中文通知；23 个真实 Loader 组合测试通过）。
+- 当前交付：Markdown 设计 + Phase 1 插件实现（`packages/dsh-models-router/`，host 侧最小闭环：选路、两层交接、候选索引、预校验、中文通知；23 个真实 Loader 组合测试通过）。
 - 配置根目录：插件经 cordis overlay（开发）或 `dsh.bundle`（交付）安装；配置 ns = bundle patch 行 id（`model-router`）。
-- 标准验证命令：`npm test`（四套件：unit / client-controller / remote / run）；`npx tsc --noEmit --skipLibCheck --strict --module nodenext --moduleResolution nodenext --target es2022 --allowImportingTsExtensions packages/dsh-model-router/src/index.ts`（类型检查）；交付前逐项核对 Markdown 本地链接、官方来源和 DSH 源码引用。
+- 标准验证命令：`npm test`（四套件：unit / client-controller / remote / run）；`npx tsc --noEmit --skipLibCheck --strict --module nodenext --moduleResolution nodenext --target es2022 --allowImportingTsExtensions packages/dsh-models-router/src/index.ts`（类型检查）；交付前逐项核对 Markdown 本地链接、官方来源和 DSH 源码引用。
 
 ## 1. 作用
 
@@ -28,7 +28,7 @@
 
 ## 3. 架构与项目结构
 
-- 插件实现在 `packages/dsh-model-router/`（host `src/` + 测试 `tests/`）；`docs/design/` 保存路由提案、源码地图与计划，`docs/references/` 保存外部先例，`.agents/notes/` 保存决策理由；`spike/` 保留 Phase 1 spike 实证产物。
+- 插件实现在 `packages/dsh-models-router/`（host `src/` + 测试 `tests/`）；`docs/design/` 保存路由提案、源码地图与计划，`docs/references/` 保存外部先例，`.agents/notes/` 保存决策理由；`spike/` 保留 Phase 1 spike 实证产物。
 - DSH 当前实现仅从 `D:\sudy\github\deepseek-harness` 只读核对；未经用户明确授权，不在该 checkout 创建、删除或修改文件。
 
 ## 4. 协作文件与决策笔记
@@ -44,7 +44,7 @@
 - 外部先例：[主流方案对照](docs/references/prior-art.md)。
 - 用户待决问题：[未决事项](docs/design/open-questions.md)。
 - DSH 参考 checkout：`D:\sudy\github\deepseek-harness`。
-- Phase 1 组合测试已实跑（23/23，`packages/dsh-model-router/tests/run.mjs`）；不得声称运行过尚未编写的测试。
+- Phase 1 组合测试已实跑（23/23，`packages/dsh-models-router/tests/run.mjs`）；不得声称运行过尚未编写的测试。
 
 ## 6. 项目特定规则
 

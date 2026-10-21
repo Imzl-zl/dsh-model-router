@@ -10,7 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
-import remote from 'dsh-model-router/remote'
+import remote from 'dsh-models-router/remote'
 import { createSessionChip, SessionChainChip } from './chip.ts'
 import { createController } from './controller.ts'
 import { ModelRouterPanel, ModelRouterPanelIcon } from './panel.ts'

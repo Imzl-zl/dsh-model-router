@@ -1,25 +1,39 @@
-# dsh-model-router
+# dsh-models-router
 
-Transparent cross-provider failover for DSH Agent main requests.
+Transparent cross-provider failover for DSH Agent main requests, with per-session
+fallback chains.
 
 You pick a model in the official selector as usual. When that model fails, this
 plugin retries the request against your ordered list of physical
 provider/model candidates and tells you — in Chinese, in the conversation —
-what happened and why. Requests for models without a configured rule behave
+what happened and why. Requests for models without a configured chain behave
 exactly as they do without the plugin.
+
+## Install
+
+```bash
+dsh plugin add dsh-models-router
+```
+
+DSH `0.2.0-rc.2` or newer. The `@deepseek-ai/*` and `zod` peers resolve from
+your DSH installation, so nothing is bundled twice.
 
 ## How it works
 
 The plugin owns exactly two seams of the Agent loop:
 
-- **`agent/request`** (registered with `prepend: true`) selects the physical
-  route for every attempt. It runs outside `installModelSelection`, so its
-  override wins over the write-back of your selection.
-- **`agent/request-error`** (registered on `agent.ctx` at `agent/created`,
-  without prepend) sits inside DSH's `llm-retry`: same-route retries with
-  backoff and their durable records stay owned by `llm-retry`; when it gives
-  up, its `next()` hands the failure to this plugin, which moves the chain to
-  the next candidate.
+- **`agent/request`** (`prepend: true`) selects the physical route for every
+  attempt. It runs outside `installModelSelection`, so its override wins over
+  the write-back of your selection.
+- **`agent/request-error`** (`prepend: true`, outermost) sees every failed
+  attempt first. For a code your chain switches on, the plugin waits and retries
+  **itself** — the configured number is the real number, with no provider-policy
+  ceiling on top. For any other code it delegates to DSH, so `llm-retry` keeps
+  owning those retries and its own cap.
+
+Both seams register on the plugin's own context and take the agent from the
+payload, so unloading or reloading the plugin (any config save) removes and
+replaces them; a live session never keeps a handle to a dead instance.
 
 Two more things the plugin adds:
 
@@ -36,18 +50,30 @@ Two more things the plugin adds:
   presentation DSH's own model-selection notice gets). DSH's own English
   "model changed" notice also appears; both are factual.
 
-## Configuration
+## Chains
+
+A chain is a complete fallback order: its candidates, which failure codes switch,
+the first hop's retry budget, the start strategy and the image-sticky window. The
+first hop is always the model you selected in DSH — it is not part of the config —
+so a chain only answers "where next".
 
 ```yaml
-enabled: true                 # master switch
-chain:
-  candidates:                 # fallbacks; the selected model is the implicit first hop
-    - { provider: deepseek-official, model: deepseek-v4-flash, maxRetries: 1, needs: { images: false } }
-    - { provider: pi-ai-gpt, model: gpt-5, maxRetries: 0, needs: { images: true } }
-    - { provider: pi-ai-claude, model: claude-sonnet-5, maxRetries: 0, needs: { minContextTokens: 120000 } }
-  switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  firstHopMaxRetries: 0       # retries after the first hop's first call
-  stickyTurns: 0              # no-image turns to keep the image route after an image turn
+enabled: true
+defaultChainId: default          # sessions with no choice of their own use this
+chains:
+  - id: default                  # stable id: sessions bind to it, renaming never breaks them
+    name: ""                     # empty = "default chain" in the UI
+    candidates:                  # fallbacks; the selected model is the implicit first hop
+      - { provider: deepseek-official, model: deepseek-v4-flash, maxRetries: 1, needs: { images: false } }
+      - { provider: pi-ai-gpt, model: gpt-5, maxRetries: 0, needs: { images: true } }
+      - { provider: pi-ai-claude, model: claude-sonnet-5, maxRetries: 0, needs: { minContextTokens: 120000 } }
+    switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true }
+    firstHopMaxRetries: 0        # retries after the first hop's first call
+    stickyTurns: 0               # no-image turns to keep the image route after an image turn
+    strategy: order
+  - id: coding
+    name: Write code
+    candidates: [...]
 ```
 
 - `maxRetries` / `firstHopMaxRetries` count retries **after** the first call; 0 means
@@ -57,10 +83,12 @@ chain:
   stays exempt only from the automatic gates (breaker cooldowns, capability
   pre-validation).
 - There is no request-wide cap. A step costs at most the sum of the candidates'
-  own budgets, and each retry is executed by DSH — see the first limitation below.
-- Each switch is immediate: no backoff is inserted between candidates. The wait
-  between two tries on the *same* candidate is DSH's (`llm-retry`), about 0.5–10 s
-  with the default policy, and it is not configurable here.
+  own budgets, and each retry inside a candidate is executed by this plugin (see
+  the retry bullet under Known Limitations).
+- Each switch to the next candidate is immediate: no backoff is inserted between
+  candidates. The wait between two tries on the *same* candidate copies the
+  provider's `retryPolicy` (`initialDelayMs`, `maxDelayMs`, `jitterRatio`, and a
+  `Retry-After` when the failure carries one).
 - **What counts as a failure is `switchOn`.** Defaults follow DSH's own retryable set
   (`RATE_LIMIT`, `SERVER`, `TIMEOUT`, `TRANSPORT`, `EMPTY_RESPONSE`) plus `AUTH` and
   `QUOTA`: a dead key or a spent quota is the channel's own fault, and another channel
@@ -70,28 +98,61 @@ chain:
   classification is provider-dependent. Classification uses `LlmFailure.code` only,
   never message text.
 
+The settings panel manages the chains: edit the one marked "editing", rename it,
+copy it (candidates, switch-on rules and budgets come along), make it the
+default, or remove it. The last chain cannot be removed, and a rename never
+touches a session binding because bindings point at the id.
+
+## Per-session chains
+
+A session can route on its own chain instead of the default one:
+
+- **In the composer**: the chip at the left of the tool row (after the Plan and
+  permission controls, before the model selector) names the chain this
+  conversation routes on. Click it to pick another chain, or to set this
+  session's retry count per route.
+- **In the settings panel**: the "session routing" tab lists every session with
+  its chain (and its retry overrides), so several sessions can be assigned
+  without opening each conversation. Rows whose session no longer exists keep
+  their binding and offer a "clear binding" action.
+
+Semantics worth knowing:
+
+- **A binding replaces, it does not merge.** A session bound to `coding` uses the
+  whole `coding` chain, never a mix with the default chain.
+- **Bindings live in a storageDomain sidecar** (`model_router_sessions`), keyed by
+  `sessionId`: they are not in the plugin config, do not enter the session log,
+  and are invisible to the model. Without the storage domain they live in process
+  memory and the UI says so; they do not survive a restart then.
+- **Retry overrides are per route**: `session override ?? candidate maxRetries`,
+  keyed by `provider/model`, 0..9. Empty means "follow the chain"; **0 means "do
+  not retry this route"** — the two are different answers.
+- A binding that names a deleted chain routes on the default chain and leaves a
+  notice in the conversation, instead of silently rerouting. Fork does not
+  inherit a binding (it is keyed by `sessionId`, and a fork is a new session).
+
 ### Routing images to a vision model
 
 DSH rejects an image prompt at **send admission** when the selected model does
 not declare the image modality (`MODEL_DOES_NOT_SUPPORT_IMAGES`,
 `api/session-controller/src/commands.ts:336-348`) — that check runs before any
-request exists, so no plugin can route around it. The supported shape uses the
-fact that the gate reads the *declaration*, not the real capability:
+request exists, so no plugin can route around it. What the router can do is gate
+the **fallbacks** on the request's shape, using the fact that the admission gate
+reads the *declaration*, not the real capability:
 
-1. In DSH's model settings, tick `input: [text, image]` for the text model.
-   Image prompts now always pass admission — whichever route answered last.
-2. Configure the profile with two mutually exclusive conditions: the primary
-   (`candidates[0]`, the text model itself) with `needs: { images: false }`,
-   the vision model with `needs: { images: true }`. The chain above is exactly
-   that shape.
+1. In DSH's model settings, tick `input: [text, image]` for the text model you
+   usually select, so image prompts pass admission.
+2. Put the vision model in the chain with `needs: { images: true }`, and add
+   `invalidRequest` to `switchOn` so a text model that refuses the image hands
+   the request on to it.
 
-Image requests then route to the vision model, no-image turns route back to the
-text model on their own, and the API never receives an image the text model
-cannot process — no manual switching. If the router is off, misconfigured, or
-has no eligible vision candidate, the image reaches the text model and the API
-rejects it loudly (that failure is the point of the tick: it stays visible).
-`stickyTurns` keeps the vision model for a few no-image turns when you follow
-up about an image you just sent.
+The **first hop cannot be gated**: it is your own selection, which the plugin
+does not own, so it is always tried first. Consequence worth knowing: with the
+text model selected, an image request only reaches the vision candidate after the
+text model fails — which is why the practical setup is still "select the vision
+model when you are working with images", or a chain per task. `stickyTurns` then
+keeps the vision route for a few no-image turns when you follow up about an image
+you just sent.
 
 The image condition is turn-scoped and covers images that arrive mid-turn
 through a tool result (`read_image`), not just the messages claimed for the
@@ -175,13 +236,13 @@ step.
 ```sh
 npm install                       # repo root: installs the DSH CLI + peers
 npm test                          # all four suites: unit, client-controller, remote, run
-npm run bundle --prefix packages/dsh-model-router   # build lib/ (host + client + typert)
-node packages/dsh-model-router/tests/unit.mjs    # pure decision logic
-node packages/dsh-model-router/tests/run.mjs     # Loader composition tests
-node packages/dsh-model-router/tests/client-controller.mjs   # browser-half controller (runs the built lib/client.js)
+npm run bundle --prefix packages/dsh-models-router   # build lib/ (host + client + typert)
+node packages/dsh-models-router/tests/unit.mjs    # pure decision logic
+node packages/dsh-models-router/tests/run.mjs     # Loader composition tests
+node packages/dsh-models-router/tests/client-controller.mjs   # browser-half controller (runs the built lib/client.js)
 npx tsc --noEmit --skipLibCheck --strict --module nodenext \
   --moduleResolution nodenext --target es2022 --allowImportingTsExtensions \
-  packages/dsh-model-router/src/index.ts
+  packages/dsh-models-router/src/index.ts
 ```
 
 The browser half and the host face are consumed from the build output, so

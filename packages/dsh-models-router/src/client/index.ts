@@ -1,5 +1,5 @@
 /**
- * Browser entry for dsh-model-router: the sidebar entry and its quick dialog.
+ * Browser entry for dsh-models-router: the sidebar entry and its quick dialog.
  *
  * TypeScript modules bundled by tsdown into the client module system's
  * lazy-CJS factory format (`window.__ModuleLoader__.load({ id, factory })`,

@@ -12,6 +12,6 @@
     <circle cx="13.5" cy="33.5" r="3.2" fill="#4A65E8"/>
     <circle cx="34.5" cy="33.5" r="3.2" fill="#06B6D4"/>
   </g>
-  <text x="200" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="46" font-weight="600" fill="#111827">dsh-model-router</text>
+  <text x="200" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="46" font-weight="600" fill="#111827">dsh-models-router</text>
   <text x="202" y="132" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="19" fill="#6B7280">Transparent cross-provider failover for DeepSeek Harness</text>
 </svg>

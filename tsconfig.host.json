@@ -20,7 +20,7 @@
   // analyzer resolves. Only the analyzer reads this mapping: the package's own
   // tsconfig has no paths, so tsc and tsdown resolve the real package from
   // node_modules.
-  "extends": "./packages/dsh-model-router/tsconfig.json",
+  "extends": "./packages/dsh-models-router/tsconfig.json",
   "compilerOptions": {
     "paths": {
       "@deepseek-ai/dsh-typert-protocol": ["./packages/dsh-typert-protocol/src/index.d.ts"]
@@ -28,7 +28,7 @@
   },
   "references": [
     {
-      "path": "./packages/dsh-model-router/tsconfig.json"
+      "path": "./packages/dsh-models-router/tsconfig.json"
     },
     {
       "path": "./packages/dsh-typert-protocol/tsconfig.json"

@@ -105,7 +105,7 @@ DSH normal retry policy 的默认 eligible codes 是 `EMPTY_RESPONSE`、`RATE_LI
 以下 YAML 仅为说明字段关系的概念配置，不是可执行 DSH plugin config；其字段与示例值均未确认，不代表产品默认值：
 
 ```yaml
-- name: dsh-model-router
+- name: dsh-models-router
   config:
     chain:
       firstHopMaxRetries: 0

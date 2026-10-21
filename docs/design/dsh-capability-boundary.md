@@ -157,7 +157,7 @@ Agent hook 插件不覆盖 `ctx.llm.stream()` 直发调用；全局健康度是�
 | `prepend: true` 仅用于必须跑到普通注册之前的 listener（`cordis-primer.md:33`） | 两个 waterfall 都用，理由见 G2 |
 | 需要一致快照时一次捕获 Config 值（`adding-a-settings-card.md:30`） | 每个请求固定一份 profile 快照 |
 | 诊断文本：类型化失败、机器身份与展示文本分离、不解析错误消息、敏感细节不进用户可见文本（`.agents/skills/dsh-error-handling/SKILL.md:10-26`） | 失败分类用 `LlmFailure.code`，不用 message 匹配 |
-| 日志：插件名前缀 + 格式串 + `%o` 传 error 对象；`warn` 可恢复、`error` 终止性（先例 `llm-retry/src/index.ts:207-210`） | 统一 `dsh-model-router: ...` 前缀 |
+| 日志：插件名前缀 + 格式串 + `%o` 传 error 对象；`warn` 可恢复、`error` 终止性（先例 `llm-retry/src/index.ts:207-210`） | 统一 `dsh-models-router: ...` 前缀 |
 | 凭证绝不入日志（`llm-deepseek` README:118 "never any part of the key"） | 只记 provider/model 与 failure code |
 | prompt 不入 logger，走 session 事件（`AGENTS.md:134`） | 不记录请求内容 |
 | 客户端 UI 文案走 locale 字典（`AGENTS.md:153`） | 仅当增加 UI 时适用 |

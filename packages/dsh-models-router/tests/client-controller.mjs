@@ -18,8 +18,8 @@
  * artifact, which is what the browser actually loads.
  *
  * Usage:
- *   node packages/dsh-model-router/tests/client-controller.mjs
- *   CLIENT_PATH=<file> node packages/dsh-model-router/tests/client-controller.mjs
+ *   node packages/dsh-models-router/tests/client-controller.mjs
+ *   CLIENT_PATH=<file> node packages/dsh-models-router/tests/client-controller.mjs
  *     (run the same suite against another revision, e.g. a pre-fix checkout)
  */
 
@@ -1691,7 +1691,7 @@ test('the session chip registers into the composer tool row as a session-scoped 
   const h = await mount({ value: chipConfig() })
   assert.equal(h.chip.registration.name, 'conversation.input.left')
   assert.equal(h.chip.registration.id, 'model-router-session')
-  assert.equal(h.chip.registration.locale, 'dsh-model-router')
+  assert.equal(h.chip.registration.locale, 'dsh-models-router')
   // 槽位自己给 sessionId（scope: 'session'），组件不猜前台会话，所以这里也不能传。
   assert.equal('sessionId' in h.chip.registration, false)
   // 模型走普通 prop，不进 hooks：那是保留键，装的是 observable source，运行时会

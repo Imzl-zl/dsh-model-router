@@ -59,7 +59,7 @@ last_updated: "2026-10-15"
 
 ### 1. 构建配置
 
-`packages/dsh-model-router/tsdown.config.ts` 自复刻 `clientBundle` 的构建契约，不引 DSH 未发布的预设：该预设位于 [`packages/client/tsdown.client.ts`](file:///D:/sudy/github/deepseek-harness/packages/client/tsdown.client.ts)，不在任何已发布包里，DSH cookbook 明确仓库外的包要自己复刻这一步构建（[`docs/cookbook/adding-a-settings-card.md:60`](file:///D:/sudy/github/deepseek-harness/docs/cookbook/adding-a-settings-card.md#L60)）。Typert 生成插件在本包配置内显式加入（[`clientLibraryConfig`](file:///D:/sudy/github/deepseek-harness/packages/client/tsdown.client.ts#L220) 本身不含它），取值 `typertPlugin({ mode: 'package', faces: ['host'] })`。
+`packages/dsh-models-router/tsdown.config.ts` 自复刻 `clientBundle` 的构建契约，不引 DSH 未发布的预设：该预设位于 [`packages/client/tsdown.client.ts`](file:///D:/sudy/github/deepseek-harness/packages/client/tsdown.client.ts)，不在任何已发布包里，DSH cookbook 明确仓库外的包要自己复刻这一步构建（[`docs/cookbook/adding-a-settings-card.md:60`](file:///D:/sudy/github/deepseek-harness/docs/cookbook/adding-a-settings-card.md#L60)）。Typert 生成插件在本包配置内显式加入（[`clientLibraryConfig`](file:///D:/sudy/github/deepseek-harness/packages/client/tsdown.client.ts#L220) 本身不含它），取值 `typertPlugin({ mode: 'package', faces: ['host'] })`。
 
 Phase 1 实跑后定案的取舍：
 
@@ -67,7 +67,7 @@ Phase 1 实跑后定案的取舍：
 - **`mode: 'package'`**：树外包没有 workspace 可扫，package 模式只发当前被打的包（[`tsdown-plugin.ts:72-93`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/tsdown-plugin.ts#L72)）。
 - **`faces: ['host']`**：Phase 1~2 只需 host face；浏览器侧要用的 `./remote` 投影是 host face 的产物（[`emitter.ts:125-127`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/emitter.ts#L125)），随 Phase 3 的 Remote 方法一起出现，不需要 client face。
 - **`hostPhase` 不适用**：它是 `clientBundle` 的 workspace 构建相位选项，本包不用该预设。
-- **workspace 根标记**：生成器的 package 模式从包 outDir 向上找 `tsconfig.host.json` 定 workspace 根（[`tsdown-plugin.ts:154-161`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/tsdown-plugin.ts#L154)），且要求被引包位于 `<root>/packages` 下（[`analyzer.ts:488`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/analyzer.ts#L488)）。项目根因此持有一份只做 registration 聚合的 `tsconfig.host.json`，引用 `packages/dsh-model-router/tsconfig.json`。
+- **workspace 根标记**：生成器的 package 模式从包 outDir 向上找 `tsconfig.host.json` 定 workspace 根（[`tsdown-plugin.ts:154-161`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/tsdown-plugin.ts#L154)），且要求被引包位于 `<root>/packages` 下（[`analyzer.ts:488`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/analyzer.ts#L488)）。项目根因此持有一份只做 registration 聚合的 `tsconfig.host.json`，引用 `packages/dsh-models-router/tsconfig.json`。
 - **surface**：生成器只为带标记声明的包产出（[`analyzer.ts:2775-2808`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/analyzer.ts#L2775)）。`Profile` 接口带 `@typert` 标签并经 `src/index.ts` 再导出，成为 host face 的唯一 surface；`Strategy` 因此改为显式联合（Zod 发射器不支持 indexed-access，见[`emitter.ts:777-788`](file:///D:/sudy/github/deepseek-harness/packages/typert/generator/src/emitter.ts#L777)）。
 
 取舍理由与被否方案见 `.agents/notes/implemented/2026-10-15-out-of-tree-build-pipeline.md`。
@@ -89,7 +89,7 @@ Phase 1 实跑后定案的取舍：
 async probeAll(request: ProbeRequest, signal: AbortSignal): Promise<ProbeReport>
 ```
 
-`ProbeRequest` / `ProbeReport` 的具体字段在 Phase 3 定义；探测内容、按渠道覆盖、超时与周期沿用现有 [`src/config.ts:125`](../../packages/dsh-model-router/src/config.ts#L125) 的 schema，不新建第二份配置源。
+`ProbeRequest` / `ProbeReport` 的具体字段在 Phase 3 定义；探测内容、按渠道覆盖、超时与周期沿用现有 [`src/config.ts:125`](../../packages/dsh-models-router/src/config.ts#L125) 的 schema，不新建第二份配置源。
 
 ### 4. 客户端挂载
 

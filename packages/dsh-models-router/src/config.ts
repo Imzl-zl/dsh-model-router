@@ -1,5 +1,5 @@
 /**
- * Config schema for dsh-model-router.
+ * Config schema for dsh-models-router.
  *
  * Schemastery is the DSH plugin Config library (184 in-tree users); `.volatile()`
  * marks the fields the Plugins-page form edits. Values are read through

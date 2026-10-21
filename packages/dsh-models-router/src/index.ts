@@ -1,5 +1,5 @@
 /**
- * dsh-model-router — transparent cross-provider failover for Agent main requests.
+ * dsh-models-router — transparent cross-provider failover for Agent main requests.
  *
  * The plugin owns exactly two seams, both verified against the real Loader
  * composition in the Phase 1 spike (docs/design/dsh-capability-boundary.md 7):

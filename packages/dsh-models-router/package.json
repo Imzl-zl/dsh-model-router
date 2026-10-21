@@ -1,12 +1,13 @@
 {
-  "name": "dsh-model-router",
-  "version": "0.1.0",
+  "name": "dsh-models-router",
+  "version": "0.2.0",
   "type": "module",
   "description": "Transparent cross-provider failover for DSH Agent main requests.",
   "icon": "./icon.svg",
   "scripts": {
     "bundle": "tsc -p tsconfig.json && tsdown",
-    "watch": "tsdown --watch"
+    "watch": "tsdown --watch",
+    "prepublishOnly": "npm run bundle"
   },
   "license": "MIT",
   "main": "lib/index.js",
@@ -72,5 +73,13 @@
     "@deepseek-ai/dsh-typert-generator": "0.2.0-rc.2",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Imzl-zl/dsh-model-router.git",
+    "directory": "packages/dsh-models-router"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

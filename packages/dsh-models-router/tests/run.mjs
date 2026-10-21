@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Phase 1 composition tests for dsh-model-router.
+ * Phase 1 composition tests for dsh-models-router.
  *
  * Each scenario boots the REAL headless Loader (`node lib/bin.js --profile
  * headless --patch`) with the stub adapter and the router plugin inserted by
@@ -8,7 +8,7 @@
  * "real Cordis Loader composition" the DSH package rules require — no
  * hand-built Context, no mocked waterfall.
  *
- * Usage: node packages/dsh-model-router/tests/run.mjs [scenario-name]
+ * Usage: node packages/dsh-models-router/tests/run.mjs [scenario-name]
  * Expected wall time: roughly 10-20s per scenario on a warm DSH_HOME.
  */
 
@@ -24,7 +24,7 @@ const ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 // transforming decorators (Node rejects the `@` token outright). tsdown lowers
 // them during the build, so the composition runs against the artifact the
 // browser and a real install would load. `npm run bundle` must have run.
-const PLUGIN = `${ROOT}packages/dsh-model-router/lib/index.js`.replaceAll('\\', '/')
+const PLUGIN = `${ROOT}packages/dsh-models-router/lib/index.js`.replaceAll('\\', '/')
 const STUB = `${HERE}stub-adapter.mjs`.replaceAll('\\', '/')
 const BINDING_STUB = `${HERE}stub-session-binding.mjs`.replaceAll('\\', '/')
 const DSH_BIN = `${ROOT}node_modules/@deepseek-ai/dsh/lib/bin.js`
