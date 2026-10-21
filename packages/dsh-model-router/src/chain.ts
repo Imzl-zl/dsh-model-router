@@ -108,12 +108,11 @@ interface LegacyDefault {
 }
 
 /**
- * The raw validated config plus whatever legacy keys schemastery passed through.
- *
- * `chains` is `unknown` on purpose: {@link effectiveChains} reads whatever shape
- * the stored config carries (a browser draft included) and checks what it needs.
- * `default`/`profiles` are `unknown` for the same reason. `chain` names the one
- * legacy key it still reads: `firstHopMaxAttempts` (a call count, superseded by
+ * The stored config as these migrations read it: the RAW value, so that "this key
+ * was never written" is observable. `chains`/`default`/`profiles` are `unknown`
+ * because an older build's shape is whatever it wrote; the fields it needs are
+ * checked instead of trusted. `chain` names the one legacy key it reads by
+ * presence, plus `firstHopMaxAttempts` (a call count, superseded by
  * `firstHopMaxRetries`).
  */
 export interface LegacyAwareConfig {
@@ -189,15 +188,12 @@ export function effectiveChain(raw: LegacyAwareConfig): EffectiveChain {
     }
   }
 
-  const legacyDefault = isLegacyDefault(raw.default) ? raw.default : undefined
-  if (legacyDefault !== undefined && legacyDefault.candidates !== undefined && legacyDefault.candidates.length > 0) {
-    return {
-      chain: chainFrom(legacyDefault.candidates, legacyDefault),
-      source: 'default',
-      ignoredProfiles: 0,
-    }
-  }
-
+  // A profile is the more specific intent: it was pinned to the model the user had
+  // selected (`when`), and its remaining candidates are exactly the fallbacks that
+  // model used. The old fallback pool only ran when NO profile matched the
+  // selection, so it is the right answer only when there is no profile at all —
+  // reading it first would route a user who configured both onto the pool and
+  // silently drop the chain he actually built.
   const profiles = Array.isArray(raw.profiles) ? raw.profiles.filter(isLegacyProfile) : []
   if (profiles.length > 0) {
     const adopted = profiles[0]!
@@ -217,29 +213,55 @@ export function effectiveChain(raw: LegacyAwareConfig): EffectiveChain {
     }
   }
 
+  const legacyDefault = isLegacyDefault(raw.default) ? raw.default : undefined
+  if (legacyDefault !== undefined && legacyDefault.candidates !== undefined && legacyDefault.candidates.length > 0) {
+    return {
+      chain: chainFrom(legacyDefault.candidates, legacyDefault),
+      source: 'default',
+      ignoredProfiles: 0,
+    }
+  }
+
   return { chain: emptyChain(), source: 'empty', ignoredProfiles: 0 }
 }
 
 /**
  * The chain set the Host and the browser must agree on.
  *
- * A NON-EMPTY stored `chains` list wins outright. An empty one cannot: schemastery
- * gives every array schema the default `[]`, so "the key was never written" and
- * "the key was written empty" are the same value by the time either half sees it.
- * The legacy look is therefore taken for an empty list — and that is sound in
- * practice because the editor never writes one (a draft always holds at least one
- * chain), so an empty list can only come from a config written by an older build
- * or hand-edited to `chains: []` beside an old `chain:`. In both cases the old
- * chain is the only routing data present, and migrating it cannot lose a choice
- * the user made; treating it as "route nothing" could.
+ * Which shape wins is decided by which KEY EXISTS in the stored config, in this
+ * order: `chains` (named chains) → `chain` (the single chain of 2026-10-19) →
+ * `profiles` (per-model rules) → `default` (the old fallback pool). Presence is
+ * read from the RAW config, never from the schema-validated value: schemastery
+ * stamps a default onto every declared field (`chain` becomes an empty chain,
+ * any array becomes `[]`), so a validated object cannot tell "the user wrote
+ * nothing" from "the user wrote an empty one".
+ *
+ * That distinction is what made the first version of this migration dead on
+ * arrival: a config with only `profiles` was read as the stamped empty `chain`,
+ * so the plugin stopped taking over after an upgrade. The Host feeds this
+ * function `ctx.fiber._config` (the raw config, cordis `fiber.d.ts:107-108`).
+ *
+ * Note: 为何旧配置一直没被认领（校验后的值分不出"没写过"）、为何 profiles 先于兜底池 —— 见
+ * .agents/notes/implemented/2026-10-21-raw-config-shape-and-domain-lifecycle.md
  */
 export function effectiveChains(raw: LegacyAwareConfig): EffectiveChains {
-  const stored = Array.isArray(raw.chains) ? raw.chains : []
-  if (stored.length > 0) {
+  if (raw.chains !== undefined) {
+    const stored = Array.isArray(raw.chains) ? raw.chains : []
     return {
-      chains: stored.map((value, index) => namedChainFrom(value, index)),
+      chains: stored.length > 0
+        ? stored.map((value, index) => namedChainFrom(value, index))
+        // 一条链都没有与"一条空链"行为完全相同（插件不接管），但只有后者是可编辑的对象。
+        : [{ id: defaultChainIdOf(raw), name: '', ...emptyChain() }],
       defaultChainId: defaultChainIdOf(raw),
       source: 'chains',
+      ignoredProfiles: 0,
+    }
+  }
+  if (raw.chain !== undefined) {
+    return {
+      chains: [{ id: DEFAULT_CHAIN_ID, name: '', ...chainFrom(raw.chain.candidates ?? [], raw.chain) }],
+      defaultChainId: DEFAULT_CHAIN_ID,
+      source: 'chain',
       ignoredProfiles: 0,
     }
   }

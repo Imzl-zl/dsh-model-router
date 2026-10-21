@@ -26,12 +26,14 @@ Status: implemented
 1. **配置形状**：`chains: NamedChain[]`（每条链 = 原有整套字段 + `id` + `name`）+
    `defaultChainId`。旧的 `chain` 键留在 schema 里只为读取：一旦 `chains` 非空，它不再参与
    任何决定。
-2. **迁移**：非空 `chains` 赢；否则读旧形状（`chain` → `default` → `profiles`），折成**一条**
+2. **迁移**：非空 `chains` 赢；否则按**原始配置里存在的键**读旧形状（`chain` → `profiles` → `default`），折成**一条**
    `id: 'default'`、`name: ''` 的链。行为等价，因为第一跳（用户当前选中的模型）本来就不在
    配置里。
-3. **空链列表 = 旧形状**：因为拉不出"有没有写过"的证据（见上），而编辑器的草稿永远至少有一条
-   链——空列表只可能来自旧配置或手改，两种情况里旧链都是仅有的路由数据，读它不会丢掉用户的
-   选择。这条推断写在 `effectiveChains` 的 docstring 里，它是唯一的判据来源。
+3. **形状判据只看原始配置**（2026-10-21 修正，见
+   `.agents/notes/implemented/2026-10-21-raw-config-shape-and-domain-lifecycle.md`）：这一版最初
+   用"`chains` 非空"来推断形状，但 schemastery 会盖章，真实旧配置因此读不出旧键——用户现场
+   （只有 `profiles`）升级后插件静默不接管。现在 Host 传 `ctx.fiber._config`，键存在与否是事实；
+   显式 `chains: []` 按"一条空链"归一。
 4. **链名留空 = 默认链**，由字典显示。迁移不把"默认链"这三个中文字写进 YAML：英文界面会
    显示中文，而且会让人以为名字是必填。
 5. **会话绑定怎么生效**：`chainForSession` 一处回答"本会话走哪条链"——绑定存在且链存在就用

@@ -38,8 +38,9 @@ last_updated: "2026-10-21"
    在 `agent/request` 里覆盖这一跳实际打到哪条路由，改不了选择器里显示的模型。
 4. **会话 fork 不继承会话侧车。** fork 建的是新 `sessionId`、只继承事件日志；按 sessionId
    键控的绑定不会跟过去。
-5. **`schemastery` 给任何 array schema 盖上默认值 `[]`**（`src/index.ts:914-918`），所以
-   配置里"没写过 `chains`"与"写了个空列表"在取值上不可区分——形状判断只能按"列表非空"。
+5. **`schemastery` 给每个声明过的字段盖上默认值**（`chain` → 一条空链、数组 → `[]`，
+   `src/index.ts:914-918`），所以"写过没有"在**校验后**的值上不可区分。形状判断必须读原始
+   配置（`ctx.fiber._config`）。
 
 ## 三、配置形状
 
@@ -57,13 +58,15 @@ chains:
   - id: coding
     name: 写代码
     candidates: [...]
-chain: {...}                        # 旧形状：只在 chains 为空时读取，首次保存后被移除
+chain: {...}                        # 旧形状：只在 chains 缺失时读取，首次保存后被移除
 ```
 
 - **绑定是覆盖，不是合并**：绑定到 `coding` 的会话整条链用 `coding`，不与默认链拼。
-- **迁移**：`chains` 非空即为新形状；否则把旧形状（`chain` → `default` 池 → `profiles`）
+- **迁移**：形状由**原始配置里有没有这个键**决定（schemastery 给每个声明过的字段盖默认值，校验后的值分不出"没写过"）：`chains` → `chain` → `profiles` → `default` 池；旧形状
   折成一条 `id: 'default'`、`name: ''` 的链。行为等价，因为第一跳（用户当前选中的模型）
-  本来就不在配置里。空列表按"没写过"处理（见二.5），编辑器的草稿永远至少有一条链。
+  本来就不在配置里。`profiles` 先于 `default` 池：profile 才是"选中这个模型时的那套备胎"，
+  池子只在没有 profile 命中时生效。显式写 `chains: []` 按"一条空链"归一（插件不接管），
+  不回头读旧键。
 - **绑定的键是 `sessionId`**，值是 `{ chain, retries }`。绑定指向不存在的链时按"未绑定"
   路由并在下一次请求里留一条 notice；**写入阶段就拒绝**未知链 id，避免存下一个永不生效的选择。
 - **重试次数的取值**：`会话覆盖 ?? 候选的 maxRetries`，解析点唯一（`resolveChain` 的

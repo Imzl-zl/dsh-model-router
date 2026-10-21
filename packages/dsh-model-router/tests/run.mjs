@@ -287,6 +287,25 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'legacy-profiles-config-keeps-routing',
+    note: '最老的配置形状（只有 profiles/default，没有 chain/chains）：升级后仍按原链路由',
+    // 用户现场的形状。判据是"它还在接管"：headers 从第一跳切到 profile 里的降级候选，
+    // 而不是一枪打在原路由上然后失败。
+    overlayPath: `${HERE}legacy-profiles.overlay.yml`,
+    router: {},
+    script: {
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
+      'stub-backup': { outcomes: ['ok'] },
+      'stub-third': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('the default pool was not consulted', events.filter(e => e.type === 'request/header' && e.data.header.config.provider === 'stub-third').length, 0)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'session-binding-selects-a-named-chain',
     note: '两份链的配置 + 本会话绑定 coding：失败后落到 coding 的候选，而不是默认链的',
     // 两条链的候选不同，所以"下一跳打到哪"就能证明用的是哪一条——不需要看日志。
@@ -819,7 +838,11 @@ function boot(scenario) {
   rmSync(SESSIONS, { recursive: true, force: true })
   rmSync(BINDING_OBSERVED, { force: true })
   writeFileSync(`${HERE}stub-script.json`, JSON.stringify(scenario.script, null, 2))
-  writeFileSync(`${HERE}overlay.yml`, overlayYaml(scenario.router, scenario.selection, scenario.binding, scenario.noStorage === true))
+  // 静态 fixture（`overlayPath`）用于"原始旧配置"这类场景：生成器只写它认识的形状，
+  // 而这条场景要的是一份与用户现场逐字相同的 profiles 配置。
+  writeFileSync(`${HERE}overlay.yml`, scenario.overlayPath === undefined
+    ? overlayYaml(scenario.router, scenario.selection, scenario.binding, scenario.noStorage === true)
+    : readFileSync(scenario.overlayPath, 'utf8'))
   // spawnSync over execFileSync: dsh writes load warnings to stderr even when
   // it exits 0, and an error-terminal turn exits non-zero — neither fact says
   // anything about the plugin, so capture both streams and read the log.

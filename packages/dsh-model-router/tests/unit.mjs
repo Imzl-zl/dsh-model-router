@@ -2217,14 +2217,31 @@ test('stored chains win as they are written, with their own default', () => {
   assert.deepEqual(result.chains.map(chain => [chain.id, chain.name]), [['coding', '写代码'], ['writing', '']])
 })
 
-test('an empty chains list reads as the legacy shape, not as a routing-free config', () => {
-  // schemastery 给任何 array 盖上默认 []，"没写过 chains"与"写了个空列表"在值上分不开。
-  // 空列表按旧形状读：插件的编辑器永远写出至少一条链，所以空列表只可能来自旧配置或
-  // 手改；那两种情况里旧链都是仅有的路由数据，读它不会丢掉用户的配置。
-  const legacy = effectiveChains({ chains: [], chain: chainValue({ candidates: [cand('kept')] }) })
-  assert.equal(legacy.source, 'chain')
-  assert.deepEqual(legacy.chains[0].candidates.map(candidate => candidate.provider), ['kept'])
-  assert.equal(legacy.defaultChainId, 'default')
+test('the shape is decided by which key the RAW config has, not by what looks empty', () => {
+  // schemastery 会给声明过的字段盖默认值（chain 变成一条空链、数组变成 []），所以"写过没有"
+  // 只能看原始配置。这条钉住用户现场的三种形状：
+  // ① 最老的一版：只有 profiles —— 必须认领它，否则升级后插件静默不接管。
+  const profilesOnly = effectiveChains({ profiles: [{ when: { provider: 'cherry', model: 'm' }, candidates: [cand('cherry'), cand('lightvela'), cand('stepfun')] }] })
+  assert.equal(profilesOnly.source, 'profile')
+  assert.deepEqual(profilesOnly.chains[0].candidates.map(candidate => candidate.provider), ['lightvela', 'stepfun'])
+  // ② 后来的一版：有 chain（此处被写成空链）——它赢，profiles 是升级后留下的残渣。
+  const chainWins = effectiveChains({ chain: chainValue({ candidates: [] }), profiles: [{ when: { provider: 'a', model: 'm' }, candidates: [cand('a'), cand('b')] }] })
+  assert.equal(chainWins.source, 'chain')
+  assert.deepEqual(chainWins.chains[0].candidates, [])
+  // ③ 新形状：chains 存在（哪怕只有一条空链）就赢，旧键一个都不看。
+  const chainsWin = effectiveChains({ chains: [namedChain('default', '')], chain: chainValue({ candidates: [cand('kept')] }) })
+  assert.equal(chainsWin.source, 'chains')
+  assert.deepEqual(chainsWin.chains[0].candidates, [])
+})
+
+test('an empty chains list is a set of zero chains, not the legacy look', () => {
+  // 显式写了 chains: [] 是一个（无意义的）新形状，按"一条空链"归一：插件不接管，
+  // 但也不会回头去读旧键——旧键在用户保存过新形状之后就是残渣。
+  const empty = effectiveChains({ chains: [], profiles: [{ candidates: [cand('stale')] }] })
+  assert.equal(empty.source, 'chains')
+  assert.equal(empty.chains.length, 1)
+  assert.deepEqual(empty.chains[0].candidates, [])
+  assert.equal(empty.defaultChainId, 'default')
 })
 
 test('a session routes on the chain it bound, else on the default chain', () => {
@@ -2381,6 +2398,51 @@ test('a storage failure reaches the caller unchanged and leaves the previous val
   const bindings = new SessionBindings(fakeContext(facility))
   await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 1 } }), failure)
   assert.equal(bindings.read('s1'), undefined, 'a rejected write must not look saved')
+})
+
+test('a closed domain does not leak another package error: reads follow the chain, writes say so', async () => {
+  // 现场报错：domain 'model_router_sessions' is closed。它来自 storage-domain 的
+  // DomainError：fiber 重启（保存配置）后旧实例的域已经关闭，而浏览器在飞的那次读/写
+  // 正好落在旧实例上。旧实例对读的回答是"没有绑定"（UI 会从新实例重读），对写则明确
+  // 说"刚刚重启、这次没落盘"，不再把别的包的错码抛给用户。
+  const closed = () => { const error = new Error("domain 'model_router_sessions' is closed"); error.code = 'closed'; return error }
+  const facility = {
+    async open() {
+      return {
+        table: () => ({
+          get: () => { throw closed() },
+          entries: () => { throw closed() },
+          put: async () => { throw closed() },
+          delete: async () => { throw closed() },
+        }),
+        close: async () => {},
+      }
+    },
+  }
+  const bindings = new SessionBindings(fakeContext(facility))
+  assert.equal(bindings.read('s1'), undefined)
+  assert.equal(bindings.persistent, false, 'a closed domain is not durable any more')
+  assert.deepEqual(bindings.list(), [])
+  assert.equal(await bindings.delete('s1'), false)
+  await assert.rejects(() => bindings.write('s1', { chain: null, retries: {} }), /just restarted/)
+})
+
+test('opening rides out "already-open" while the previous fiber is still closing', async () => {
+  // 保存配置 = fiber 整体重启：旧域还在关闭、新实例就来 open 同一个名字，facility 会以
+  // already-open 拒绝（storage-domain/src/index.ts:104-106）。不重试的话，新实例会静默
+  // 退回内存，直到下一次重启——用户会以为自己的绑定被清空了。
+  let attempts = 0
+  const facility = {
+    async open() {
+      attempts += 1
+      if (attempts < 3) { const error = new Error("domain 'model_router_sessions' is already open"); error.code = 'already-open'; throw error }
+      return { table: () => ({ get: () => undefined, entries: () => [][Symbol.iterator](), put: async () => {}, delete: async () => true }), close: async () => {} }
+    },
+  }
+  const bindings = new SessionBindings(fakeContext(facility))
+  await bindings.write('s1', { chain: null, retries: { 'p/m': 1 } })
+  assert.equal(attempts, 3)
+  assert.equal(bindings.persistent, true)
 })
 
 test('a domain that cannot open falls back to memory and says so', async () => {

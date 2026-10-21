@@ -101,6 +101,17 @@ export default class ModelRouter extends TypertRemoteService {
   // the headless composition loads this file from source through Node's
   // strip-only type removal, which rejects parameter properties outright.
   private readonly config: Config
+  /**
+   * The plugin's own RAW config, captured once at construction.
+   *
+   * Not 	his.ctx.fiber._config on demand: Cordis rebinds a service method's
+   * 	his.ctx to the CALLER's fiber (the "topology-sensitive property proxy"),
+   * so reading it inside setSessionBinding returns the *caller's* raw config —
+   * measured: the binding fixture's { chain, retries, observe } instead of this
+   * plugin's { chains, ... }. The constructor is the one place where ctx is
+   * this fiber's.
+   */
+  private readonly raw: unknown
   private readonly states = new RouterState()
   private readonly breaker = new CircuitBreaker()
   /**
@@ -120,6 +131,7 @@ export default class ModelRouter extends TypertRemoteService {
   constructor(ctx: Context, config: Config) {
     super(ctx, 'modelRouter', { namespace: 'routerHealth' })
     this.config = config
+    this.raw = rawConfigOf(ctx)
     this.bindings = new SessionBindings(ctx)
     this.install()
     this.armProbeTimer()
@@ -136,7 +148,7 @@ export default class ModelRouter extends TypertRemoteService {
     const agentsBySession = this.agentsBySession
 
     // Structural validation at load: wrong in every environment, so it fails loud.
-    const initial = readConfig(config)
+    const initial = readConfig(config, this.raw)
     if (initial.migratedFrom !== 'chains' && initial.migratedFrom !== 'chain' && initial.migratedFrom !== 'empty') {
       ctx.logger.warn(
         `model-router: the config still uses the old ${initial.migratedFrom === 'default' ? 'default pool' : 'per-model profiles'} shape; `
@@ -154,7 +166,7 @@ export default class ModelRouter extends TypertRemoteService {
       const raw: unknown = next()
       if (this !== ctx.fiber) return raw
       const candidate = Config(raw as RouterOptions)
-      const effective = readConfig(candidate)
+      const effective = readConfig(candidate, raw)
       assertStructural(effective)
       assertNoAlwaysPolicy(ctx, effective)
       return raw
@@ -230,7 +242,7 @@ export default class ModelRouter extends TypertRemoteService {
             // 本会话绑定的是哪条链、每条路由重试几次。读取是同步的（storage 域的内存
             // 权威），因此这个请求看到的一定是"上一次写入已落盘"的状态；绑定在 step
             // 首次请求时冻结，进行中的 step 不换链也不换次数。
-            const effective = readConfig(config)
+            const effective = readConfig(config, this.raw)
             const bound = bindings.read(agent.session.id)
             const sessionChain = chainForSession(effective, bound?.chain ?? null)
             if (sessionChain.missing !== undefined
@@ -467,7 +479,7 @@ export default class ModelRouter extends TypertRemoteService {
     const timeoutSeconds = health?.timeoutSeconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS
     const wanted = request.routes.length > 0
       ? request.routes
-      : configuredRunRoutes(readConfig(this.config))
+      : configuredRunRoutes(readConfig(this.config, this.raw))
     const at = Date.now()
     const routes: ProbeReport['routes'] = []
     this.probeInFlight += 1
@@ -522,7 +534,7 @@ export default class ModelRouter extends TypertRemoteService {
   async checkConnectivity(request: ConnectivityRequest, signal?: AbortSignal): Promise<ConnectivityVerdict[]> {
     const wanted = request.routes.length > 0
       ? request.routes
-      : configuredRunRoutes(readConfig(this.config))
+      : configuredRunRoutes(readConfig(this.config, this.raw))
     // `settings` is read through the optional-service rule (packages/AGENTS.md):
     // a composition without it still checks, it just cannot supply a stored
     // baseURL and lets the discovery decide from the provider route alone.
@@ -567,7 +579,8 @@ export default class ModelRouter extends TypertRemoteService {
    */
   @Remote
   async setSessionBinding(request: SessionBindingRequest): Promise<SessionBindingView> {
-    if (request.chain !== null && !readConfig(this.config).chains.some(chain => chain.id === request.chain)) {
+
+    if (request.chain !== null && !readConfig(this.config, this.raw).chains.some(chain => chain.id === request.chain)) {
       throw new Error(`model-router: the config defines no chain '${request.chain}' to bind this session to`)
     }
     const binding = { chain: request.chain, retries: { ...request.retries } }
@@ -638,7 +651,7 @@ export default class ModelRouter extends TypertRemoteService {
  * default); that is exactly why the `chains` accessor's UNDEFINED value — which
  * the schema deliberately does not default — is the presence signal.
  */
-function readConfig(config: Config): {
+function readConfig(config: Config, raw: unknown): {
   enabled: boolean
   chains: NamedChain[]
   defaultChainId: string
@@ -649,14 +662,10 @@ function readConfig(config: Config): {
   // The declared fields are Volatile accessors; the legacy keys schemastery
   // passed through are plain values (they are not in the schema). Build the
   // migration input explicitly so neither half of that fact is guessed.
-  const legacy = config as unknown as { default?: unknown; profiles?: unknown }
-  const effective = effectiveChains({
-    chains: config.chains?.get(),
-    defaultChainId: config.defaultChainId?.get(),
-    chain: config.chain.get() as ChainConfig,
-    ...(legacy.default === undefined ? {} : { default: legacy.default }),
-    ...(legacy.profiles === undefined ? {} : { profiles: legacy.profiles }),
-  })
+  const stored = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {}
+  // 形状判断只认原始配置里"有没有这个键"：schemastery 会给每个声明过的字段盖默认值
+  // （chain 被盖成一条空链、任何数组被盖成 []），校验后的对象分不出"没写过"与"写了个空的"。
+  const effective = effectiveChains(stored)
   return {
     enabled: config.enabled.get() as boolean,
     chains: effective.chains,
@@ -665,6 +674,16 @@ function readConfig(config: Config): {
     migratedFrom: effective.source,
     ignoredProfiles: effective.ignoredProfiles,
   }
+}
+
+/**
+ * The plugin's RAW config: ctx.fiber._config is "the raw plugin config,
+ * re-resolved before each activation" (cordis fiber.d.ts:107-108). The validated
+ * value cannot answer "was this key written" — schemastery stamps a default onto
+ * every declared field — and that question is the whole shape-判断 in ./chain.ts.
+ */
+function rawConfigOf(ctx: Context): unknown {
+  return (ctx.fiber as unknown as { _config?: unknown })._config
 }
 
 /** Stable identity of one turn's condition-skip set, for the once-per-turn notice. */

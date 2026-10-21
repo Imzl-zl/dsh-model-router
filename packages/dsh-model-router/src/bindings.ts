@@ -25,6 +25,8 @@
  *
  * Note: 为何用 storageDomain 侧车、记录形状、0..9 边界与内存回退 —— 见
  * .agents/notes/implemented/2026-10-21-per-session-bindings.md
+ * Note: 为何关闭后的域要按"实例已死"回答、为何 already-open 要重试 —— 见
+ * .agents/notes/implemented/2026-10-21-raw-config-shape-and-domain-lifecycle.md
  */
 
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
@@ -93,6 +95,14 @@ interface StorageDomainFace {
 /**
  * The binding store: one synchronous read for the routing path, one durable
  * write for the browser, and the memory fallback in between.
+ *
+ * A fiber that is unloading closes its domain, and the closed handle throws on
+ * every call (`DomainError: 'closed'`). Two kinds of caller still arrive after
+ * that: a Remote invocation the browser issued while the plugin was restarting
+ * (a config save restarts this fiber), and a promise that was already in flight.
+ * So the store tracks `closed` and treats it as "this instance is gone": reads
+ * answer "no binding" (the UI re-reads from the new instance), writes fail with a
+ * plain message instead of another package's error code.
  */
 export class SessionBindings {
   /** The fallback store, and the only store when the composition has no storage domain. */
@@ -104,6 +114,8 @@ export class SessionBindings {
   private readonly ctx: BindingContext
   private readonly opening: Promise<void>
   private table: BindingTable | undefined
+  /** The domain was closed with this fiber: this instance serves nothing durable any more. */
+  private closed = false
 
   constructor(ctx: BindingContext) {
     this.ctx = ctx
@@ -112,12 +124,18 @@ export class SessionBindings {
 
   /** Whether a write survives a restart. False = process memory only. */
   get persistent(): boolean {
-    return this.table !== undefined
+    return this.table !== undefined && !this.closed
   }
 
   /** One session's binding, or undefined when it has none. Synchronous by contract. */
   read(sessionId: string): SessionBinding | undefined {
-    return this.table?.get(sessionId) ?? this.memory.get(sessionId)
+    if (this.closed) return undefined
+    try {
+      return this.table?.get(sessionId) ?? this.memory.get(sessionId)
+    } catch (error) {
+      if (!this.gone(error)) throw error
+      return undefined
+    }
   }
 
   /**
@@ -127,8 +145,14 @@ export class SessionBindings {
    * the rows whose session no longer exists (the design's one-time cleanup).
    */
   list(): SessionBindingEntry[] {
-    const entries = this.table !== undefined ? [...this.table.entries()] : [...this.memory.entries()]
-    return entries.map(([sessionId, binding]) => ({ sessionId, chain: binding.chain, retries: binding.retries }))
+    if (this.closed) return []
+    try {
+      const entries = this.table !== undefined ? [...this.table.entries()] : [...this.memory.entries()]
+      return entries.map(([sessionId, binding]) => ({ sessionId, chain: binding.chain, retries: binding.retries }))
+    } catch (error) {
+      if (!this.gone(error)) throw error
+      return []
+    }
   }
 
   /**
@@ -137,8 +161,14 @@ export class SessionBindings {
    */
   async delete(sessionId: string): Promise<boolean> {
     await this.opening
-    if (this.table !== undefined) return await this.table.delete(sessionId)
-    return this.memory.delete(sessionId)
+    if (this.closed) return false
+    try {
+      if (this.table !== undefined) return await this.table.delete(sessionId)
+      return this.memory.delete(sessionId)
+    } catch (error) {
+      if (!this.gone(error)) throw error
+      return false
+    }
   }
 
   /**
@@ -151,19 +181,40 @@ export class SessionBindings {
   async write(sessionId: string, binding: SessionBinding): Promise<void> {
     assertBinding(binding)
     await this.opening
+    if (this.closed) throw reloadedError()
     if (this.table !== undefined) {
-      await this.table.put(sessionId, binding)
+      try {
+        await this.table.put(sessionId, binding)
+      } catch (error) {
+        if (!this.gone(error)) throw error
+        // 明确失败，不写进一个马上被丢弃的内存表：那会让浏览器收到"保存成功"而配置已经没了。
+        throw reloadedError()
+      }
       return
     }
     this.memory.set(sessionId, binding)
+  }
+
+  /**
+   * Fold a closed-domain refusal into "this instance is gone".
+   *
+   * The refusal is `DomainError('closed')` from `storage-domain` — a narrow,
+   * typed signal from another package, not a blanket catch: any other failure is
+   * rethrown unchanged.
+   */
+  private gone(error: unknown): boolean {
+    if ((error as { code?: unknown }).code !== 'closed') return false
+    this.closed = true
+    this.table = undefined
+    return true
   }
 
   private async open(): Promise<void> {
     const facility = this.ctx.get('storageDomain') as StorageDomainFace | undefined
     if (facility === undefined) return
     try {
-      const domain = await facility.open(sessionBindingsDomain)
-      this.ctx.effect(() => () => domain.close(), 'router: session bindings domain')
+      const domain = await this.openDomain(facility)
+      this.ctx.effect(() => () => this.closeDomain(domain), 'router: session bindings domain')
       this.table = domain.table('bindings')
     } catch (error) {
       // 打不开不等于"没有存储"：磁盘上可能还有用户写过的绑定，读不出来必须说出来，
@@ -175,6 +226,38 @@ export class SessionBindings {
       )
     }
   }
+
+  /**
+   * Open the domain, riding out the one transient refusal: a fiber restart closes
+   * the old domain and opens the new one in quick succession, and the facility
+   * refuses a name that is "open or still closing" with `already-open`
+   * (storage-domain/src/index.ts:104-106). Without this retry a config save would
+   * silently leave the NEW instance memory-only until the next restart.
+   */
+  private async openDomain(facility: StorageDomainFace): Promise<OpenDomain> {
+    let lastError: unknown
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        return await facility.open(sessionBindingsDomain)
+      } catch (error) {
+        lastError = error
+        if ((error as { code?: unknown }).code !== 'already-open') throw error
+        await new Promise<void>(resolve => setTimeout(resolve, 50))
+      }
+    }
+    throw lastError
+  }
+
+  private closeDomain(domain: OpenDomain): void {
+    this.closed = true
+    this.table = undefined
+    void domain.close()
+  }
+}
+
+/** The message a write gets when the instance it reached is already on its way out. */
+function reloadedError(): Error {
+  return new Error('model-router: the router was just restarted, so this binding did not land; retry in a moment')
 }
 
 /**
