@@ -9,31 +9,58 @@
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DSH-0.2.0--rc.2-4A65E8.svg" alt="DSH 0.2.0-rc.2"></a>
 </p>
 
+<p align="center">
+  简体中文 | <a href="README.en.md">English</a>
+</p>
+
 ---
 
 <p align="center">
-  Select a model in DSH's selector as usual. When it fails, the request moves to the next physical channel in the chain this conversation routes on, and the conversation reports the failure code, the candidate that answered, and why the switch was allowed.
+  在 DSH 里照常选模型。它失败时，请求会沿着这个会话所绑定的链切到下一个物理渠道；对话里会说明失败码、最终应答的候选，以及这次切换为什么被允许。
 </p>
 
-## Features
+## 功能
 
-- **Named chains, chosen per session** — several fallback chains, each with its own candidates, switch-on rules and budgets; a conversation picks one from the composer chip, or from the session list in the settings panel.
-- **Per-route retry overrides** — a session can override a route's retry count: `0` means "do not retry this route", empty means "follow the chain".
-- **Retries this plugin executes** — for codes in `switchOn`, the configured number is the real number (no provider-policy ceiling); codes outside `switchOn` still go to DSH's `llm-retry`.
-- **Pre-fire validation** — every candidate is resolved through `ctx.llm.resolveCallConfig()` before a real call, so an unservable candidate is skipped rather than burned.
-- **Conditional routing** — per-candidate `images` and `minContextTokens` gates, plus per-code `switchOn`.
-- **Channel health workspace** — zero-token passive latency and throughput, opt-in 1-token probes, route- and channel-scoped circuit breakers, and a failover-history drawer that rebuilds through session forks.
-- **Bilingual UI** — Chinese and English, with an unsaved-changes bar.
+- **按会话选命名链** —— 多条降级链，各自有候选、失败切换规则和预算；会话在 composer 的 chip 里选，或在设置面板的会话列表里改。
+- **每路由重试次数覆盖** —— 会话可以覆盖某条路由的重试次数：`0` = 这条路由不重试，空 = 跟随链。
+- **重试由插件执行** —— `switchOn` 勾选的失败码，填几次就是几次（不受 provider 重试策略封顶）；没勾的仍交给 DSH 的 `llm-retry`。
+- **发起前预校验** —— 每个候选在真实调用前走 `ctx.llm.resolveCallConfig()`，不能服务的候选直接跳过，不白烧一次调用。
+- **条件路由** —— 按候选的 `images` / `minContextTokens` 条件，以及按失败码的 `switchOn`。
+- **渠道健康工作台** —— 零 Token 的被动延迟与吞吐、按需的 1-token 探测、按路由/按渠道的熔断，以及从 durable 会话日志折叠出的转移历史。
+- **中英双语界面** —— 带未保存修改提示条。
 
-## Installation
+## 截图
 
-Requires DSH `0.2.0-rc.2`.
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/session-chains/session-routing-popover.png" alt="按会话选链与每路由重试次数" width="100%"></td>
+    <td width="50%"><img src="docs/assets/session-chains/failover-notice.png" alt="对话里的切换通知" width="100%"></td>
+  </tr>
+  <tr>
+    <td><sub>链与每路由重试次数，在 composer 的 chip 里改。</sub></td>
+    <td><sub>第一跳死掉后切到下一个候选，对话里会报告。</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/session-chains/chain-management.png" alt="命名链管理" width="100%"></td>
+    <td><img src="docs/assets/session-chains/session-bindings.png" alt="会话绑定列表" width="100%"></td>
+  </tr>
+  <tr>
+    <td><sub>命名链，各自有候选、失败切换规则和预算。</sub></td>
+    <td><sub>同一份绑定，在设置面板里按会话列出。</sub></td>
+  </tr>
+</table>
+
+截图来自隔离实例 + 真实网关；死路由是故意配的。
+
+## 安装
+
+需要 DSH `0.2.0-rc.2`。
 
 ```sh
 dsh plugin add dsh-models-router
 ```
 
-From a checkout instead (the package name is `dsh-models-router`; the public registry's `dsh-model-router` is an unrelated package):
+从源码安装（包名是 `dsh-models-router`；npm 上的 `dsh-model-router` 是另一个包）：
 
 ```sh
 git clone https://github.com/Imzl-zl/dsh-models-router.git
@@ -43,59 +70,59 @@ npm run bundle --prefix packages/dsh-models-router
 dsh plugin --profile web add packages/dsh-models-router
 ```
 
-Open **dsh-models-router** from the sidebar's panel list to configure chains.
+打开侧栏面板列表里的 **模型路由** 配置链。
 
-## Configuration
+## 配置
 
 ```yaml
 enabled: true
-defaultChainId: default          # sessions with no choice of their own
+defaultChainId: default          # 没有单独选链的会话走这条
 chains:
-  - id: default                  # stable id: sessions bind to it
-    name: ""                     # empty = "default chain" in the UI
-    candidates:                  # fallbacks; the selected model is the implicit first hop
+  - id: default                  # 稳定 id：会话按它绑定
+    name: ""                     # 留空 = 界面显示「默认链」
+    candidates:                  # 降级候选；用户当前选中的模型是隐式第一跳
       - { provider: deepseek-official, model: deepseek-v4-flash, maxRetries: 1, needs: { images: false } }
       - { provider: pi-ai-gpt, model: gpt-5, maxRetries: 0, needs: { images: true } }
     switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true }
-    firstHopMaxRetries: 0        # retries after the first hop's first call
-    stickyTurns: 0               # no-image turns to keep the image route after an image turn
+    firstHopMaxRetries: 0        # 第一跳首发之后还能重试几次
+    stickyTurns: 0               # 带图轮之后，继续按识图路由的无图轮数
     strategy: order
   - id: coding
-    name: Write code
+    name: 写代码
     candidates: [...]
 ```
 
-The first hop is always the model you selected in DSH — it is not part of the config — so a chain only answers "where next". Old single-`chain` configs (and the per-model `profiles` of 2026-10-19-era builds) are migrated to one named chain on read, and the first save stores the new shape.
+第一跳永远是你在 DSH 里选中的模型，不在配置里——链只回答「失败之后去哪」。旧的单 `chain` 配置（以及 2026-10-19 那版的 per-model `profiles`）在读取时迁成一条命名链，第一次保存写新形状。
 
-## How it works
+## 工作原理
 
-The plugin owns two seams of the Agent loop:
+插件接管 Agent 循环的两个缝：
 
-- **`agent/request`** (`prepend: true`) selects the physical route for every attempt. It runs outside `installModelSelection`, so the model you picked always attempts first and a switch never happens without a failure.
-- **`agent/request-error`** (`prepend: true`, outermost) sees every failed attempt first: for a code in `switchOn` it waits and retries itself, then advances the chain; for any other code it delegates to DSH, so `llm-retry` keeps its own retries and cap.
+- **`agent/request`**（`prepend: true`）为每次尝试选物理路由。它在 `installModelSelection` 之外运行，所以用户选的模型永远先试，没有失败就不会切换。
+- **`agent/request-error`**（`prepend: true`，最外层）先看到每次失败：`switchOn` 里的码，插件自己等一会儿重试，再往前推进；其它码交给 DSH，`llm-retry` 保留自己的次数与上限。
 
-Every switch is folded from the durable session log into a `router/failover-history` projection and surfaced in the failover-history drawer.
+每次切换都从 durable 会话日志折叠进 `router/failover-history` 投影，在转移历史抽屉里展示。
 
-## Project layout
+## 项目结构
 
-| Path | What it is |
+| 路径 | 是什么 |
 |---|---|
-| `packages/dsh-models-router/src/` | The plugin: Host half (`index.ts`, `router.ts`, `bindings.ts`, `chain.ts`, …) and browser half (`src/client/`). |
-| `packages/dsh-models-router/tests/` | Four suites: `unit`, `client-controller`, `remote` (in-process production profile) and `run` (real headless Loader composition per scenario). |
-| `docs/design/` | Current design: routing proposal, source map, capability boundary, per-session chains, release notes policy. |
-| `.agents/notes/` | Decision notes (why, what was rejected, what it cost). Status is the directory. |
-| `spike/` | Phase 1 evidence kept as-is; not part of the package. |
+| `packages/dsh-models-router/src/` | 插件：Host 半包（`index.ts`、`router.ts`、`bindings.ts`、`chain.ts`…）与浏览器半包（`src/client/`）。 |
+| `packages/dsh-models-router/tests/` | 四套件：`unit`、`client-controller`、`remote`（进程内生产组合）、`run`（真 headless Loader 组合，逐场景）。 |
+| `docs/design/` | 当前设计：路由提案、源码地图、能力边界、按会话选链、发布说明策略。 |
+| `.agents/notes/` | 决策笔记（为什么、否掉了什么、代价是什么）。状态就是目录。 |
+| `spike/` | Phase 1 实证产物，原样保留；不属于包。 |
 
-## Development
+## 开发
 
 ```sh
-npm install                                                  # root: the DSH CLI + peers
-npm ci --prefix packages/dsh-models-router --legacy-peer-deps # package: tsc, tsdown, typert generator
-npm run bundle --prefix packages/dsh-models-router           # build lib/ (host + client + typert)
-npm test                                                     # the four suites
+npm install                                                  # 根目录：DSH CLI 与 peer
+npm ci --prefix packages/dsh-models-router --legacy-peer-deps # 包内：tsc、tsdown、typert 生成器
+npm run bundle --prefix packages/dsh-models-router           # 构建 lib/（host + client + typert）
+npm test                                                     # 四套件
 ```
 
-Individual suites (each takes its own file, the composition suite a scenario name):
+单独跑某一套（组合套可带场景名）：
 
 ```sh
 node packages/dsh-models-router/tests/unit.mjs
@@ -104,64 +131,46 @@ node packages/dsh-models-router/tests/remote.mjs
 node packages/dsh-models-router/tests/run.mjs [scenario]
 ```
 
-The package keeps the built `lib/` out of git (it is in `files`, so npm ships
-it); `npm run bundle` must run before a browser or a Loader sees a source
-change, and the composition tests load that artifact on purpose.
+`lib/` 不进 git（在 `files` 里，npm 会发）；改源码后必须先 `npm run bundle`，浏览器与 Loader 才看得到，组合测试故意加载构建产物。
 
-## Releasing
+## 发布
 
 ```sh
-npm version minor --prefix packages/dsh-models-router   # 0.2.0 → 0.3.0, no tag yet
-# move the CHANGELOG's "Unreleased" content under the new version heading
+npm version minor --prefix packages/dsh-models-router   # 0.2.0 → 0.3.0，先不打 tag
+# 把 CHANGELOG 的 Unreleased 内容挪到新版本标题下
 git add -A && git commit -m "chore(release): 0.3.0"
 git tag -a v0.3.0 -m "dsh-models-router 0.3.0" && git push origin master v0.3.0
 ```
 
-Pushing the tag is the whole release:
+推 tag 就是发布：
 
-- `.github/workflows/release.yml` refuses the tag unless it equals the package
-  version, builds `lib/`, publishes to npm with provenance (`--provenance`,
-  public access) and opens the GitHub release with the matching CHANGELOG
-  section (`scripts/release-notes.mjs`).
-- Authentication is npm **trusted publishing** (OIDC): the package's npm
-  settings name this repository and this workflow file, so the run exchanges a
-  short-lived GitHub OIDC token for publish access and attests provenance. No
-  secret, no token, nothing to rotate. The npm account's publishing access is
-  set to "two-factor authentication, bypass tokens disallowed".
-- `.github/workflows/ci.yml` runs on every push to `master` and every pull
-  request: the build, the host type-check and the four suites.
+- `.github/workflows/release.yml` 校验 tag 与包版本一致、构建 `lib/`、带 provenance（`--provenance`，public access）发 npm，并按 CHANGELOG 对应小节建 GitHub Release（`scripts/release-notes.mjs`）。
+- 认证是 npm **trusted publishing**（OIDC）：npm 包设置里绑定了这个仓库与 workflow，CI 用短期 OIDC token 换发布权限并签名。没有 secret、没有 token 可轮换；npm 账号的 publishing access 设为「必须 2FA、禁止 bypass token」。
+- `.github/workflows/ci.yml` 在每次 push `master` 与 PR 跑：构建、host 类型检查、四套件。
 
-The version policy is the CHANGELOG's: below `1.0.0` the minor digit marks a
-delivery milestone, and the plugin's DSH peer range moves with it.
+版本策略按 CHANGELOG：`1.0.0` 之前 minor 位是交付里程碑，插件对 DSH 的 peer 范围随之移动。
 
-The package is `dsh-models-router`: the public registry's `dsh-model-router`
-belongs to another publisher, so install commands, badges and the bundle patch
-use the plural name.
+包名是 `dsh-models-router`：npm 上的 `dsh-model-router` 属于别人，所以安装命令、徽章、bundle patch 都用复数名。
 
-```sh
-node packages/dsh-models-router/tests/unit.mjs              # pure decision logic
-node packages/dsh-models-router/tests/client-controller.mjs # client controller
-node packages/dsh-models-router/tests/run.mjs               # real Loader composition
-npm run bundle --prefix packages/dsh-models-router          # build lib/
-```
+## 限制
 
-The composition tests boot the real headless Loader with a deterministic stub adapter and assert on the durable session log. The web profile is verified by installing the bundle and driving the UI in a browser.
+- **只管 Agent 主请求。** 压缩与会话标题调用仍走 DSH 自己的配置，不路由。
+- **工具能力不预检。** DSH 没有机器可读的「支持 function calling」元数据；不兼容的候选会在运行时失败，由 `switchOn.invalidRequest` 处理。
+- **通知是轨迹优先。** 切换通知走 durable 日志进「轨迹」；当前 DSH 版本不会在对话里单独渲染上下文行（对话里看到的是模型转述）。
+- **fork 不继承会话绑定。** 新会话是新 sessionId，绑定按 sessionId 键控，所以 fork 出来回到默认链。
+- **多个 DSH 进程同写一个 home 时**，绑定是整文件重写（后写覆盖先写）；单进程多会话不受影响。
 
-## Limitations
+## 友情链接
 
-- **Agent main requests only.** Compaction and session-title calls keep their own DSH configuration and are not routed.
-- **Tool capability is not pre-checked.** DSH exposes no machine-readable "supports function calling" metadata; an incompatible candidate fails at runtime and is handled by `switchOn.invalidRequest`.
-- **Notices are trajectory-first.** Failover notices ride the durable log into the trajectory view; this DSH build does not surface context rows in the chat conversation.
+<p align="center">
+  <a href="https://linux.do/" title="LINUX DO"><img src="docs/assets/linux-do-logo.svg" alt="LINUX DO" width="44" height="44"></a><br>
+  <a href="https://linux.do/">LINUX DO</a>
+</p>
 
-## Friends / 友链
+## 文档
 
-- [LINUX DO](https://linux.do) — 中文技术社区（Linux、开发调优、AI 等板块）。
-- [DSH 有哪些必装插件？](https://linux.do/t/topic/3054193) — 同一社区里关于 DSH 插件的讨论帖。
+设计理由、源码核实的能力边界与决策记录在 [`docs/design/`](docs/design/)；发布历史见 [CHANGELOG.md](CHANGELOG.md)。
 
-## Documentation
-
-Design rationale, source-verified capability boundaries, and the decision register live in [`docs/design/`](docs/design/). Release history is in [CHANGELOG.md](CHANGELOG.md).
-
-## License
+## 许可证
 
 [MIT](LICENSE)
