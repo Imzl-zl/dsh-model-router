@@ -287,6 +287,34 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'session-binding-selects-a-named-chain',
+    note: '两份链的配置 + 本会话绑定 coding：失败后落到 coding 的候选，而不是默认链的',
+    // 两条链的候选不同，所以"下一跳打到哪"就能证明用的是哪一条——不需要看日志。
+    router: {
+      enabled: true,
+      chains: [
+        { id: 'default', name: '', candidates: [C('stub-backup', 1)], firstHopMaxRetries: 0, switchOn: { ...SWITCH_ON } },
+        { id: 'coding', name: '写代码', candidates: [C('stub-third', 1)], firstHopMaxRetries: 0, switchOn: { ...SWITCH_ON } },
+      ],
+      defaultChainId: 'default',
+    },
+    binding: { chain: 'coding', retries: {} },
+    script: {
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT'] },
+      'stub-backup': { outcomes: ['ok'] },
+      'stub-third': { outcomes: ['ok'] },
+    },
+    check(events) {
+      // 第一跳永远先试（它是用户选中的模型，不属于任何一条链）；失败后进入绑定的链。
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-third/stub-model'])
+      ok('the default chain candidate was never called',
+        events.filter(e => e.type === 'request/header' && e.data.header.config.provider === 'stub-backup').length === 0)
+      eq('the Host read the bound chain back', bindingObservation()?.readBack?.chain, 'coding')
+      eq('final route', finalRoute(events), 'stub-third/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'default-pool',
     note: '未配规则的模型走全局兜底池：用户所选永远是第一跳',
     router: { enabled: true, profiles: [], default: { enabled: true, candidates: [C('stub-backup', 1)], switchOn: { ...SWITCH_ON } } },
@@ -681,8 +709,7 @@ function candidateYaml(c, indent) {
 function overlayYaml(router, selection, binding, noStorage) {
   // 场景仍按"profile"写（candidates[0] = 用户选中的模型），overlay 生成时转成单链：
   // 被钉死的第一个候选成为隐式第一跳，其余是降级候选。这正是产品上的迁移规则，
-  // 场景因此不需要为形状变化重写一遍。
-  const chain = chainOf(router)
+  // 场景因此不需要为形状变化重写一遍。写 `chains` 的场景则直接给新形状。
   // 绑定夹具：它调的就是插件自己的服务方法，所以只在有绑定的场景里出现。
   const bindingRow = binding === undefined ? '' : `    - id: stub-session-binding
       name: '${BINDING_STUB}'
@@ -718,19 +745,48 @@ ${bindingRow}    - id: model-router
       name: '${PLUGIN}'
       config:
         enabled: ${router.enabled ?? false}
-        chain:
-          candidates:
-${chain.candidates.map(c => candidateYaml(c, '            ')).join('\n')}
-          switchOn: { rateLimit: ${chain.switchOn.rateLimit}, server: ${chain.switchOn.server}, timeout: ${chain.switchOn.timeout}, transport: ${chain.switchOn.transport}, emptyResponse: ${chain.switchOn.emptyResponse}, invalidRequest: ${chain.switchOn.invalidRequest} }${chain.firstHopMaxRetries === undefined ? '' : `
-          firstHopMaxRetries: ${chain.firstHopMaxRetries}`}${chain.stickyTurns === undefined ? '' : `
-          stickyTurns: ${chain.stickyTurns}`}${chain.strategy === undefined ? '' : `
-          strategy: ${chain.strategy}`}
+${chainConfigYaml(router)}
 ${router.breaker === undefined ? '' : `        health:
           breaker:
             enabled: ${router.breaker.enabled}
             rules:
 ${router.breaker.rules.map(r => `              - { code: '${r.code}', message: '${r.message}', cooldownSeconds: ${r.cooldownSeconds}, scope: '${r.scope ?? 'route'}' }`).join('\n')}`}
 `
+}
+
+/**
+ * The chain section of the plugin row, in whichever shape the scenario writes.
+ *
+ * `router.chains` emits the named-chain shape (id + name + fields, plus
+ * `defaultChainId`); everything else emits the legacy single `chain:` key, which
+ * the Host migrates. Both shapes are therefore exercised by the suite: the old
+ * one by every earlier scenario, the new one by the named-chain ones.
+ */
+function chainConfigYaml(router) {
+  if (Array.isArray(router.chains)) {
+    const lines = ['        chains:']
+    for (const chain of router.chains) {
+      lines.push(`          - id: ${chain.id}`)
+      lines.push(`            name: ${JSON.stringify(chain.name ?? '')}`)
+      lines.push(chainFieldsYaml(chain, '            '))
+    }
+    lines.push(`        defaultChainId: ${router.defaultChainId ?? 'default'}`)
+    return lines.join('\n')
+  }
+  return `        chain:\n${chainFieldsYaml(chainOf(router), '          ')}`
+}
+
+/** One chain's fields at a given indentation. */
+function chainFieldsYaml(chain, pad) {
+  const lines = [
+    `${pad}candidates:`,
+    ...chain.candidates.map(c => candidateYaml(c, `${pad}  `)),
+    `${pad}switchOn: { rateLimit: ${chain.switchOn.rateLimit}, server: ${chain.switchOn.server}, timeout: ${chain.switchOn.timeout}, transport: ${chain.switchOn.transport}, emptyResponse: ${chain.switchOn.emptyResponse}, invalidRequest: ${chain.switchOn.invalidRequest} }`,
+  ]
+  if (chain.firstHopMaxRetries !== undefined) lines.push(`${pad}firstHopMaxRetries: ${chain.firstHopMaxRetries}`)
+  if (chain.stickyTurns !== undefined) lines.push(`${pad}stickyTurns: ${chain.stickyTurns}`)
+  if (chain.strategy !== undefined) lines.push(`${pad}strategy: ${chain.strategy}`)
+  return lines.join('\n')
 }
 
 /** A scenario's router config as the single chain the Host executes. */

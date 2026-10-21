@@ -254,15 +254,16 @@ test('sessionBinding reads a session that never wrote one as "follow the default
 })
 
 test('setSessionBinding writes durably, answers what it stored, and reads back', async () => {
-  const request = { sessionId: 'session-remote-test', chain: 'coding', retries: { 'stub-primary/stub-model': 5 } }
+  // 这份 overlay 是旧形状的单链，迁移后它的 id 是 'default'——绑定只能指向真实存在的链。
+  const request = { sessionId: 'session-remote-test', chain: 'default', retries: { 'stub-primary/stub-model': 5 } }
   const stored = await invoke('setSessionBinding', { request })
-  assert.deepEqual(stored, { chain: 'coding', retries: { 'stub-primary/stub-model': 5 }, persistent: true })
+  assert.deepEqual(stored, { chain: 'default', retries: { 'stub-primary/stub-model': 5 }, persistent: true })
   const readBack = await invoke('sessionBinding', { sessionId: 'session-remote-test' })
-  assert.deepEqual(readBack, { chain: 'coding', retries: { 'stub-primary/stub-model': 5 }, persistent: true })
+  assert.deepEqual(readBack, { chain: 'default', retries: { 'stub-primary/stub-model': 5 }, persistent: true })
   // "落盘成功才算成功"：真 json 后端把它写进了 home 的 storage 树，重启读的是这份。
   const file = JSON.parse(readFileSync(`${HOME}/storages/model_router_sessions.json`, 'utf8'))
   assert.deepEqual(file.tables.bindings['session-remote-test'],
-    { chain: 'coding', retries: { 'stub-primary/stub-model': 5 } })
+    { chain: 'default', retries: { 'stub-primary/stub-model': 5 } })
 })
 
 test('a zero override is stored as zero, not as "unset"', async () => {
@@ -282,6 +283,21 @@ test('setSessionBinding refuses an out-of-range count instead of clamping it', a
     /0\.\.9/,
   )
   assert.equal((await invoke('sessionBinding', { sessionId: 'session-remote-bad' })).retries['stub-primary/stub-model'], undefined)
+})
+
+test('setSessionBinding accepts a chain the config defines and refuses one it does not', async () => {
+  // 这份 overlay 写的是旧形状的单链，迁移后它的 id 是 'default'——所以这条同时钉住
+  // "迁移出的链能按 id 绑定"。
+  const stored = await invoke('setSessionBinding', { request: { sessionId: 'session-chain', chain: 'default', retries: {} } })
+  assert.equal(stored.chain, 'default')
+  // 指向不存在的链：路由时会当陈旧绑定处理并改走默认链，所以写入阶段就拒绝，
+  // 而不是存下一个永远不生效的选择。
+  await assert.rejects(
+    () => invoke('setSessionBinding', { request: { sessionId: 'session-chain', chain: 'writing', retries: {} } }),
+    /defines no chain 'writing'/,
+  )
+  assert.equal((await invoke('sessionBinding', { sessionId: 'session-chain' })).chain, 'default',
+    'a refused write leaves the previous binding in place')
 })
 
 test('probeAll measures a live route: reachable with a TTFT number', async () => {

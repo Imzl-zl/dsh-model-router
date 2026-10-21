@@ -135,6 +135,20 @@ export function conditionSkipNotice(
 }
 
 /**
+ * The session is bound to a chain the config no longer defines.
+ *
+ * It is a notice and not a silent reroute: the user picked that chain in this
+ * session, and falling back to the default one while still showing the old
+ * choice would be the kind of quiet divergence this project refuses. The
+ * session keeps its binding — recreating a chain with that id restores it.
+ */
+export function bindingMissingNotice(missingChainId: string, fallbackLabel: string): UserMessage {
+  return notice(
+    `[路由切换] 本会话绑定的链「${missingChainId}」已不存在，本次按默认链「${fallbackLabel}」路由；在会话里的路由设置中重新选择即可恢复`,
+  )
+}
+
+/**
  * A candidate is sitting out a cooldown. The remaining time is stated because
  * "skipped" alone reads like the channel is broken, and the whole point of a
  * cooldown is that it comes back on its own. A channel-scope block says so,

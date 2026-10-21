@@ -10,8 +10,8 @@
 
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, fill, summarize } from './format.ts'
-import { normalizeChain, normalizeHealth, validate } from './validate.ts'
-import { effectiveChain } from '../chain.ts'
+import { normalizeNamedChain, normalizeHealth, validate } from './validate.ts'
+import { defaultChainOf, effectiveChains } from '../chain.ts'
 import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
 import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, MAX_RETRIES } from '../defaults.ts'
@@ -19,12 +19,14 @@ import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, MAX_RETRIES } from 
 export function createController(ctx, scope, t) {
   var seed = function () {
     var value = scope.getSnapshot().value ?? {}
-    // 旧配置（按模型分规则 + 默认兜底池）在这里迁成一条链：规则模块与宿主读的是
-    // 同一个 effectiveChain，所以浏览器看到的就是 Host 会执行的那一条。
+    // 旧配置（单链 / 按模型分规则 + 默认兜底池）在这里迁成命名链：规则模块与宿主读的
+    // 是同一个 effectiveChains，所以浏览器看到的就是 Host 会执行的那一批。
+    var effective = effectiveChains(value)
     return {
       // 与 host schema 的默认值同源：接管会改请求实际打到的渠道，默认关。
       enabled: value.enabled ?? false,
-      chain: normalizeChain(effectiveChain(value).chain),
+      chains: effective.chains.map(normalizeNamedChain),
+      defaultChainId: effective.defaultChainId,
       // A config saved by an older build carries the flat health shape; the
       // three tiers are re-derived here so one old row cannot leave the UI
       // reading `undefined` for a tier that has a perfectly good default.
@@ -88,6 +90,11 @@ export function createController(ctx, scope, t) {
     var problems = validate(draft)
     // The store freezes what it is given, so the published state must be a
     // detached snapshot: the controller keeps mutating its own draft.
+    var published = clone(draft)
+    // 默认链在快照里还有一份别名 `chain`：界面按"一条链"编辑，而链列表里的哪一条
+    // 是默认链只有 draft 知道。它是派生的视图、不是第二份状态——draft 上并没有这个
+    // 键，`dirty` 比较的也是没有它的那一份；冻结发生在 clone 之后，所以草稿不受影响。
+    published.chain = defaultChainOf(published)
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable,
@@ -95,7 +102,7 @@ export function createController(ctx, scope, t) {
       invalid: problems.length > 0,
       saving: saving,
       failed: failed,
-      draft: clone(draft),
+      draft: published,
       problems: problems,
       ui: {
         activeId: ui.activeId,
@@ -349,6 +356,19 @@ export function createController(ctx, scope, t) {
     publish()
   })
 
+  /**
+   * The chain the editor is editing: the default one.
+   *
+   * Every section of the workbench (start strategy, first hop, fallbacks,
+   * switch-on, budget) edits ONE chain, and `seed()` guarantees the draft has at
+   * least one (a config with no chains is normalized to one empty chain). Chain
+   * management — adding, renaming, deleting, choosing the default — is what the
+   * settings panel's chain list does; it edits `draft.chains` directly.
+   */
+  function edited(target) {
+    return defaultChainOf(target)
+  }
+
   var controller = {
     store: store,
     /** The dialog's workbench mounted. */
@@ -383,7 +403,11 @@ export function createController(ctx, scope, t) {
       // 会让保存按钮永久转圈，且用户看不到任何失败原因。
       scope.mutate([
         { op: 'set', path: ['enabled'], value: draft.enabled },
-        { op: 'set', path: ['chain'], value: draft.chain },
+        { op: 'set', path: ['chains'], value: draft.chains },
+        { op: 'set', path: ['defaultChainId'], value: draft.defaultChainId },
+        // 旧形状的单链键：迁移之后就不能留第二份「当前链」，否则下一次加载看到两个
+        // 形状并存，谁赢取决于一条迁移规则，而用户以为自己改的是另一份。
+        { op: 'unset', path: ['chain'] },
         { op: 'set', path: ['health'], value: draft.health },
       ], scope.getSnapshot().revision).then(function (accepted) {
         saving = false
@@ -399,17 +423,17 @@ export function createController(ctx, scope, t) {
     addCandidates: function (entries) {
       entries.forEach(function (entry) {
         // 目录选择只带 route（provider/model）：重试次数先给默认值，之后在链上逐条改。
-        draft.chain.candidates.push(Object.assign({ maxRetries: DEFAULT_MAX_RETRIES }, entry))
+        edited(draft).candidates.push(Object.assign({ maxRetries: DEFAULT_MAX_RETRIES }, entry))
       })
       ui.modal = null
       publish()
     },
     removeCandidate: function (index) {
-      draft.chain.candidates.splice(index, 1)
+      edited(draft).candidates.splice(index, 1)
       publish()
     },
     reorderCandidates: function (fromIndex, toIndex) {
-      var list = draft.chain.candidates
+      var list = edited(draft).candidates
       if (fromIndex >= list.length || toIndex >= list.length || fromIndex === toIndex) return
       var item = list.splice(fromIndex, 1)[0]
       list.splice(toIndex, 0, item)
@@ -421,14 +445,14 @@ export function createController(ctx, scope, t) {
       controller.reorderCandidates(index, index + direction)
     },
     setMaxRetries: function (index, value) {
-      var candidate = draft.chain.candidates[index]
+      var candidate = edited(draft).candidates[index]
       var parsed = Number(value)
       candidate.maxRetries = Number.isFinite(parsed) ? Math.min(MAX_RETRIES, Math.max(0, Math.round(parsed))) : DEFAULT_MAX_RETRIES
       publish()
     },
     /** Patch one candidate's `needs`; an empty patch clears the field. */
     setNeeds: function (index, patch) {
-      var candidate = draft.chain.candidates[index]
+      var candidate = edited(draft).candidates[index]
       var next = Object.assign({}, candidate.needs ?? {})
       // images 三态：require/forbid 各设一极，any 删掉这个字段。
       if (patch.imagesMode !== undefined) {
@@ -445,27 +469,27 @@ export function createController(ctx, scope, t) {
     },
     setStickyTurns: function (value) {
       var parsed = Number(value)
-      draft.chain.stickyTurns = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
+      edited(draft).stickyTurns = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
       publish()
     },
     setFirstHopMaxRetries: function (value) {
       var parsed = Number(value)
-      draft.chain.firstHopMaxRetries = Number.isFinite(parsed) ? Math.min(MAX_RETRIES, Math.max(0, Math.round(parsed))) : DEFAULT_FIRST_HOP_MAX_RETRIES
+      edited(draft).firstHopMaxRetries = Number.isFinite(parsed) ? Math.min(MAX_RETRIES, Math.max(0, Math.round(parsed))) : DEFAULT_FIRST_HOP_MAX_RETRIES
       publish()
     },
     toggleSwitchOn: function (key) {
-      draft.chain.switchOn[key] = !draft.chain.switchOn[key]
+      edited(draft).switchOn[key] = !edited(draft).switchOn[key]
       publish()
     },
     setStrategy: function (value) {
       // 策略只管起点，所以名单本身不动——只改"从哪条开始"。
-      draft.chain.strategy = value
+      edited(draft).strategy = value
       publish()
     },
     setWeight: function (index, value) {
       var parsed = Number(value)
       var clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 0
-      if (draft.chain.candidates[index] !== undefined) draft.chain.candidates[index].weight = clamped
+      if (edited(draft).candidates[index] !== undefined) edited(draft).candidates[index].weight = clamped
       publish()
     },
     openModal: function (modal) {

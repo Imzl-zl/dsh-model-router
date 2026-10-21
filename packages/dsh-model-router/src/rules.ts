@@ -17,7 +17,8 @@
  * .agents/notes/implemented/2026-10-17-policy-into-the-decision-core.md
  */
 
-import type { ChainConfig, HealthConfig } from './config.ts'
+import type { HealthConfig, NamedChain } from './config.ts'
+import { chainLabel } from './chain.ts'
 import { routeKeyOf } from './routes.ts'
 
 /**
@@ -33,7 +34,8 @@ export interface Violation {
 
 /** The config shape both sides validate: a host Config's plain value, or a browser draft. */
 export type StructuralInput = {
-  chain: ChainConfig
+  chains: NamedChain[]
+  defaultChainId: string
   health?: HealthConfig
 }
 
@@ -41,35 +43,62 @@ export type StructuralInput = {
  * Every cross-field violation, in the order the host used to throw them —
  * so the first-thrown message is unchanged for a config that breaks several
  * rules at once. The browser reports all of them.
+ *
+ * The per-chain rules run once PER CHAIN: two chains may legitimately name the
+ * same route (they are alternative orders for different tasks), while a repeat
+ * inside one chain is still the same wasted-budget bug as before.
  */
 export function structuralViolations(config: StructuralInput): Violation[] {
   const violations: Violation[] = []
-  const candidates = config.chain.candidates
-  // 同一条链上重复的 provider/model 没有意义：它会被各打一遍（各含一次退避等待），
-  // 白吃 attempt 预算，而用户看到的是「我配了两条备用」。目录选择和多条目手录都可能
-  // 录出重复，所以在结构校验就挡住。
-  const seen = new Set<string>()
-  candidates.forEach((candidate, index) => {
-    const key = routeKeyOf(candidate.provider, candidate.model)
-    if (seen.has(key)) {
+  const seenIds = new Set<string>()
+  config.chains.forEach((chain, chainIndex) => {
+    const label = chainLabel(chain)
+    if (seenIds.has(chain.id)) {
       violations.push({
-        key: 'problemDuplicateRouteInChain',
-        vars: { route: key, index: index + 1 },
-        message: `model-router: the chain names ${key} more than once `
-          + `— a repeated candidate is attempted twice and burns the budget twice`,
+        key: 'problemDuplicateChainId',
+        vars: { chain: chainIndex + 1, id: chain.id },
+        message: `model-router: two chains share the id '${chain.id}' `
+          + '— a session binding names an id, so two chains with one id make the binding ambiguous',
       })
     }
-    seen.add(key)
+    seenIds.add(chain.id)
+    const candidates = chain.candidates
+    // 同一条链上重复的 provider/model 没有意义：它会被各打一遍（各含一次退避等待），
+    // 白吃 attempt 预算，而用户看到的是「我配了两条备用」。目录选择和多条目手录都可能
+    // 录出重复，所以在结构校验就挡住。
+    const seen = new Set<string>()
+    candidates.forEach((candidate, index) => {
+      const key = routeKeyOf(candidate.provider, candidate.model)
+      if (seen.has(key)) {
+        violations.push({
+          key: 'problemDuplicateRouteInChain',
+          vars: { chain: chainIndex + 1, route: key, index: index + 1 },
+          message: `model-router: the chain "${label}" names ${key} more than once `
+            + `— a repeated candidate is attempted twice and burns the budget twice`,
+        })
+      }
+      seen.add(key)
+    })
+    // A weight strategy with no positive weight has nothing to draw from, and the
+    // failure would surface as every request silently starting at the same hop.
+    if (chain.strategy === 'weight'
+      && candidates.length > 0
+      && candidates.every(candidate => !(candidate.weight > 0))) {
+      violations.push({
+        key: 'problemWeightNoPositive',
+        vars: { chain: chainIndex + 1 },
+        message: `model-router: the chain "${label}" uses the weight strategy but no candidate has a positive weight`,
+      })
+    }
   })
-  // A weight strategy with no positive weight has nothing to draw from, and the
-  // failure would surface as every request silently starting at the same hop.
-  if (config.chain.strategy === 'weight'
-    && candidates.length > 0
-    && candidates.every(candidate => !(candidate.weight > 0))) {
+  // 默认链 id 必须指向一条存在的链：它是"没绑定的会话走哪条"的唯一答案，
+  // 悬空时每次请求都会退到"第一条"，而这与用户看到的设置不是一回事。
+  if (config.chains.length > 0 && !config.chains.some(chain => chain.id === config.defaultChainId)) {
     violations.push({
-      key: 'problemWeightNoPositive',
-      vars: {},
-      message: 'model-router: the chain uses the weight strategy but no candidate has a positive weight',
+      key: 'problemUnknownDefaultChain',
+      vars: { id: config.defaultChainId },
+      message: `model-router: defaultChainId '${config.defaultChainId}' names no chain — `
+        + 'sessions without a binding would route on a chain the configuration does not define',
     })
   }
   // 一条两个字段都空白的规则永远命中不了任何东西，留着只会让人以为配过了。

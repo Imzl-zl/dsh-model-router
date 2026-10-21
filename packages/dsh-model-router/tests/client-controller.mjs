@@ -101,6 +101,8 @@ function loadClient() {
         SettingsForm: SettingsFormStub, Switch: 'Switch', Button: 'Button', Tag: 'Tag',
         SegmentedTabs: 'SegmentedTabs', Modal: 'Modal', RiskConfirmation: 'RiskConfirmation',
         SegmentedControl: 'SegmentedControl', Checkbox: 'Checkbox', Input: 'Input',
+        // 会话 chip 的弹层是 DSH 的 Menu 原语（portal 模式），按钮由它包一层 span。
+        Menu: 'Menu', MenuItemButton: 'MenuItemButton',
       }
     }
     if (name === '@deepseek-ai/dsh-client-store') return { createSnapshotStore }
@@ -239,10 +241,14 @@ const createEl = (type, props, ...children) => {
 function applyOps(value, ops) {
   const next = structuredClone(value)
   for (const op of ops) {
-    if (op.op !== 'set') throw new Error(`harness applies only set ops, got ${op.op}`)
     let cursor = next
     for (let i = 0; i < op.path.length - 1; i++) cursor = cursor[op.path[i]]
-    cursor[op.path[op.path.length - 1]] = structuredClone(op.value)
+    const leaf = op.path[op.path.length - 1]
+    // The settings wire supports `set` and `unset`; the plugin's save uses both
+    // (it removes the legacy single-chain key once the chains are written).
+    if (op.op === 'set') cursor[leaf] = structuredClone(op.value)
+    else if (op.op === 'unset') delete cursor[leaf]
+    else throw new Error(`harness applies set/unset ops, got ${op.op}`)
   }
   return next
 }
@@ -280,6 +286,9 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
   // controller's timer and in-flight checks are cleaned in that cleanup.
   const effectDisposers = []
   let capturedComponent = null
+  let capturedChip = null
+  /** What the Host would have stored, per session: the chip tests drive this. */
+  const bindings = new Map()
   const ctx = {
     locale: { bind: () => (key) => key, register: () => () => {} },
     effect: (fn) => {
@@ -305,6 +314,8 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
         // The main panel is this plugin's only surface: it renders the whole
         // workbench, so it is the component the component-level tests mount.
         if (options.name === 'main') capturedComponent = component
+        // 会话 chip 的注册：组件 + 它的 inject 面（controller/model）。
+        if (options.name === 'conversation.input.left') capturedChip = { options, component }
         return () => {}
       },
     },
@@ -329,6 +340,17 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
           },
         }),
         probeReport: () => Promise.resolve({ ok: true, value: { at: 0, routes: [] } }),
+        // 会话绑定的两个 Remote：这个桩就是宿主的内存版——写进去、读出来，
+        // 与真宿主同一份语义（没有绑定读成"跟随默认链"）。
+        sessionBinding: (sessionId) => Promise.resolve({
+          ok: true,
+          value: { ...(bindings.get(sessionId) ?? { chain: null, retries: {} }), persistent: true },
+        }),
+        setSessionBinding: (request) => {
+          const stored = { chain: request.chain, retries: request.retries ?? {} }
+          bindings.set(request.sessionId, stored)
+          return Promise.resolve({ ok: true, value: { ...stored, persistent: true } })
+        },
       },
       // The browser half's apply mounts the generated ./remote contribution
       // before registering the UI.
@@ -349,10 +371,18 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
   const registration = registrations.find((entry) => entry.name === 'main')
   const injected = registration.inject()
   const store = injected.hooks.routerPage
+  const chipInjected = capturedChip === null ? null : capturedChip.options.inject()
   return {
     actions: injected,
     store,
     state: () => store.getSnapshot(),
+    /** The session chip: its registration, its model, and what the Host stored. */
+    chip: {
+      registration: capturedChip === null ? null : capturedChip.options,
+      component: capturedChip === null ? null : capturedChip.component,
+      model: chipInjected === null ? null : chipInjected.sessionChip,
+      bindings,
+    },
     /** Unload the plugin fiber: run every effect cleanup, the way Cordis does. */
     unload: () => { for (const disposer of effectDisposers.slice()) disposer() },
     // The registered panel component, for the component-level tests.
@@ -1575,8 +1605,12 @@ test('the takeover switch edits the draft, and the save payload carries it', asy
   const saved = h.mutateCalls.at(-1).ops
   assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'enabled' && op.value === true),
     'the takeover switch must reach the Host through the save payload')
-  assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'chain'),
-    'the chain must be saved alongside the switch')
+  assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'chains'),
+    'the chains must be saved alongside the switch')
+  assert.ok(saved.some((op) => op.op === 'set' && op.path[0] === 'defaultChainId'),
+    'and so must which chain is the default')
+  assert.ok(saved.some((op) => op.op === 'unset' && op.path[0] === 'chain'),
+    'the legacy single-chain key is removed, so the stored config has one shape')
 })
 
 test('a fresh draft defaults the takeover switch off, like the host schema', async () => {
@@ -1612,6 +1646,129 @@ test('a legacy per-model config is read as the one chain the Host executes', asy
   const saved = h.mutateCalls.at(-1).ops
   assert.ok(saved.every((op) => !['profiles', 'default', 'primaryProfileId'].includes(op.path[0])),
     'the legacy keys must not be written back')
+})
+
+// ---- 会话内 chip（composer 工具行） ----
+// chip 是"挂进会话槽位的控件"里唯一能无 DOM 验证的部分：注册面、读绑定、写绑定、
+// 写失败不关闭弹层、以及 chip 文本真的跟着落库的值走。视觉与位置由浏览器实测覆盖。
+
+const chipConfig = () => config({
+  chains: [
+    { id: 'default', name: '', candidates: [cand('a')], switchOn: switchOn(), firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
+    { id: 'coding', name: '写代码', candidates: [cand('b')], switchOn: switchOn(), firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
+  ],
+  defaultChainId: 'default',
+})
+
+/** The dictionary in these tests is the key itself (`locale.bind` stub); names come from config. */
+const chipDict = (key) => key
+
+function renderChip(h, sessionId = 's1') {
+  return render(createEl(h.chip.component, { t: chipDict, sessionId, sessionChip: h.chip.model }))
+}
+
+/**
+ * The chip's visible text. It lives in the Menu's `anchor` prop, not in its
+ * children, so the tree walker (which follows children only) cannot reach it.
+ */
+function chipLabel(menu) {
+  const kids = menu.props.anchor.props.children
+  const span = kids.find((child) => child.props?.className === 'dsh-router-session-chip-label')
+  return span === undefined ? undefined : span.props.children
+}
+
+/** A Remote surface whose write always fails; the read still answers. */
+const rejectingWrite = (message) => ({
+  routerHealth: {
+    sessionBinding: () => Promise.resolve({ ok: true, value: { chain: null, retries: {}, persistent: true } }),
+    setSessionBinding: () => Promise.reject(new Error(message)),
+  },
+})
+
+test('the session chip registers into the composer tool row as a session-scoped occupant', async () => {
+  const h = await mount({ value: chipConfig() })
+  assert.equal(h.chip.registration.name, 'conversation.input.left')
+  assert.equal(h.chip.registration.id, 'model-router-session')
+  assert.equal(h.chip.registration.locale, 'dsh-model-router')
+  // 槽位自己给 sessionId（scope: 'session'），组件不猜前台会话，所以这里也不能传。
+  assert.equal('sessionId' in h.chip.registration, false)
+  // 模型走普通 prop，不进 hooks：那是保留键，装的是 observable source，运行时会
+  // 转成 use* 选择器——把普通对象塞进去，组件拿到的就是 undefined（浏览器实测踩过）。
+  const face = h.chip.registration.inject()
+  assert.equal(typeof face.sessionChip.load, 'function')
+  assert.equal('hooks' in face, false)
+})
+
+test('the chip names the bound chain and lists every chain in its popover', async () => {
+  const h = await mount({ value: chipConfig() })
+  await h.chip.model.load('s1')
+  // 未绑定 = 跟随默认链：chip 文本是字典里的「默认链」。
+  assert.equal(chipLabel(renderChip(h)), 'chainDefaultName')
+  await h.chip.model.open('s1')
+  const menu = renderChip(h)
+  assert.equal(menu.props.open, true)
+  assert.equal(menu.props.items[0].text, 'sessionRouteTitle')
+  // 链行带子菜单：跟随默认 + 配置里的每一条链（名字来自配置，不来自字典）。
+  assert.deepEqual(menu.props.items[1].submenu.map((row) => row.label),
+    ['sessionChainFollowDefault', 'chainDefaultName', '写代码'])
+  // 脚注说明"没有单独选择的会话走哪条"。
+  assert.ok(collectText(menu).includes('sessionChainHint'))
+})
+
+test('choosing a chain stores it, refreshes the chip and closes the popover', async () => {
+  const h = await mount({ value: chipConfig() })
+  await h.chip.model.open('s1')
+  await h.chip.model.choose('s1', 'coding')
+  const view = h.chip.model.view('s1')
+  assert.equal(view.open, false, 'the popover closes only after the write landed')
+  assert.equal(view.chain, 'coding')
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: 'coding', retries: {} })
+  assert.equal(chipLabel(renderChip(h)), '写代码', 'the chip text follows the stored binding')
+})
+
+test('a failed write keeps the popover open, shows the error inside and leaves the chip alone', async () => {
+  const h = await mount({ value: chipConfig(), remote: rejectingWrite('disk is full') })
+  await h.chip.model.open('s1')
+  await h.chip.model.choose('s1', 'coding')
+  const view = h.chip.model.view('s1')
+  assert.equal(view.open, true, 'a rejected write must not close the surface the user is using')
+  assert.match(view.error, /disk is full/)
+  assert.equal(view.chain, null, 'the chip keeps the stored value, not the attempted one')
+  assert.equal(h.chip.bindings.get('s1'), undefined)
+  assert.ok(collectText(renderChip(h)).includes('disk is full'), 'the error is rendered inside the popover')
+})
+
+test('the "follow the default chain" row writes null rather than the default chain id', async () => {
+  const h = await mount({ value: chipConfig() })
+  await h.chip.model.open('s1')
+  const follow = renderChip(h).props.items[1].submenu[0]
+  await h.chip.model.choose('s1', follow.id)
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: {} })
+})
+
+test('choosing a chain keeps the session retry overrides and re-reads them on open', async () => {
+  const h = await mount({ value: chipConfig() })
+  h.chip.bindings.set('s1', { chain: null, retries: { 'a/m': 5 } })
+  await h.chip.model.open('s1')
+  assert.deepEqual(h.chip.model.view('s1').retries, { 'a/m': 5 }, 'opening re-reads the binding')
+  await h.chip.model.choose('s1', 'coding')
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: 'coding', retries: { 'a/m': 5 } },
+    'a chain switch must not drop the per-route retry overrides')
+})
+
+test('a Host without durable storage says so in the popover', async () => {
+  const h = await mount({
+    value: chipConfig(),
+    remote: {
+      routerHealth: {
+        sessionBinding: () => Promise.resolve({ ok: true, value: { chain: null, retries: {}, persistent: false } }),
+        setSessionBinding: () => Promise.resolve({ ok: true, value: { chain: null, retries: {}, persistent: false } }),
+      },
+    },
+  })
+  await h.chip.model.open('s1')
+  assert.equal(h.chip.model.view('s1').persistent, false)
+  assert.ok(collectText(renderChip(h)).includes('sessionChainMemoryOnly'))
 })
 
 await Promise.all(pending)

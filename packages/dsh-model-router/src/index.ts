@@ -41,14 +41,15 @@ import {
   assertStructural,
   type ChainConfig,
   type HealthConfig,
+  type NamedChain,
   type RouterOptions,
 } from './config.ts'
 import { decideAfterInner, decideBeforeInner, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
 import type { AfterInnerRuling, BeforeInnerRuling } from './router.ts'
-import { configuredRoutes, routeKeyOf, routeParts } from './routes.ts'
+import { configuredRouteList, routeKeyOf, routeParts } from './routes.ts'
 import { DEFAULT_PROBE_PROMPT, DEFAULT_PROBE_TIMEOUT_SECONDS } from './defaults.ts'
 import { RouterState, candidateConfig, type StepCandidate, type StepChain, type StepConditions } from './state.ts'
-import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice, routeMissingNotice, adapterDefectNotice } from './notice.ts'
+import { bindingMissingNotice, conditionSkipNotice, failoverNotice, breakerNotice, skipNotice, routeMissingNotice, adapterDefectNotice } from './notice.ts'
 import { precheckTierOf, type PrecheckTier } from './precheck.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
 import { channelHealthProjection } from './health.ts'
@@ -57,7 +58,7 @@ import { waitBeforeRetry } from './backoff.ts'
 import { SessionBindings } from './bindings.ts'
 import { checkConnectivity, type ConnectivityLlm, type ConnectivitySettings } from './connectivity.ts'
 import { probePromptFor, probeRoute } from './probe.ts'
-import { effectiveChain, type ChainSource } from './chain.ts'
+import { chainForSession, chainLabel, effectiveChains, type ChainSource } from './chain.ts'
 import type {
   ConnectivityRequest,
   ConnectivityVerdict,
@@ -82,13 +83,13 @@ import type {
  */
 
 /**
- * Every physical route the config names, deduplicated: the target set both the
- * probe and the connectivity check run over. The rule lives in ./routes.ts
- * because the browser half lists the same set for its checks — one definition,
- * both halves.
+ * Every physical route the config names, across every chain, deduplicated: the
+ * target set both the probe and the connectivity check run over. The rule lives
+ * in ./routes.ts because the browser half lists the same set for its checks —
+ * one definition, both halves.
  */
-function configuredRunRoutes(config: { chain: ChainConfig }): ProbeRoute[] {
-  return configuredRoutes(config.chain).map((key) => routeParts(key))
+function configuredRunRoutes(config: { chains: NamedChain[] }): ProbeRoute[] {
+  return configuredRouteList(config).map((key) => routeParts(key))
 }
 
 export default class ModelRouter extends TypertRemoteService {
@@ -135,10 +136,10 @@ export default class ModelRouter extends TypertRemoteService {
 
     // Structural validation at load: wrong in every environment, so it fails loud.
     const initial = readConfig(config)
-    if (initial.migratedFrom !== 'chain' && initial.migratedFrom !== 'empty') {
+    if (initial.migratedFrom !== 'chains' && initial.migratedFrom !== 'chain' && initial.migratedFrom !== 'empty') {
       ctx.logger.warn(
         `model-router: the config still uses the old ${initial.migratedFrom === 'default' ? 'default pool' : 'per-model profiles'} shape; `
-        + 'it was read as the single global chain. Re-save from the dialog to store the new shape.'
+        + 'it was read as one named chain. Re-save from the dialog to store the new shape.'
         + (initial.ignoredProfiles > 0 ? ` ${initial.ignoredProfiles} extra profile(s) could not be represented and were ignored.` : ''),
       )
     }
@@ -225,10 +226,23 @@ export default class ModelRouter extends TypertRemoteService {
 
           let state = states.current(agent, turn, step)
           if (state === undefined) {
-            // 本会话的重试覆盖按路由键控；读取是同步的（storage 域的内存权威），
-            // 因此这个请求看到的一定是"上一次写入已落盘"的状态。覆盖在 step 首次
-            // 请求时冻结：进行中的 step 不换次数，下一次请求才按新值走。
-            const chain = resolveChain(resolved, readConfig(config).chain, bindings.retriesOf(agent.session.id))
+            // 本会话绑定的是哪条链、每条路由重试几次。读取是同步的（storage 域的内存
+            // 权威），因此这个请求看到的一定是"上一次写入已落盘"的状态；绑定在 step
+            // 首次请求时冻结，进行中的 step 不换链也不换次数。
+            const effective = readConfig(config)
+            const bound = bindings.read(agent.session.id)
+            const sessionChain = chainForSession(effective, bound?.chain ?? null)
+            if (sessionChain.missing !== undefined
+              && states.shouldNoteSkip(agent, turn, `binding:${sessionChain.missing}`)) {
+              // 绑定的链被删了：按默认链路由，但必须说出来。会话保留原来的绑定 id，
+              // 用户重建同名链就能恢复——静默改成"没绑定"会把一次删除变成一次改道。
+              agent.session.append(
+                'user/message',
+                bindingMissingNotice(sessionChain.missing, chainLabel(sessionChain.chain)),
+                { surfaceOp: 'append' },
+              )
+            }
+            const chain = resolveChain(resolved, sessionChain.chain, bound?.retries ?? {})
             if (chain === undefined) return resolved
             states.setStickyTurns(agent, chain.stickyTurns)
             // 策略只决定第一跳失败后从哪条降级候选开始；第一跳恒在链首，不参与抽签。
@@ -545,9 +559,16 @@ export default class ModelRouter extends TypertRemoteService {
    * a storage failure is rethrown unchanged, because the caller's contract is
    * "success means saved": a swallowed error would leave the chip showing a
    * binding that does not exist.
+   *
+   * A chain id the config does not define is refused rather than stored: the
+   * routing path would read it as a stale binding and route on the default chain
+   * with a notice, so accepting it would save a choice that never takes effect.
    */
   @Remote
   async setSessionBinding(request: SessionBindingRequest): Promise<SessionBindingView> {
+    if (request.chain !== null && !readConfig(this.config).chains.some(chain => chain.id === request.chain)) {
+      throw new Error(`model-router: the config defines no chain '${request.chain}' to bind this session to`)
+    }
     const binding = { chain: request.chain, retries: { ...request.retries } }
     await this.bindings.write(request.sessionId, binding)
     return { chain: binding.chain, retries: { ...binding.retries }, persistent: this.bindings.persistent }
@@ -585,15 +606,20 @@ export default class ModelRouter extends TypertRemoteService {
 /**
  * The effective config both the routing path and the load-time audits read.
  *
- * `chain` is not `config.chain.get()` verbatim: a config written by an older
- * build stored the chain as per-model profiles, and {@link effectiveChain} is
- * the one place that decides which shape wins. `migratedFrom`/`ignoredProfiles`
- * exist so the Host can say out loud that a legacy config was reinterpreted
- * instead of silently discarding what the user configured.
+ * For `chains`, `effectiveChains` is the one place that decides which shape
+ * wins: a stored `chains` key, or one of the three legacy shapes an older build
+ * wrote. `migratedFrom`/`ignoredProfiles` exist so the Host can say out loud
+ * that a legacy config was reinterpreted instead of silently discarding what
+ * the user configured.
+ *
+ * `chain` is read through `.get()` and is always defined (the schema stamps its
+ * default); that is exactly why the `chains` accessor's UNDEFINED value — which
+ * the schema deliberately does not default — is the presence signal.
  */
 function readConfig(config: Config): {
   enabled: boolean
-  chain: ChainConfig
+  chains: NamedChain[]
+  defaultChainId: string
   health?: HealthConfig
   migratedFrom: ChainSource
   ignoredProfiles: number
@@ -602,14 +628,17 @@ function readConfig(config: Config): {
   // passed through are plain values (they are not in the schema). Build the
   // migration input explicitly so neither half of that fact is guessed.
   const legacy = config as unknown as { default?: unknown; profiles?: unknown }
-  const effective = effectiveChain({
+  const effective = effectiveChains({
+    chains: config.chains?.get(),
+    defaultChainId: config.defaultChainId?.get(),
     chain: config.chain.get() as ChainConfig,
     ...(legacy.default === undefined ? {} : { default: legacy.default }),
     ...(legacy.profiles === undefined ? {} : { profiles: legacy.profiles }),
   })
   return {
     enabled: config.enabled.get() as boolean,
-    chain: effective.chain,
+    chains: effective.chains,
+    defaultChainId: effective.defaultChainId,
     health: config.health?.get() as HealthConfig | undefined,
     migratedFrom: effective.source,
     ignoredProfiles: effective.ignoredProfiles,
@@ -656,7 +685,7 @@ function mayAdvance(
  * 尚未注册的 provider 会被跳过——在本插件之后注册的 always 策略因此逃过加载校验。
  * 运行时拦截是行为变更（跳过候选 + 新通知形状），属另一轮决策，不在本轮。
  */
-function assertNoAlwaysPolicy(ctx: Context, config: { chain: ChainConfig }): void {
+function assertNoAlwaysPolicy(ctx: Context, config: { chains: readonly NamedChain[] }): void {
   const registered = registeredProviderIds(ctx)
   eachConfiguredCandidate(config, (candidate) => {
     if (!registered.has(candidate.provider)) return
@@ -671,7 +700,7 @@ function assertNoAlwaysPolicy(ctx: Context, config: { chain: ChainConfig }): voi
   })
 }
 
-function warnUnregisteredProviders(ctx: Context, config: { chain: ChainConfig }): void {
+function warnUnregisteredProviders(ctx: Context, config: { chains: readonly NamedChain[] }): void {
   const registered = registeredProviderIds(ctx)
   eachConfiguredCandidate(config, (candidate) => {
     if (!registered.has(candidate.provider)) {
@@ -694,10 +723,10 @@ function registeredProviderIds(ctx: Context): Set<string> {
  * each carry their own copy of the loop, and the second copy is where the two drift.
  */
 function eachConfiguredCandidate(
-  config: { chain: ChainConfig },
+  config: { chains: readonly NamedChain[] },
   visit: (candidate: { provider: string; model: string }) => void,
 ): void {
-  for (const candidate of config.chain.candidates) visit(candidate)
+  for (const chain of config.chains) for (const candidate of chain.candidates) visit(candidate)
 }
 
 /** The projection registry's read face this plugin uses; structurally typed to keep the service optional. */

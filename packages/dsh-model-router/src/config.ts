@@ -7,15 +7,18 @@
  * `internal/config` waterfall before Cordis restarts the plugin fiber.
  *
  * The shape is the canonical schema from docs/design/product-plan.md section 3:
- * an `enabled` master switch and the one global fallback chain. The chain's first
- * hop is the model the user selected in DSH — it is not configured here and the
- * plugin does not own it — so `candidates` lists the fallbacks only.
+ * an `enabled` master switch and a set of named fallback chains, one of which is
+ * the default. A chain's first hop is the model the user selected in DSH — it is
+ * not configured here and the plugin does not own it — so `candidates` lists the
+ * fallbacks only. A session may bind itself to any chain by id; `chain` is the
+ * legacy single-chain key and is read only while `chains` is absent.
  */
 
 import z from '@deepseek-ai/schemastery'
 import {
   DEFAULT_BREAKER_COOLDOWN_SECONDS,
   DEFAULT_BREAKER_SCOPE,
+  DEFAULT_CHAIN_ID,
   DEFAULT_FIRST_HOP_MAX_RETRIES,
   DEFAULT_INTERVAL_SECONDS,
   DEFAULT_MAX_RETRIES,
@@ -97,7 +100,12 @@ export const switchOnSchema = z.object({
   quota: z.boolean().default(DEFAULT_SWITCH_ON.quota).description('额度用尽（QUOTA）：同上，换渠道可继续；熔断会让后续请求先跳过这条'),
 })
 
-export const chainSchema = z.object({
+/**
+ * 一条链的全部可编辑字段。`chainSchema`（旧形状：唯一的全局链）与
+ * `namedChainSchema`（新形状：`chains[]` 里的一条）共用这份字段表——两份字段定义
+ * 会让"链有哪些字段"变成两个事实，加一个字段就得记得改两处。
+ */
+const chainFields = {
   candidates: z.array(candidateSchema).default([])
     .description('降级候选：第一跳永远是你当前选中的模型、永远先试；失败后从这里的候选里按起点策略开始走'),
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
@@ -106,6 +114,21 @@ export const chainSchema = z.object({
   strategy: strategySchema,
   firstHopMaxRetries: z.number().step(1).min(0).max(MAX_RETRIES).default(DEFAULT_FIRST_HOP_MAX_RETRIES)
     .description('第一跳（当前选中的模型）失败后最多重试几次（不含首次调用；0 = 首发失败即降级）'),
+}
+
+export const chainSchema = z.object(chainFields)
+
+/**
+ * 一条命名链：同一份字段，外加身份。
+ *
+ * `id` 是会话绑定的引用键，**不可变**（改名只改 `name`）；`name` 留空时界面按
+ * 「默认链」显示——把中文名字写进迁移出来的配置会让英文界面显示中文，也会让
+ * 用户以为这是个必须填的字段。
+ */
+export const namedChainSchema = z.object({
+  id: z.string().required().description('链的稳定标识；会话按它绑定，改显示名不影响绑定'),
+  name: z.string().default('').description('显示名；留空表示「默认链」'),
+  ...chainFields,
 })
 
 /**
@@ -184,8 +207,15 @@ export const healthSchema = z.object({
 export const Config = z.object({
   enabled: z.boolean().default(false).volatile()
     .description('接管总闸：关闭时所有模型绕过插件，直接走官方适配器。默认关——接管会改请求实际打到的渠道，必须由用户显式打开'),
+  // `chains` 故意不写 `.default()`：这个字段的"有没有"就是"是不是旧形状"。
+  // 但 schemastery 会给任何 array 盖默认值 `[]`，所以真正判形状的是
+  // `chain.ts` 的 effectiveChains（非空列表 = 新形状），这里只能去掉一层默认。
+  chains: z.array(namedChainSchema).volatile()
+    .description('命名链：每条链是一套完整的降级顺序；会话可以绑定到其中一条'),
+  defaultChainId: z.string().default(DEFAULT_CHAIN_ID).volatile()
+    .description('没有绑定（或绑定指向已删除的链）的会话走哪条链'),
   chain: chainSchema.default({}).volatile()
-    .description('唯一的降级链：第一跳是你当前选中的模型，失败后按这里配置的候选顺序走'),
+    .description('旧形状：唯一的全局链。只在新形状缺失时读取，首次保存后会被移除'),
   health: healthSchema.default({}).volatile()
     .description('渠道健康监控：运行时记录、连通性检查、发送测试消息、自动禁用四档'),
 })
@@ -244,6 +274,18 @@ export interface ChainConfig {
   firstHopMaxRetries: number
 }
 
+/**
+ * One named chain: the same fields plus the identity a session binds to.
+ *
+ * `id` is the immutable reference key (rename only touches `name`); an empty
+ * `name` means "the default chain" and is labelled by the dictionary, so a
+ * migrated config never hard-codes a Chinese name into YAML.
+ */
+export interface NamedChain extends ChainConfig {
+  id: string
+  name: string
+}
+
 /** "敲门"档配置：要一份模型清单，不生成内容。 */
 export interface DiscoverConfig {
   enabled: boolean
@@ -296,6 +338,10 @@ export interface BreakerConfig {
 /** Plugin configuration as `apply` sees it: every field is a Volatile accessor. */
 export interface Config {
   enabled: Volatile<boolean>
+  /** Absent (an undefined value, not an empty array) in a config written by an older build. */
+  chains: Volatile<NamedChain[] | undefined>
+  defaultChainId: Volatile<string>
+  /** The legacy single chain; read only while `chains` is absent. */
   chain: Volatile<ChainConfig>
   health: Volatile<HealthConfig>
 }
@@ -328,7 +374,8 @@ export type RouterOptions = { [K in keyof Config]?: Config[K] extends Volatile<i
  * docs/design/product-plan.md section 9.
  */
 export function assertStructural(config: {
-  chain: ChainConfig
+  chains: NamedChain[]
+  defaultChainId: string
   health?: HealthConfig
 }): void {
   const [first] = structuralViolations(config)

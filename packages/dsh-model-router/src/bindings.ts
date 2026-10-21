@@ -118,11 +118,6 @@ export class SessionBindings {
     return this.table?.get(sessionId) ?? this.memory.get(sessionId)
   }
 
-  /** One session's per-route overrides; empty when it has no binding. */
-  retriesOf(sessionId: string): Readonly<Record<string, number>> {
-    return this.read(sessionId)?.retries ?? {}
-  }
-
   /**
    * Store one session's binding.
    *

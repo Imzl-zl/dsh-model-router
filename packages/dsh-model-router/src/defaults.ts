@@ -46,6 +46,15 @@ export const MAX_SESSION_RETRIES = 9
 /** After an image turn, keep routing to the vision model for this many text turns. */
 export const DEFAULT_STICKY_TURNS = 0
 
+/**
+ * The id of the chain every session falls back to, and the id the one-time
+ * migration gives the single chain an older build stored.
+ *
+ * It is an id, not a name: the chip and the session bindings reference chains by
+ * id, so renaming the default chain never breaks a binding.
+ */
+export const DEFAULT_CHAIN_ID = 'default'
+
 /** Where a chain starts: the first candidate, by order. */
 export const DEFAULT_STRATEGY = 'order'
 

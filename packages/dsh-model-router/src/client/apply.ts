@@ -11,6 +11,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import remote from 'dsh-model-router/remote'
+import { createSessionChip, SessionChainChip } from './chip.ts'
 import { createController } from './controller.ts'
 import { ModelRouterPanel, ModelRouterPanelIcon } from './panel.ts'
 import { CONFIG_NS, NS, en, zh } from './locales.ts'
@@ -118,6 +119,8 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
 
   var scope = ctx.configForms.get(CONFIG_NS)
   var controller = createController(ctx, scope, t)
+  // 会话内 chip 的控制器：一个会话一份绑定状态（写失败留在弹层里，成功才刷新）。
+  var sessionChip = createSessionChip(ctx, t)
 
   // 保存快捷键走 DSH 原生的 shortcuts 服务（ui-settings-general/src/client/index.ts:179
   // 同款）：可重绑定、出现在快捷键设置页、并按模态归属仲裁。`modals: ['model-router']`
@@ -206,9 +209,24 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
       locale: NS,
     }, ModelRouterPanelIcon))
 
+    // 会话内 chip：`conversation.input.left` 是 composer 工具行的会话级 list 槽——
+    // 渲染顺序是 permission → Plan → left → right/模型选择器（InputBar.tsx:464-479），
+    // 所以它落在「只读」之后、模型选择器之前。会话身份是槽位标准 prop，组件不猜前台
+    // 会话（ui-session/src/client/index.ts:166-175）。注册要先等槽位声明
+    // （ui-slots/src/index.ts:1207-1210），`inject` 就是那个等待。
+    // 不写 `order`：它只在 .left 这个 list 内部排序，而本插件是唯一占用者——默认值就是
+    // 0，写死一个数只会让下一个人以为这里需要和别人协商。
+    const unregisterChip = ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+      name: 'conversation.input.left',
+      id: 'model-router-session',
+      locale: NS,
+      inject: () => ({ sessionChip: sessionChip }),
+    }, SessionChainChip))
+
     return () => {
       unregisterPanel()
       unregisterRow()
+      unregisterChip()
       // 控制器自己的定时器与在飞检查是裸的（裸 setInterval、裸远程调用），不归
       // Cordis 管：fiber 卸载时必须自己收。修复前 dispose 根本没有被接线——
       // 巡检 interval 对着已卸载的 fiber 空转、继续打端点，而在飞的远程回调

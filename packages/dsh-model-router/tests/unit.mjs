@@ -45,6 +45,14 @@ import { emptyBinding, SESSION_BINDINGS_DOMAIN, SessionBindings, sessionBindings
 
 let passed = 0
 const pending = []
+
+/**
+ * The structural-validation input both halves speak: named chains plus the id of
+ * the default one. The legacy single `chain` is folded into this shape by
+ * `effectiveChains`, which is why no rule below takes the old shape.
+ */
+const named = (chain, id = 'default', name = '') => ({ id, name, ...chain })
+const structural = (chain, over = {}) => ({ chains: [named(chain)], defaultChainId: 'default', ...over })
 function test(name, body) {
   let result
   try {
@@ -575,16 +583,17 @@ test('a legacy flat health config keeps its schedule by converting minutes to se
 
 test('assertStructural rejects a weight strategy with no positive weight', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  const base = { chain: { candidates: [{ provider: 'a', model: 'm', maxRetries: 0, weight: 0 }], switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'weight' } }
+  const base = structural({ candidates: [{ provider: 'a', model: 'm', maxRetries: 0, weight: 0 }], switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'weight' })
   assert.throws(() => assertStructural(base), /weight strategy but no candidate has a positive weight/)
   assert.doesNotThrow(() => assertStructural({
-    chain: { ...base.chain, candidates: [{ provider: 'a', model: 'm', maxRetries: 0, weight: 5 }] },
+    ...base,
+    chains: [{ ...base.chains[0], candidates: [{ provider: 'a', model: 'm', maxRetries: 0, weight: 5 }] }],
   }))
 })
 
 test('assertStructural rejects a breaker rule that matches nothing', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  const emptyChain = { chain: { candidates: [], switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' } }
+  const emptyChain = structural({ candidates: [], switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' })
   const health = (breaker) => ({ passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker })
   assert.throws(() => assertStructural({
     ...emptyChain,
@@ -611,9 +620,9 @@ test('assertStructural rejects a chain that names the same route twice', () => {
   ]
   // 同链重复的渠道会被各打一遍（各含一次退避等待），白吃 attempt 预算，结构校验就挡住。
   // 目录多选与多行手录都可能录出重复。
-  assert.throws(() => assertStructural({
-    chain: { candidates: twice, switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
-  }), /names stub-primary\/stub-model more than once/)
+  assert.throws(() => assertStructural(structural({
+    candidates: twice, switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order',
+  })), /names stub-primary\/stub-model more than once/)
 })
 
 // ---- the cross-field rules have one expression (host throws, browser formats) ----
@@ -629,19 +638,12 @@ const crossHealth = (rules) => ({ breaker: { enabled: true, rules } })
 
 // 每条跨字段规则一个形状；keys 是规则模块必须产出的违规键序列（顺序即 host 先抛哪条）。
 const crossCases = [
-  ['one route named twice in the chain', {
-    chain: crossChain({ candidates: [
-      { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
-      { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
-    ] }),
-  }, ['problemDuplicateRouteInChain']],
-  ['a weight strategy with nothing to draw', {
-    chain: crossChain({ strategy: 'weight', candidates: [{ provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 }] }),
-  }, ['problemWeightNoPositive']],
-  ['a breaker rule that matches nothing', {
-    chain: crossChain(),
-    health: crossHealth([{ code: '', message: '', cooldownSeconds: 60 }]),
-  }, ['problemBreakerEmptyRule']],
+  ['one route named twice in the chain', structural(crossChain({ candidates: [
+    { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
+    { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
+  ] })), ['problemDuplicateRouteInChain']],
+  ['a weight strategy with nothing to draw', structural(crossChain({ strategy: 'weight', candidates: [{ provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 }] })), ['problemWeightNoPositive']],
+  ['a breaker rule that matches nothing', { ...structural(crossChain()), health: crossHealth([{ code: '', message: '', cooldownSeconds: 60 }]) }, ['problemBreakerEmptyRule']],
 ]
 
 test('the cross-field rules are one expression: the host throws the first, the browser formats them all', () => {
@@ -698,7 +700,8 @@ test('single-field bounds belong to the schema: it refuses each value the delete
   const throws = (fn) => { try { fn(); return false } catch { return true } }
   for (const [label, raw] of cases) {
     assert.ok(throws(() => Config(raw)), `${label}: the schema must refuse it, or a bound moved out of the schema`)
-    assert.doesNotThrow(() => assertStructural(raw),
+    // 同一份原始配置，换成结构校验要的输入形状（命名链 + 默认链 id）。
+    assert.doesNotThrow(() => assertStructural(structural(raw.chain, { health: raw.health })),
       `${label}: assertStructural must not re-guard it — that guard is what made the function look stricter than the schema`)
   }
 })
@@ -1324,8 +1327,8 @@ test('assertStructural accepts stickyTurns 0 and a positive value', () => {
     firstHopMaxRetries: 0,
     stickyTurns,
   })
-  assertStructural({ chain: chain(0) })
-  assertStructural({ chain: chain(3) })
+  assertStructural(structural(chain(0)))
+  assertStructural(structural(chain(3)))
 })
 
 // ---- the probe (pure paths the integration suite cannot reach) ----
@@ -2101,7 +2104,7 @@ test('every offered bucket length is a divisor-free option the dashboard can ren
 // 按模型分规则 + 钉死 primary 的形态，加载时迁成一条链：丢掉被钉死的第一个候选
 // （它就是"选中模型"本身），其余成为降级候选。
 
-import { effectiveChain, emptyChain } from '../src/chain.ts'
+import { chainForSession, chainLabel, defaultChainOf, effectiveChain, effectiveChains, emptyChain } from '../src/chain.ts'
 import { failoverNotice } from '../src/notice.ts'
 
 const switchOnAll = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true }
@@ -2186,6 +2189,72 @@ test('an empty chain is a configuration, not a missing one', () => {
   assert.deepEqual(result.chain.candidates, [])
   assert.equal(result.chain.firstHopMaxRetries, 4, 'the chain\'s own settings survive')
   assert.equal(result.source, 'chain')
+})
+
+// ---- 命名链：迁移、默认链与按会话选链 ----
+
+const namedChain = (id, name, over = {}) => ({ id, name, ...chainValue(over) })
+
+test('a legacy single chain migrates to one named chain without changing behavior', () => {
+  const legacy = chainValue({ candidates: [cand('a'), cand('b')], firstHopMaxRetries: 3 })
+  const result = effectiveChains({ chain: legacy })
+  assert.equal(result.source, 'chain')
+  assert.equal(result.defaultChainId, 'default')
+  assert.equal(result.chains.length, 1)
+  assert.equal(result.chains[0].id, 'default')
+  assert.equal(result.chains[0].name, '', 'an unnamed chain is labelled by the dictionary, never by the config')
+  assert.deepEqual(result.chains[0].candidates, legacy.candidates)
+  assert.equal(result.chains[0].firstHopMaxRetries, 3)
+})
+
+test('stored chains win as they are written, with their own default', () => {
+  const result = effectiveChains({
+    chains: [namedChain('coding', '写代码', { candidates: [cand('a')] }), namedChain('writing', '', { candidates: [cand('b')] })],
+    defaultChainId: 'writing',
+  })
+  assert.equal(result.source, 'chains')
+  assert.equal(result.defaultChainId, 'writing')
+  assert.deepEqual(result.chains.map(chain => [chain.id, chain.name]), [['coding', '写代码'], ['writing', '']])
+})
+
+test('an empty chains list reads as the legacy shape, not as a routing-free config', () => {
+  // schemastery 给任何 array 盖上默认 []，"没写过 chains"与"写了个空列表"在值上分不开。
+  // 空列表按旧形状读：插件的编辑器永远写出至少一条链，所以空列表只可能来自旧配置或
+  // 手改；那两种情况里旧链都是仅有的路由数据，读它不会丢掉用户的配置。
+  const legacy = effectiveChains({ chains: [], chain: chainValue({ candidates: [cand('kept')] }) })
+  assert.equal(legacy.source, 'chain')
+  assert.deepEqual(legacy.chains[0].candidates.map(candidate => candidate.provider), ['kept'])
+  assert.equal(legacy.defaultChainId, 'default')
+})
+
+test('a session routes on the chain it bound, else on the default chain', () => {
+  const config = {
+    chains: [namedChain('default', '', { candidates: [cand('a')] }), namedChain('coding', '写代码', { candidates: [cand('b')] })],
+    defaultChainId: 'default',
+  }
+  assert.equal(chainForSession(config, 'coding').chain.id, 'coding')
+  assert.equal(chainForSession(config, 'coding').missing, undefined)
+  assert.equal(chainForSession(config, null).chain.id, 'default')
+  // 绑定指向已删除的链：按默认链路由，并把缺失的 id 报出来——宿主要因此留一条 notice，
+  // 静默改道会让用户以为他的选择还在。
+  const stale = chainForSession(config, 'gone')
+  assert.equal(stale.chain.id, 'default')
+  assert.equal(stale.missing, 'gone')
+  assert.equal(chainLabel(config.chains[1]), '写代码')
+  assert.equal(chainLabel(config.chains[0]), 'default', 'an unnamed chain is named by its id in host messages')
+  assert.equal(defaultChainOf(config).id, 'default')
+})
+
+test('the chain rules catch a duplicate id and a default id that names nothing', () => {
+  const duplicated = { chains: [namedChain('default', ''), namedChain('default', '第二个')], defaultChainId: 'default' }
+  assert.deepEqual(structuralViolations(duplicated).map(violation => violation.key), ['problemDuplicateChainId'])
+  // 每个重复的 id 只报一次：第一条不算"重复的"。
+  const thrice = { chains: [namedChain('a', ''), namedChain('b', ''), namedChain('a', '')], defaultChainId: 'a' }
+  assert.equal(structuralViolations(thrice).filter(violation => violation.key === 'problemDuplicateChainId').length, 1)
+  const missingDefault = { chains: [namedChain('coding', '')], defaultChainId: 'writing' }
+  assert.deepEqual(structuralViolations(missingDefault).map(violation => violation.key), ['problemUnknownDefaultChain'])
+  // 空链（没有候选）是合法配置，插件的表现是不接管，不是加载失败。
+  assert.deepEqual(structuralViolations({ chains: [namedChain('default', '')], defaultChainId: 'default' }), [])
 })
 
 test('resolveChain puts the selected model first and the configured fallbacks after it', () => {
@@ -2278,8 +2347,7 @@ test('without a storage domain, bindings live in memory and behave identically',
   assert.equal(bindings.read('s1'), undefined, 'an absent binding is a state, not a failure')
   await bindings.write('s1', { chain: null, retries: { 'p/m': 0 } })
   assert.deepEqual(bindings.read('s1'), { chain: null, retries: { 'p/m': 0 } })
-  assert.deepEqual(bindings.retriesOf('s1'), { 'p/m': 0 })
-  assert.deepEqual(bindings.retriesOf('unknown'), {})
+  assert.equal(bindings.read('unknown'), undefined)
 })
 
 test('with a storage domain, the write goes through it and reads come back from it', async () => {
@@ -2333,11 +2401,11 @@ test('the session binding domain declares the shape the routing path reads', () 
 })
 
 test('the chain rules reject a repeated route and a weight strategy with nothing to draw', () => {
-  const repeated = structuralViolations({ chain: chainValue({ candidates: [cand('a'), cand('a')] }) })
+  const repeated = structuralViolations(structural(chainValue({ candidates: [cand('a'), cand('a')] })))
   assert.deepEqual(repeated.map(v => v.key), ['problemDuplicateRouteInChain'])
-  const weightless = structuralViolations({ chain: chainValue({ candidates: [cand('a')], strategy: 'weight' }) })
+  const weightless = structuralViolations(structural(chainValue({ candidates: [cand('a')], strategy: 'weight' })))
   assert.deepEqual(weightless.map(v => v.key), ['problemWeightNoPositive'])
-  assert.deepEqual(structuralViolations({ chain: chainValue({ candidates: [cand('a')] }) }), [])
+  assert.deepEqual(structuralViolations(structural(chainValue({ candidates: [cand('a')] }))), [])
 })
 
 test('the failover notice names the failing route and the fallback position', () => {

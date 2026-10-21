@@ -4,6 +4,7 @@ import { clone } from './format.ts'
 import {
   DEFAULT_BREAKER_COOLDOWN_SECONDS,
   DEFAULT_BREAKER_SCOPE,
+  DEFAULT_CHAIN_ID,
   DEFAULT_FIRST_HOP_MAX_RETRIES,
   DEFAULT_INTERVAL_SECONDS,
   DEFAULT_MAX_RETRIES,
@@ -62,6 +63,16 @@ export function normalizeChain(value) {
   return chain
 }
 
+/** One named chain: the chain fields plus the identity a session binds to. */
+export function normalizeNamedChain(value) {
+  var chain = normalizeChain(value)
+  // id 留空的草稿不能被当成"没有 id"：会话绑定按 id 引用，一个空 id 会让两条链
+  // 无法区分。缺省时给默认链的 id，与迁移产物的 id 同一个来源。
+  var id = typeof value?.id === 'string' && value.id !== '' ? value.id : DEFAULT_CHAIN_ID
+  var name = typeof value?.name === 'string' ? value.name : ''
+  return Object.assign(chain, { id: id, name: name })
+}
+
 
 export function validate(draft) {
   var problems = []
@@ -69,16 +80,19 @@ export function validate(draft) {
   // 这里收全部，key + vars 进字典渲染。此前两份规则靠三句「与 host 的 assertStructural
   // 同步」的注释对齐，且已经漂移——重复渠道 host 从第一天就拒、浏览器漏检，用户存得下
   // 一个加载即被 host 拒绝的配置，吃的还是一句英文错误。
-  structuralViolations({ chain: draft.chain, health: draft.health }).forEach(function (violation) {
+  structuralViolations({ chains: draft.chains, defaultChainId: draft.defaultChainId, health: draft.health }).forEach(function (violation) {
     problems.push({ key: violation.key, vars: violation.vars })
   })
   // 草稿态检查：host 故意不做单字段边界（schema 拥有它们，assertStructural 的
   // docstring 划了这条线），浏览器要在保存前挡住，否则用户吃到的是 host 的英文拒绝。
-  draft.chain.candidates.forEach(function (candidate, index) {
-    if (!candidate.provider || !candidate.model) problems.push({ key: 'problemEmptyRoute', vars: { index: index + 1 } })
-    if (!(candidate.maxRetries >= 0 && candidate.maxRetries <= MAX_RETRIES)) problems.push({ key: 'problemBadMaxRetries', vars: { index: index + 1 } })
+  // 逐条链检查：界面上每个候选都属于"它所在的那条链"，编号也从那条链算。
+  draft.chains.forEach(function (chain, chainIndex) {
+    chain.candidates.forEach(function (candidate, index) {
+      if (!candidate.provider || !candidate.model) problems.push({ key: 'problemEmptyRoute', vars: { chain: chainIndex + 1, index: index + 1 } })
+      if (!(candidate.maxRetries >= 0 && candidate.maxRetries <= MAX_RETRIES)) problems.push({ key: 'problemBadMaxRetries', vars: { chain: chainIndex + 1, index: index + 1 } })
+    })
+    if (!(chain.firstHopMaxRetries >= 0 && chain.firstHopMaxRetries <= MAX_RETRIES)) problems.push({ key: 'problemBadFirstHopRetries', vars: { chain: chainIndex + 1 } })
   })
-  if (!(draft.chain.firstHopMaxRetries >= 0 && draft.chain.firstHopMaxRetries <= MAX_RETRIES)) problems.push({ key: 'problemBadFirstHopRetries', vars: {} })
   return problems
 }
 

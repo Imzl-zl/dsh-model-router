@@ -63,16 +63,18 @@ export function configuredRoutes(chain: { candidates: readonly RoutableCandidate
 }
 
 /**
- * Every configured route, from a config or a browser draft: the set the host's
- * probe and connectivity runs cover, and the browser's lists show. A draft's
- * fields may be absent (an older record, a half-built form row), so this
- * adapter normalizes them and delegates — the collection rule itself stays
- * {@link configuredRoutes}' alone.
+ * Every configured route across every chain, from a config or a browser draft:
+ * the set the host's probe and connectivity runs cover, and the browser's lists
+ * show. A draft's fields may be absent (an older record, a half-built form row),
+ * so this adapter normalizes them and delegates — the collection rule itself
+ * stays {@link configuredRoutes}' alone. Across chains the routes are folded
+ * once: two chains naming the same route are two orders of one physical channel,
+ * and a probe or a health row is about the channel, not the order.
  */
 export function configuredRouteList(config: {
-  chain?: { candidates: readonly RoutableCandidate[] }
+  chains?: readonly { candidates: readonly RoutableCandidate[] }[]
 }): string[] {
-  return configuredRoutes(config.chain ?? { candidates: [] })
+  return configuredRoutes({ candidates: (config.chains ?? []).flatMap(chain => chain.candidates) })
 }
 
 /**
