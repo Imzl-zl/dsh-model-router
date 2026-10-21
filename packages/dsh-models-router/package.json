@@ -30,7 +30,7 @@
     "node": ">=22.6.0"
   },
   "scripts": {
-    "bundle": "tsc -p tsconfig.json && tsdown",
+    "bundle": "tsc -p tsconfig.json && tsdown --concurrency 1",
     "watch": "tsdown --watch",
     "prepublishOnly": "npm run bundle"
   },

@@ -87,6 +87,16 @@ function createSnapshotStore(init) {
   }
 }
 
+test('the client bundle carries its own remote artifact instead of requiring it', () => {
+  // 构建顺序陷阱（2026-10-21 CI 抓到）：tsdown 默认并行构建 host 与 client；client 里的
+  // 自引用 `dsh-models-router/remote` 在 lib/typert.remote-client.js 尚未生成时会退化成
+  // 一个真实的 require——浏览器 loader 答不了它，本套件的 require 表也答不了。
+  // npm run bundle 用 `--concurrency 1` 强制 host 先构建；这条守着构建产物。
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.equal(/require\(["']dsh-models-router\/remote["']\)/.test(source), false,
+    'client.js must inline the generated remote artifact (build with npm run bundle)')
+})
+
 /** Load client.js and return its module exports. */
 function loadClient() {
   const source = readFileSync(CLIENT_PATH, 'utf8')
