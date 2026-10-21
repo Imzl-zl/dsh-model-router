@@ -335,8 +335,18 @@ export var ROUTER_CSS = [
   '  line-height: 18px;',
   '}',
   '.dsh-router-session-chip-note { margin: 2px 7px 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }',
+  // 弹层比内容宽一点：路由名（real-a/step-5-preview）与输入框挤在 190px 里会顶到一起。
+  '.dsh-router-session-chip-menu { min-width: 232px; }',
+  // 链行：Menu 原语不画子菜单箭头，这里自己排「链 | 名字 | ›」，让它看起来可点。
+  '.dsh-router-session-chip-chain { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; }',
+  '.dsh-router-session-chip-chain-key { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }',
+  '.dsh-router-session-chip-chain-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+  '.dsh-router-session-chip-chain-chevron { flex: none; color: var(--dsw-alias-label-caption); font-size: 14px; line-height: 1; }',
   '/* 弹层里的每路由重试行：路由名可压缩，输入框定宽 48px（设计稿的宽度，刚好放两位数字）。 */',
-  '.dsh-router-session-chip-retries { display: flex; flex-direction: column; gap: 2px; margin: 2px 7px 0; }',
+  '.dsh-router-session-chip-retries { display: flex; flex-direction: column; gap: 2px; margin: 4px 7px 0; padding-top: 5px; border-top: 0.5px solid var(--dsw-alias-border-l1); }',
+  // 标题与提示用更小的字号：和路由行拉开层级，不再一行行都是 12px。
+  '.dsh-router-session-chip-retry-note { margin: 0 0 4px; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }',
+  '.dsh-router-session-chip-retry-note-title { color: var(--dsw-alias-label-secondary); font-weight: 500; }',
   '.dsh-router-session-chip-retry { display: flex; align-items: center; gap: 8px; min-height: 30px; }',
   '.dsh-router-session-chip-route { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }',
   '.dsh-router-session-chip-retry-input { flex: none; width: 48px; height: 26px; padding: 0 6px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; text-align: center; box-sizing: border-box; }',

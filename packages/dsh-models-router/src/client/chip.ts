@@ -300,15 +300,23 @@ export function SessionChainChip(props) {
   useEffect(function () { chip.load(sessionId) }, [chip, sessionId])
 
   var view = chip.view(sessionId)
+  // 未绑定时显示"实际会走的那条链"：默认链有名字就写名字，没有才是字典的「默认链」。
+  // 写死「默认链」会让默认链改名后，chip 与弹层都在说一条不存在的链。
+  var defaultName = view.defaultChainId === '' ? t('chainDefaultName') : chainNameOf(view, view.defaultChainId, t)
   var label = view.loading
     ? t('sessionChainLoading')
-    : view.chain === null ? t('chainDefaultName') : chainNameOf(view, view.chain, t)
-  var defaultName = view.defaultChainId === '' ? t('chainDefaultName') : chainNameOf(view, view.defaultChainId, t)
+    : view.chain === null ? defaultName : chainNameOf(view, view.chain, t)
 
   // 链行在弹层里是"一个带子菜单的行"：弹出体属于 Menu 原语，不自己搭 portal。
+  // 原语不给子菜单行画箭头，所以行内自己排「链 | 名字 | ›」——否则这一行看起来
+  // 只是一个静态标题，用户不会去点它。
   var chainRow = {
     id: 'chain',
-    label: label,
+    label: h('span', { className: 'dsh-router-session-chip-chain' }, [
+      h('span', { key: 'key', className: 'dsh-router-session-chip-chain-key' }, t('sessionChainRowKey')),
+      h('span', { key: 'value', className: 'dsh-router-session-chip-chain-value' }, label),
+      h('span', { key: 'chevron', className: 'dsh-router-session-chip-chain-chevron', 'aria-hidden': 'true' }, '›'),
+    ]),
     submenu: [{ id: FOLLOW_DEFAULT, label: t('sessionChainFollowDefault') }].concat(
       view.chains.map(function (chain) {
         return { id: chain.id, label: chain.name !== '' ? chain.name : t('chainDefaultName') }
@@ -349,9 +357,9 @@ export function SessionChainChip(props) {
   })
   if (retryRows.length > 0) {
     extras.push(h('div', { key: 'retries', className: 'dsh-router-session-chip-retries' },
-      h('div', { className: 'dsh-router-session-chip-note' }, t('sessionRetryTitle')),
+      h('div', { className: 'dsh-router-session-chip-retry-note dsh-router-session-chip-retry-note-title' }, t('sessionRetryTitle')),
       retryRows,
-      h('div', { className: 'dsh-router-session-chip-note' }, fill(t('sessionRetryHint'), { max: MAX_SESSION_RETRIES }))))
+      h('div', { className: 'dsh-router-session-chip-retry-note' }, fill(t('sessionRetryHint'), { max: MAX_SESSION_RETRIES }))))
   }
   if (view.error !== null) {
     extras.push(h('div', { key: 'error', className: 'dsh-router-session-chip-error', role: 'alert' }, view.error))
@@ -361,13 +369,14 @@ export function SessionChainChip(props) {
     // 用户以为自己的选择被人改了。
     extras.push(h('div', { key: 'memory', className: 'dsh-router-session-chip-note' }, t('sessionChainMemoryOnly')))
   }
-  extras.push(h('div', { key: 'hint', className: 'dsh-router-session-chip-note' }, fill(t('sessionChainHint'), { chain: defaultName })))
 
   return h(Menu, {
     open: view.open === true,
     portal: true,
     align: 'start',
-    side: 'bottom',
+    // chip 坐在 composer 工具行（视口底部）：向下没有空间，Menu 只能钳到贴底并压住
+    // 输入框。向上开才是它真正的位置（设计稿也是画在 composer 上方）。
+    side: 'top',
     // 关闭只由 Menu 的自身交互触发（Escape / 点外部 / 选中）：写失败时没人调它，
     // 弹层因此留在原地。
     onClose: function () { chip.close(sessionId) },

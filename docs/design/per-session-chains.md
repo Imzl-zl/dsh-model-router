@@ -107,7 +107,7 @@ ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
 | 宽度上限 | `min(220px, 40cqw)`（比模型选择器的 360px 窄：路由是次要信息） | 参照 `ModelSelect.module.css:16-17` |
 | 窄容器折叠 | `@container (max-width: 460px)` 只留图标（权限 chip 同一刀口） | `PermissionSelect.module.css:92-96` |
 | 弹层 | `Menu` 原语（`portal`），`z-index 1100`、`var(--dsw-elevation-prominent)` | `ModelSelect.module.css:91-117`；`ui-primitives/src/index.ts:26` |
-| 弹层行 | DSH `Menu` 自带（34px 行、`5px 7px`、`--dsw-radius-md`） | `ModelSelect.module.css:221-237` |
+| 弹层行 | DSH `Menu` 自带（34px 行、`6px 8px`、`--dsw-radius-md`） | `ui-primitives/src/Menu.module.css:95-110` |
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -119,12 +119,11 @@ ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
 
 **弹层**（点 chip 打开，`Menu` 的 portal 模式自己定位并做视口钳制）：```
 ┌─ 本会话的路由 ──────────────┐
-│ 链            写代码  ▾     │  ← 子菜单：跟随默认链 / 默认链 / 写代码
+│ 链            写代码  ›     │  ← 子菜单：跟随默认链 / 默认链 / 写代码
 │ ─────────────────────────── │
-│ 本会话的重试次数             │  ← 12/18 tertiary 分组标题
+│ 各路由的重试次数             │  ← 11/16 secondary 分组标题
 │ stub-third/stub-model [ 5 ] │  ← 输入宽 48px；空 = 跟随链
-│ 留空 = 跟随链；0 = 这条路由不重试；上限 9 次 │
-│ 没有单独选择的会话使用「默认链」的降级顺序   │
+│ 0 = 不重试 · 上限 9 次       │
 └─────────────────────────────┘
 ```
 
@@ -141,7 +140,8 @@ ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
   重试；成功才刷新 chip 并关闭。
 - 没有 `storageDomain` 的组合：绑定退回内存，弹层里明说"重启后失效"（`persistent: false`）。
 - 窄容器（≤460px）只留图标，`title`/`aria-label` 提供完整文案。
-- chip 文案：未绑定显示「默认链」；绑定时显示该链的 `name`（留空则字典的"默认链"）。
+- chip 文案：显示本会话**实际会走的那条链**——绑定时是该链的 `name`；未绑定时是默认链的
+  `name`（默认链未命名才显示字典的「默认链」）。弹层不再另加脚注解释默认链。
 
 ## 五、设置面板：链管理
 

@@ -1865,6 +1865,18 @@ test('every page, chain, budget and timeline key exists in both locales', () => 
   }
 })
 
+test('the two dictionaries cover the same keys and placeholders', () => {
+  // 274 个键逐个对齐：只在一边存在的键会让另一语言直接渲染出键名（retryLimit 就是这么
+  // 漏的——两边键数相同，靠数数永远发现不了）。占位符同理，缺了会原样印出 "{n}"。
+  const zhKeys = Object.keys(zh).sort()
+  const enKeys = Object.keys(en).sort()
+  assert.deepEqual(zhKeys, enKeys, 'zh and en must define the same keys')
+  const placeholders = (text) => (text.match(/\{(\w+)\}/g) ?? []).sort().join(',')
+  for (const key of zhKeys) {
+    assert.equal(placeholders(zh[key]), placeholders(en[key]), `${key} uses the same placeholders in both locales`)
+  }
+})
+
 test('every breaker preset desc key exists in both locales', () => {
   // M19：预设文案曾在模块里手写中文，英文用户永远看不到。descKey 进字典，
   // 漏一个键这里就红。

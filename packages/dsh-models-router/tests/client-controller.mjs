@@ -1723,8 +1723,26 @@ test('the chip names the bound chain and lists every chain in its popover', asyn
   // 链行带子菜单：跟随默认 + 配置里的每一条链（名字来自配置，不来自字典）。
   assert.deepEqual(menu.props.items[1].submenu.map((row) => row.label),
     ['sessionChainFollowDefault', 'chainDefaultName', '写代码'])
-  // 脚注说明"没有单独选择的会话走哪条"。
-  assert.ok(collectText(menu).includes('sessionChainHint'))
+  // 链行本身就写着"实际会走哪条"（未命名默认链 → 字典的「默认链」）；弹层不再另加脚注。
+  assert.equal(collectText(menu).includes('sessionChainHint'), false)
+})
+
+test('an unbound session shows the default chain it will actually run', async () => {
+  // 默认链改名后，chip 与链行必须跟着写新名字：写死「默认链」等于告诉用户一条不存在的链。
+  const h = await mount({ value: config({
+    chains: [
+      { id: 'default', name: '主力', candidates: [cand('a')], switchOn: switchOn(), firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
+      { id: 'coding', name: '写代码', candidates: [cand('b')], switchOn: switchOn(), firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
+    ],
+    defaultChainId: 'default',
+  }) })
+  await h.chip.model.load('s1')
+  assert.equal(chipLabel(renderChip(h)), '主力')
+  await h.chip.model.open('s1')
+  // 链行的 label 是「链 | 名字 | ›」节点：名字在 value 子节点里。
+  const chainLabel = renderChip(h).props.items[1].label
+  const value = chainLabel.props.children.find(child => child.props?.className === 'dsh-router-session-chip-chain-value')
+  assert.equal(value.props.children, '主力')
 })
 
 test('choosing a chain stores it, refreshes the chip and closes the popover', async () => {
