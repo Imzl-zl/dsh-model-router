@@ -15,6 +15,7 @@ import {
   DEFAULT_SWITCH_ON,
   DEFAULT_TIMELINE_BUCKET_SECONDS,
   MAX_RETRIES,
+  MAX_SESSION_RETRIES,
 } from '../defaults.ts'
 import { structuralViolations } from '../rules.ts'
 
@@ -71,6 +72,21 @@ export function normalizeNamedChain(value) {
   var id = typeof value?.id === 'string' && value.id !== '' ? value.id : DEFAULT_CHAIN_ID
   var name = typeof value?.name === 'string' ? value.name : ''
   return Object.assign(chain, { id: id, name: name })
+}
+
+
+/**
+ * 一个重试输入框的文字 → 该存什么。
+ *
+ * 空 = 跟随链（不是 0）；0 是"这条路由不重试"的真实选择；0..MAX_SESSION_RETRIES 之外
+ * 一律 invalid——调用方显示上限，不夹值。chip 的弹层与「会话路由」页签共用这一处判断。
+ */
+export function parseRetryInput(raw) {
+  var text = String(raw === undefined || raw === null ? '' : raw).trim()
+  if (text === '') return { kind: 'follow' }
+  var value = Number(text)
+  if (!Number.isInteger(value) || value < 0 || value > MAX_SESSION_RETRIES) return { kind: 'invalid' }
+  return { kind: 'set', value: value }
 }
 
 

@@ -34,6 +34,7 @@ import { fill } from './format.ts'
 import { Icon, ICON_DOWN, ICON_ROUTE } from './icons.ts'
 import { effectiveChains } from '../chain.ts'
 import { MAX_SESSION_RETRIES } from '../defaults.ts'
+import { parseRetryInput } from './validate.ts'
 import { routeKeyOf } from '../routes.ts'
 import { CONFIG_NS } from './locales.ts'
 
@@ -194,17 +195,15 @@ export function createSessionChip(ctx, t) {
      */
     commitRetry: function (sessionId, route) {
       var current = stateOf(sessionId)
-      var raw = String(Object.hasOwn(current.retryDraft, route) ? current.retryDraft[route] : '').trim()
+      var parsed = parseRetryInput(Object.hasOwn(current.retryDraft, route) ? current.retryDraft[route] : '')
       var retries = Object.assign({}, current.retries)
-      if (raw === '') {
+      if (parsed.kind === 'follow') {
         delete retries[route]
+      } else if (parsed.kind === 'invalid') {
+        set(sessionId, { error: fill(t('sessionRetryInvalid'), { max: MAX_SESSION_RETRIES }) })
+        return Promise.resolve(stateOf(sessionId))
       } else {
-        var value = Number(raw)
-        if (!Number.isInteger(value) || value < 0 || value > MAX_SESSION_RETRIES) {
-          set(sessionId, { error: fill(t('sessionRetryInvalid'), { max: MAX_SESSION_RETRIES }) })
-          return Promise.resolve(stateOf(sessionId))
-        }
-        retries[route] = value
+        retries[route] = parsed.value
       }
       var remote = health()
       if (remote === undefined) {

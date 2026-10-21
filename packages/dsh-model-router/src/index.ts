@@ -65,6 +65,7 @@ import type {
   ProbeReport,
   ProbeRequest,
   ProbeRoute,
+  SessionBindingList,
   SessionBindingRequest,
   SessionBindingView,
 } from './types.ts'
@@ -572,6 +573,27 @@ export default class ModelRouter extends TypertRemoteService {
     const binding = { chain: request.chain, retries: { ...request.retries } }
     await this.bindings.write(request.sessionId, binding)
     return { chain: binding.chain, retries: { ...binding.retries }, persistent: this.bindings.persistent }
+  }
+
+  /**
+   * Every session binding, for the settings panel's session list.
+   *
+   * The panel cannot ask "which session is in front" — DSH's settings surface is
+   * global — so it lists the bindings and joins them with `session.list`. That
+   * same join is what finds the rows whose session no longer exists.
+   */
+  @Remote
+  async sessionBindings(): Promise<SessionBindingList> {
+    return { persistent: this.bindings.persistent, bindings: this.bindings.list() }
+  }
+
+  /**
+   * Drop one session's binding. Idempotent, so the panel's cleanup can run over
+   * a list that another window already pruned.
+   */
+  @Remote
+  async deleteSessionBinding(sessionId: string): Promise<boolean> {
+    return await this.bindings.delete(sessionId)
   }
 
   /**

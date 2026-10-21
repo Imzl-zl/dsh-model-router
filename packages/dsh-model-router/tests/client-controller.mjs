@@ -1064,8 +1064,10 @@ test('the workbench is one page with top view tabs, not an internal sidebar', as
     'the internal sidebar is gone')
 
   const tabs = find(tree, (node) => node.type === 'SegmentedTabs')
-  assert.ok(tabs, 'the two views are switched by top tabs')
-  assert.deepEqual(tabs.props.items.map((item) => item.value), ['chain', 'health'])
+  assert.ok(tabs, 'the views are switched by top tabs')
+  // 三个视图：链配置 / 按会话绑定 / 渠道健康。会话那一页是"挑一个会话直接配"的入口，
+  // 与聊天里的 chip 写同一份侧车。
+  assert.deepEqual(tabs.props.items.map((item) => item.value), ['chain', 'sessions', 'health'])
   assert.equal(tabs.props.value, 'chain', 'the chain is the default view')
 
   h.actions.onActive('__health__')
@@ -1864,6 +1866,102 @@ test('the popover lists one retry row per candidate of the chain this session us
   assert.equal(input.props.placeholder, 'sessionRetryFollow', 'an empty box means "follow the chain"')
 })
 
+
+// ---- 会话路由页签：按会话配置（与 chip 写同一份侧车） ----
+
+/** A Host that holds bindings in memory and serves a session list with titles. */
+const sessionsRemote = ({ sessions = [], bindings = [] } = {}) => {
+  const store = new Map(bindings.map((binding) => [binding.sessionId, { ...binding }]))
+  return {
+    session: {
+      list: () => Promise.resolve({ ok: true, value: { items: sessions } }),
+      projections: ({ sessionId }) => Promise.resolve({ ok: true, value: { asOfSeq: 1, values: { title: '标题 ' + sessionId.slice(-4) } } }),
+    },
+    routerHealth: {
+      sessionBindings: () => Promise.resolve({ ok: true, value: { persistent: true, bindings: [...store.values()] } }),
+      setSessionBinding: (request) => {
+        const stored = { sessionId: request.sessionId, chain: request.chain, retries: request.retries ?? {} }
+        store.set(request.sessionId, stored)
+        return Promise.resolve({ ok: true, value: { chain: stored.chain, retries: stored.retries, persistent: true } })
+      },
+      deleteSessionBinding: (sessionId) => Promise.resolve({ ok: true, value: store.delete(sessionId) }),
+    },
+    /** What the Host now holds, for assertions. */
+    store,
+  }
+}
+
+const sessionFixture = () => sessionsRemote({
+  sessions: [
+    { sessionId: 'session-aaaa1111', updatedAt: 2 },
+    { sessionId: 'session-bbbb2222', updatedAt: 1 },
+  ],
+  bindings: [
+    { sessionId: 'session-aaaa1111', chain: 'coding', retries: { 'b/m': 5 } },
+    { sessionId: 'session-gone9999', chain: null, retries: {} },
+  ],
+})
+
+test('the session tab lists every session with its binding, and the orphans separately', async () => {
+  const remote = sessionFixture()
+  const h = await mount({ value: chipConfig(), remote })
+  h.actions.onLoadSessions()
+  await flush()
+  await flush()
+  const rows = h.state().ui.sessions.rows
+  assert.deepEqual(rows.map((row) => [row.sessionId, row.chain, row.orphan]), [
+    ['session-aaaa1111', 'coding', false],
+    ['session-bbbb2222', null, false],
+    // 侧车里还有、会话已经没了：单列出来只给清除，不当成"还能改"的会话。
+    ['session-gone9999', null, true],
+  ])
+  assert.equal(rows[0].title, '标题 1111', 'the title comes from the title projection')
+  assert.deepEqual(rows[0].retries, { 'b/m': 5 })
+  assert.equal(h.state().ui.sessions.error, null)
+})
+
+test('picking a chain for a session writes that session only', async () => {
+  const remote = sessionFixture()
+  const h = await mount({ value: chipConfig(), remote })
+  h.actions.onLoadSessions()
+  await flush()
+  await flush()
+  h.actions.onSetSessionChain('session-bbbb2222', 'coding')
+  await flush()
+  assert.deepEqual(remote.store.get('session-bbbb2222'), { sessionId: 'session-bbbb2222', chain: 'coding', retries: {} })
+  assert.equal(h.state().ui.sessions.rows[1].chain, 'coding')
+  assert.deepEqual(remote.store.get('session-aaaa1111'), { sessionId: 'session-aaaa1111', chain: 'coding', retries: { 'b/m': 5 } },
+    'the other session is untouched')
+})
+
+test('a session retry override is written, and an out-of-range value is refused', async () => {
+  const remote = sessionFixture()
+  const h = await mount({ value: chipConfig(), remote })
+  h.actions.onLoadSessions()
+  await flush()
+  await flush()
+  h.actions.onSetSessionRetry('session-bbbb2222', 'a/m', '3')
+  await flush()
+  assert.deepEqual(remote.store.get('session-bbbb2222').retries, { 'a/m': 3 })
+  // 越界：不写、上屏错误，已存的值保持原样。
+  h.actions.onSetSessionRetry('session-bbbb2222', 'a/m', '10')
+  await flush()
+  assert.match(h.state().ui.sessions.error, /sessionRetryInvalid/)
+  assert.deepEqual(remote.store.get('session-bbbb2222').retries, { 'a/m': 3 })
+})
+
+test('clearing an orphan binding removes the record and reloads the list', async () => {
+  const remote = sessionFixture()
+  const h = await mount({ value: chipConfig(), remote })
+  h.actions.onLoadSessions()
+  await flush()
+  await flush()
+  h.actions.onClearSessionBinding('session-gone9999')
+  await flush()
+  await flush()
+  assert.equal(remote.store.has('session-gone9999'), false)
+  assert.equal(h.state().ui.sessions.rows.some((row) => row.orphan), false)
+})
 await Promise.all(pending)
 console.log(`${passed} client-controller test(s) passed`)
 

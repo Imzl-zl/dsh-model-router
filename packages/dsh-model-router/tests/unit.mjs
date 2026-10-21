@@ -33,7 +33,7 @@ import { breakerNotice } from '../src/notice.ts'
 import { assertStructural } from '../src/config.ts'
 import { structuralViolations } from '../src/rules.ts'
 import { SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
-import { defaultSwitchOn, validate, BREAKER_CODE_PRESETS } from '../src/client/validate.ts'
+import { defaultSwitchOn, parseRetryInput, validate, BREAKER_CODE_PRESETS } from '../src/client/validate.ts'
 import { deepEqual, saveShortcutKeyKey } from '../src/client/format.ts'
 import { en, zh } from '../src/client/locales.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
@@ -2308,6 +2308,20 @@ test('a session override replaces the candidate retries, and 0 stays distinct fr
   const zero = resolveChain(resolved, chain, { 'selected/m': 0 })
   assert.equal(zero.candidates[0].maxAttempts, 1)
   assert.equal(zero.candidates[1].maxAttempts, 3, 'a route the session does not name keeps the candidate count')
+})
+
+// ---- 会话重试输入：空与 0 是两件事 ----
+
+test('an empty retry box means "follow the chain", zero means "do not retry"', () => {
+  assert.deepEqual(parseRetryInput(''), { kind: 'follow' })
+  assert.deepEqual(parseRetryInput('   '), { kind: 'follow' })
+  assert.deepEqual(parseRetryInput(undefined), { kind: 'follow' })
+  assert.deepEqual(parseRetryInput('0'), { kind: 'set', value: 0 })
+  assert.deepEqual(parseRetryInput('9'), { kind: 'set', value: 9 })
+  // 越界与小数都不夹、不猜：调用方把上限显示出来，让用户自己改。
+  for (const raw of ['10', '-1', '1.5', 'abc']) {
+    assert.deepEqual(parseRetryInput(raw), { kind: 'invalid' }, raw)
+  }
 })
 
 // ---- 会话绑定的存储（storageDomain 侧车 / 内存回退） ----

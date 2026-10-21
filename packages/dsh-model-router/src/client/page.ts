@@ -29,19 +29,21 @@ import { configuredRouteList, routeKeyOf } from '../routes.ts'
 import { ChainView } from './chain.ts'
 import { AddCandidateModal, HealthSettingsModal } from './modals.ts'
 import { FailoverHistoryModal } from './pipeline.ts'
+import { SessionRoutingView } from './sessions.ts'
 import { GlobalHealthWorkspace } from './workspace.ts'
 import { Icon, ICON_SAVE, ICON_UNDO } from './icons.ts'
 
 /** The two views the page has. */
 const VIEW_CHAIN = 'chain'
 const VIEW_HEALTH = 'health'
+const VIEW_SESSIONS = 'sessions'
 
 export function RouterPage(props) {
   var t = props.t
   var state = props.useRouterPage(function (snapshot) { return snapshot })
   var draft = state.draft
   var disabled = !state.writable || state.saving
-  var view = state.ui.activeId === '__health__' ? VIEW_HEALTH : VIEW_CHAIN
+  var view = state.ui.activeId === '__health__' ? VIEW_HEALTH : state.ui.activeId === '__sessions__' ? VIEW_SESSIONS : VIEW_CHAIN
   var modal = state.ui.modal
 
   var focusRouteState = useState(null)
@@ -77,6 +79,7 @@ export function RouterPage(props) {
 
   var viewTabs = [
     { value: VIEW_CHAIN, label: t('viewChainTab'), id: 'model-router-tab-chain', panelId: 'model-router-panel-chain' },
+    { value: VIEW_SESSIONS, label: t('viewSessionsTab'), id: 'model-router-tab-sessions', panelId: 'model-router-panel-sessions' },
     { value: VIEW_HEALTH, label: t('viewHealthTab'), id: 'model-router-tab-health', panelId: 'model-router-panel-health' },
   ]
 
@@ -131,7 +134,7 @@ export function RouterPage(props) {
               items: viewTabs,
               value: view,
               label: t('viewTabsLabel'),
-              onChange: function (next) { props.onActive(next === VIEW_HEALTH ? '__health__' : '__chain__') },
+              onChange: function (next) { props.onActive(next === VIEW_HEALTH ? '__health__' : next === VIEW_SESSIONS ? '__sessions__' : '__chain__') },
             }))
         : null),
     h('div', { className: 'dsh-router-content' },
@@ -179,7 +182,20 @@ export function RouterPage(props) {
                   onCheckRoute: props.onCheckRoute,
                   onProbeRoute: props.onProbeRoute,
                 })
-              : h(ChainView, {
+              : view === VIEW_SESSIONS
+                ? h(SessionRoutingView, {
+                    t: t,
+                    state: state.ui.sessions,
+                    chains: draft.chains,
+                    defaultChainId: draft.defaultChainId,
+                    disabled: disabled,
+                    defaultChainName: draft.chain.name !== '' ? draft.chain.name : t('chainDefaultName'),
+                    onRefresh: props.onLoadSessions,
+                    onSetChain: props.onSetSessionChain,
+                    onSetRetry: props.onSetSessionRetry,
+                    onClear: props.onClearSessionBinding,
+                  })
+                : h(ChainView, {
                   t: t,
                   chain: draft.chain,
                   chains: draft.chains,
