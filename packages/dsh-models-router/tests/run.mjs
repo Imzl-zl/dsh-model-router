@@ -291,8 +291,31 @@ const SCENARIOS = [
     note: '最老的配置形状（只有 profiles/default，没有 chain/chains）：升级后仍按原链路由',
     // 用户现场的形状。判据是"它还在接管"：headers 从第一跳切到 profile 里的降级候选，
     // 而不是一枪打在原路由上然后失败。
-    overlayPath: `${HERE}legacy-profiles.overlay.yml`,
-    router: {},
+    // 与用户现场逐字相同的形状：只有 profiles + default，没有 chain / chains。
+    router: {
+      raw: {
+        enabled: true,
+        profiles: [{
+          id: 'profile-1',
+          when: { provider: 'stub-primary', model: 'stub-model' },
+          candidates: [
+            { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0, needs: {} },
+            { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 0, needs: {} },
+          ],
+          switchOn: { ...SWITCH_ON },
+          maxTotalAttempts: 6,
+          stickyTurns: 0,
+          strategy: 'order',
+        }],
+        default: {
+          enabled: true,
+          candidates: [{ provider: 'stub-third', model: 'stub-model', maxAttempts: 1, weight: 0, needs: {} }],
+          switchOn: { ...SWITCH_ON },
+          maxTotalAttempts: 3,
+          stickyTurns: 0,
+        },
+      },
+    },
     script: {
       'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
       'stub-backup': { outcomes: ['ok'] },
@@ -729,6 +752,33 @@ function overlayYaml(router, selection, binding, noStorage) {
   // 场景仍按"profile"写（candidates[0] = 用户选中的模型），overlay 生成时转成单链：
   // 被钉死的第一个候选成为隐式第一跳，其余是降级候选。这正是产品上的迁移规则，
   // 场景因此不需要为形状变化重写一遍。写 `chains` 的场景则直接给新形状。
+  // `router.raw`：把一份"存储里的原始配置"原样写进插件行（JSON 是合法 YAML flow 映射）。
+  // 用于"旧形状（profiles/default）升级后仍接管"这类场景——生成器只认得它自己写过的形状。
+  if (router.raw !== undefined) {
+    return `- id: llm-deepseek
+  disabled: true
+
+- id: llm-deepseek-account
+  disabled: true
+
+- id: session-persistence-jsonl
+  config:
+    root: './.sessions'
+    compression: none
+
+- id: agent-default-model
+  config:
+    provider: stub-primary
+    model: stub-model
+
+- insert:
+    - id: stub-adapter
+      name: '${STUB}'
+    - id: model-router
+      name: '${PLUGIN}'
+      config: ${JSON.stringify(router.raw)}
+`
+  }
   // 绑定夹具：它调的就是插件自己的服务方法，所以只在有绑定的场景里出现。
   const bindingRow = binding === undefined ? '' : `    - id: stub-session-binding
       name: '${BINDING_STUB}'
@@ -838,11 +888,7 @@ function boot(scenario) {
   rmSync(SESSIONS, { recursive: true, force: true })
   rmSync(BINDING_OBSERVED, { force: true })
   writeFileSync(`${HERE}stub-script.json`, JSON.stringify(scenario.script, null, 2))
-  // 静态 fixture（`overlayPath`）用于"原始旧配置"这类场景：生成器只写它认识的形状，
-  // 而这条场景要的是一份与用户现场逐字相同的 profiles 配置。
-  writeFileSync(`${HERE}overlay.yml`, scenario.overlayPath === undefined
-    ? overlayYaml(scenario.router, scenario.selection, scenario.binding, scenario.noStorage === true)
-    : readFileSync(scenario.overlayPath, 'utf8'))
+  writeFileSync(`${HERE}overlay.yml`, overlayYaml(scenario.router, scenario.selection, scenario.binding, scenario.noStorage === true))
   // spawnSync over execFileSync: dsh writes load warnings to stderr even when
   // it exits 0, and an error-terminal turn exits non-zero — neither fact says
   // anything about the plugin, so capture both streams and read the log.
