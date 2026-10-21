@@ -27,15 +27,13 @@
 
 import type { GenerateOptions, LlmCallConfig, PreparedLlmCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ProbeRoute, ProbeRouteResult } from './types.ts'
+import { fuseDeadline } from './deadline.ts'
 import { routeKeyOf } from './routes.ts'
 
 /** The llm face the probe needs: prepare once, stream once, read the head. */
 export interface ProbeLlm {
   prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>
 }
-
-/** Timeout code stamped on the probe's deadline, so a timeout reads apart from a caller abort. */
-export const PROBE_TIMEOUT_CODE = 'router/probe-timeout'
 
 /** A failure the probe could not even start: the route is not callable here. */
 function unavailable(route: ProbeRoute, now: number, reason: string): ProbeRouteResult {
@@ -91,7 +89,7 @@ const NEVER_CALLED_CODES: ReadonlySet<string> = new Set([
  * @returns the route's outcome; an adapter error becomes `unreachable` carrying
  *   its provider-neutral code — unless the code says the call could not be
  *   placed at all (see {@link NEVER_CALLED_CODES}), which is `unavailable` — a
- *   timeout becomes `unreachable` with {@link PROBE_TIMEOUT_CODE}, and a call
+ *   timeout becomes `unreachable` with the provider-neutral `TIMEOUT` code, and a call
  *   that could not be assembled becomes `unavailable` — which the UI must not
  *   read as a fault.
  */
@@ -104,30 +102,21 @@ export async function probeRoute(
 ): Promise<ProbeRouteResult> {
   const now = Date.now()
   const started = now
-  // Cancellation and timeout are fused by hand rather than with the disposable
-  // `deadline()` primitive: `using` is syntax the source-mode loader cannot
-  // parse, and this module must load from source in the headless composition.
-  const controller = new AbortController()
-  const abort = (reason: unknown): void => {
-    if (!controller.signal.aborted) controller.abort(reason)
-  }
-  const onUpstreamAbort = (): void => { abort(signal?.reason) }
-  if (signal !== undefined) {
-    if (signal.aborted) abort(signal.reason)
-    else signal.addEventListener('abort', onUpstreamAbort, { once: true })
-  }
-  const timer = setTimeout(() => { abort(new TimeoutError(PROBE_TIMEOUT_CODE, timeoutSeconds * 1000)) }, timeoutSeconds * 1000)
+  // Cancellation and the timeout are fused in one place (./deadline.ts), and the
+  // order inside it is the classification this module leans on: our own deadline
+  // is a fact about the channel, the caller hanging up is not.
+  const deadline = fuseDeadline(signal, timeoutSeconds)
   try {
     const call = await llm.prepareCall({
       provider: route.provider,
       model: route.model,
       maxTokens: 1,
-    }, controller.signal)
+    }, deadline.signal)
     const options: GenerateOptions = {
       ...call.config,
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
       maxTokens: 1,
-      signal: controller.signal,
+      signal: deadline.signal,
     }
     for await (const chunk of call.stream(options)) {
       // The first content byte is the measurement: TTFT. The stream is
@@ -148,7 +137,7 @@ export async function probeRoute(
         // same reason: one fact must not be classified differently depending
         // on which side of the adapter it arrives from.
         // 1. The probe's own deadline: a fact about the channel.
-        if (controller.signal.aborted && controller.signal.reason instanceof TimeoutError) {
+        if (deadline.expired()) {
           return { provider: route.provider, model: route.model, kind: 'unreachable', error: 'TIMEOUT', at: now }
         }
         // 2. The caller hanging up is not the channel's doing — and the
@@ -171,7 +160,7 @@ export async function probeRoute(
   } catch (error) {
     // The timeout is classified apart from the caller's abort: one is a fact
     // about the channel, the other is the caller hanging up.
-    if (controller.signal.aborted && controller.signal.reason instanceof TimeoutError) {
+    if (deadline.expired()) {
       return { provider: route.provider, model: route.model, kind: 'unreachable', error: 'TIMEOUT', at: now }
     }
     // 调用方取消不是渠道故障——必须在通用 code 之前判：适配器会把调用方 abort
@@ -189,22 +178,7 @@ export async function probeRoute(
     }
     return unavailable(route, now, error instanceof Error ? error.message : String(error))
   } finally {
-    clearTimeout(timer)
-    signal?.removeEventListener('abort', onUpstreamAbort)
-  }
-}
-
-/** The probe's own timeout reason, so a timeout reads apart from a caller abort. */
-class TimeoutError extends Error {
-  // Explicit fields, not a parameter property: the source-mode loader strips
-  // types without transforming, and rejects parameter properties outright.
-  readonly code: string
-  readonly timeoutMs: number
-  constructor(code: string, timeoutMs: number) {
-    super(`probe timed out after ${timeoutMs}ms`)
-    this.name = 'TimeoutError'
-    this.code = code
-    this.timeoutMs = timeoutMs
+    deadline.dispose()
   }
 }
 

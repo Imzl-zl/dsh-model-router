@@ -4,17 +4,18 @@ import { clone } from './format.ts'
 import {
   DEFAULT_BREAKER_COOLDOWN_SECONDS,
   DEFAULT_BREAKER_SCOPE,
+  DEFAULT_FIRST_HOP_MAX_RETRIES,
   DEFAULT_INTERVAL_SECONDS,
-  DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
+  DEFAULT_MAX_RETRIES,
   DEFAULT_PROBE_PROMPT,
   DEFAULT_PROBE_TIMEOUT_SECONDS,
   DEFAULT_STICKY_TURNS,
+  DEFAULT_STRATEGY,
   DEFAULT_SWITCH_ON,
   DEFAULT_TIMELINE_BUCKET_SECONDS,
+  MAX_RETRIES,
 } from '../defaults.ts'
 import { structuralViolations } from '../rules.ts'
-
-export var STRATEGY_OPTIONS = ['order', 'weight', 'round-robin']
 
 
 // 熔断码预设：秒数是数据，descKey 是字典键——文案一律进 locales.ts（中英各一份），
@@ -40,9 +41,9 @@ export function defaultChainValue() {
   return {
     candidates: [],
     switchOn: defaultSwitchOn(),
-    maxTotalAttempts: DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
     stickyTurns: DEFAULT_STICKY_TURNS,
-    strategy: 'order',
+    strategy: DEFAULT_STRATEGY,
+    firstHopMaxRetries: DEFAULT_FIRST_HOP_MAX_RETRIES,
   }
 }
 
@@ -50,6 +51,14 @@ export function normalizeChain(value) {
   var chain = clone(value ?? defaultChainValue())
   if (!Array.isArray(chain.candidates)) chain.candidates = []
   if (typeof chain.stickyTurns !== 'number' || chain.stickyTurns < 0) chain.stickyTurns = DEFAULT_STICKY_TURNS
+  // effectiveChain already speaks retries; this only covers a draft built by hand
+  // (a new row, a fixture), where a missing field would render as NaN in the stepper.
+  chain.candidates = chain.candidates.map(function (candidate) {
+    return typeof candidate.maxRetries === 'number'
+      ? candidate
+      : Object.assign({}, candidate, { maxRetries: DEFAULT_MAX_RETRIES })
+  })
+  if (typeof chain.firstHopMaxRetries !== 'number') chain.firstHopMaxRetries = DEFAULT_FIRST_HOP_MAX_RETRIES
   return chain
 }
 
@@ -67,9 +76,9 @@ export function validate(draft) {
   // docstring 划了这条线），浏览器要在保存前挡住，否则用户吃到的是 host 的英文拒绝。
   draft.chain.candidates.forEach(function (candidate, index) {
     if (!candidate.provider || !candidate.model) problems.push({ key: 'problemEmptyRoute', vars: { index: index + 1 } })
-    if (!(candidate.maxAttempts >= 1 && candidate.maxAttempts <= 5)) problems.push({ key: 'problemBadMaxAttempts', vars: { index: index + 1 } })
+    if (!(candidate.maxRetries >= 0 && candidate.maxRetries <= MAX_RETRIES)) problems.push({ key: 'problemBadMaxRetries', vars: { index: index + 1 } })
   })
-  if (!(draft.chain.maxTotalAttempts >= 1)) problems.push({ key: 'problemBadTotal', vars: {} })
+  if (!(draft.chain.firstHopMaxRetries >= 0 && draft.chain.firstHopMaxRetries <= MAX_RETRIES)) problems.push({ key: 'problemBadFirstHopRetries', vars: {} })
   return problems
 }
 

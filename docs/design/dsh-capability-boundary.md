@@ -68,13 +68,13 @@ hook 列表跨 context 共享：root 构造时创建唯一 `EventsService`（[`c
 | 钩子 | 位置 | 手段 | 理由 |
 |---|---|---|---|
 | `agent/request` | **最外层** | `prepend: true` | 必须压过 `installModelSelection` 在 `next()` 之后对 provider/model 的写回 |
-| `agent/request-error` | **最外层** | 注册在 root ctx 一次 + `prepend: true`，agent 从 payload 取 | 硬总上限只在最外层可执（见下） |
+| `agent/request-error` | **最外层** | 注册在 root ctx 一次 + `prepend: true`，agent 从 payload 取 | 每条候选自己的重试次数只在最外层可执（见下） |
 
-**为什么 `agent/request-error` 也在最外层（2026-10-17 修订）**：早先设计把它注册在 `agent.ctx` 的 `llm-retry` 内层，理由是"内层放弃时 `return next()` 正好交接"。该理由被实测推翻——`llm-retry` 注册在 root 插件 ctx 且不用 prepend（[`llm-retry/src/index.ts:243`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L243)），而 `prepend` 是唯一确定性的次序机制（[`cordis-primer.md:33`](file:///D:/sudy/github/deepseek-harness/docs/cordis-primer.md#L33)）；Router 用 prepend 就必然在它外层。同一个"整条链都死"场景（两候选各 1 枪、总上限 2、都一直 429）：注册在 llm-retry 内层时实测打 **7** 次真实调用（它自己的 5 次同路由重试发生在插件看不见的地方），改成最外层后打 **2** 次，正好等于上限。场景固化为 `tests/run.mjs` 的 `budget-cap-when-the-whole-chain-dies`，源码依据在 `src/index.ts` 的 `agent/request-error` 注册处注释。
+**为什么 `agent/request-error` 也在最外层**：`llm-retry` 注册在 root 插件 ctx 且不用 prepend（[`llm-retry/src/index.ts:243`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L243)），而 `prepend` 是唯一确定性的次序机制（[`cordis-primer.md:33`](file:///D:/sudy/github/deepseek-harness/docs/cordis-primer.md#L33)）；Router 用 prepend 就必然在它外层。注册在内层时，llm-retry 自己的同路由重试发生在插件看不见的地方，用户配的候选次数会被越过（同一"整条链都死"场景——两候选各 1 次调用、都一直 429——实测内层打 **7** 次真实调用，外层打 **2** 次）。场景固化为 `tests/run.mjs` 的 `chain-exhausted-two-candidates`，源码依据在 `src/index.ts` 的 `agent/request-error` 注册处注释。
 
-**最外层不等于绕开内层**：先 `await next()` 拿到内层（llm-retry / compaction）各自的决定再处置——内层决定重试且预算还有就原样放行、预算已尽就否决（返回 `undefined` 即终态）、内层全部放弃（`undefined`）才轮到插件做跨候选 failover。`llm-retry` 的"放弃"路径确实一路 `next()` 到默认 thunk（[`llm-retry/src/index.ts:198,216,223,231`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L198)），外层看得见——这正是旧结论"Router 永远等不到放弃信号"被推翻的地方。
+**最外层不等于绕开内层**：先 `await next()` 拿到内层（llm-retry / compaction）各自的决定再处置——内层决定重试就原样放行，内层全部放弃（`undefined`）才轮到插件做跨候选 failover。`llm-retry` 的"放弃"路径确实一路 `next()` 到默认 thunk（[`llm-retry/src/index.ts:198,216,223,231`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L198)），外层看得见。
 
-**2026-10-17 起还有第三条路**：`await next()` **之前**判"本候选配额已尽 && 这个错该切换"，成立就直接决定（换得动返回 `{kind:'retry'}` 让 `planFire` 前进，换不动返回 `undefined` 终态），**根本不进 llm-retry**——它的退避与两条 durable 记录因此都不会发生（实测 budget-cap 场景 boot 8547ms→2227ms、`llm/retry` 2→0、真实调用数不变），顺带修掉"`llm/retry` 记的 provider 不是真正被打的那一条"。语义依据：`maxAttempts` 的文案是"这条渠道最多真实调用多少次"，候选配额已尽时 llm-retry 想给同一条路由第二次本身就是越权——不让它做是执行分层，不是破坏分层。取舍与实现陷阱（提前返回会跳过熔断记录）见 `.agents/notes/implemented/2026-10-17-attempt-budget-two-layers.md`。
+**提前决定**：`await next()` **之前**判"本候选的重试次数已用尽 && 这个错该切换"，成立就直接决定（换得动返回 `{kind:'retry'}` 让 `planFire` 前进，换不动返回 `undefined` 终态），**根本不进 llm-retry**——它的退避与两条 durable 记录因此都不会发生，且不会出现"`llm/retry` 记的 provider 不是真正被打的那一条"。语义依据：用户配的是"这条渠道失败后重试几次"，次数用尽时 llm-retry 再想给同一条路由一次本身就是越权。取舍与实现陷阱（提前返回会跳过熔断记录）见 `.agents/notes/implemented/2026-10-17-attempt-budget-two-layers.md`。
 
 **生命周期**：注册在 root ctx 一次（按 `agent/created` 逐个注册会让每个 agent 漏一条 root listener），agent 从 payload 取，随插件 fiber 销毁。
 
@@ -87,11 +87,12 @@ hook 列表跨 context 共享：root 构造时创建唯一 `EventsService`（[`c
 
 **预算归属（两层，owner 不同、互不复制）**：[`agent.ts:409`](file:///D:/sudy/github/deepseek-harness/packages/core/agent-loop/src/agent.ts#L409) 的 `while (true)` **没有任何 attempt 上限**，DSH 不提供边界。
 
-- **第一层：同 route 重试，归 `llm-retry`。** Router 注册在它**外层**（见上），同 route 的多次重试连同退避与 `llm/retry` durable 记录仍由它负责，**Router 不复制退避逻辑**；候选配额已尽且该切换时 Router 直接决定，这一层不参与。其预算按 `(provider, policyKey)` 键控并在 `step/start`/`turn/end` 清零（[`llm-retry/src/index.ts:79-81,130-137`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L79)），切到新 provider 时自然归零。
-- **第二层：跨候选 failover 与硬总上限，归 Router。** 总 attempt 上限（`maxTotalAttempts`）由 Router 硬性兜住，`llm-retry` 的同路由重试也会被它截断——这是最外层位置的产物，也是 2026-10-17 把位置从内层改为最外层的原因。
+- **第一层：同 route 重试，归 `llm-retry`。** Router 注册在它**外层**（见上），同 route 的多次重试连同退避与 `llm/retry` durable 记录仍由它负责，**Router 不复制退避逻辑**；候选的重试次数用尽且该切换时 Router 直接决定，这一层不参与。其预算按 `(provider, policyKey)` 键控并在 `step/start`/`turn/end` 清零（[`llm-retry/src/index.ts:79-81,130-137`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L79)），切到新 provider 时自然归零；同一 provider 下多个模型共享这一个预算。
+- **第二层：跨候选 failover，归 Router。** 每条候选的次数由配置的 `maxRetries`（重试次数）决定，Router 在额度用尽时切下一条；没有整请求总上限。
 - **adapter 不声明 policy 时仍有默认 normal policy**（已实证，见第七节）：`providerRetryPolicy()` 返回 `undefined` 时 `llm-retry` 以 `mode=normal, maxRetries=5` 重试。**Router 不能假设"无 policy 就是不重试"**，第一层对每个候选都生效。
-- **`always` policy 必须显式拒绝**：该模式无重试上限（[`retry-policy.ts:47-54`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm/src/retry-policy.ts#L47)），且它**先 await 下游**（[`llm-retry/src/index.ts:199-214`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L199)）——下游返回 retry 它就直接采用，与 normal 模式行为相反。声明 `always` 的候选 provider 在配置加载时拒绝，不在运行时 veto。
-- **总 worst case = `maxTotalAttempts`**（默认 6，默认兜底池 3）：用户配的硬上限，含同渠道重试与跨渠道降级，末位候选被 cap 后也不许多打（`tests/run.mjs` 的 `last-candidate-cap-fires-no-extra-call`）。`候选数 × (1 + maxRetries)` 是 2026-10-17 之前的旧口径，已被这个上限取代。
+- **`always` policy 必须显式拒绝**：该模式无重试上限（[`retry-policy.ts:47-54`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm/src/retry-policy.ts#L47)），且它**先 await 下游**（[`llm-retry/src/index.ts:199-214`](file:///D:/sudy/github/deepseek-harness/packages/llm/llm-retry/src/index.ts#L199)）——下游返回 retry 它就直接采用，与 normal 模式行为相反。它对**每个**失败码都重试，包括用户没勾 `switchOn` 的码（那些码插件不切换、只等 DSH 收尾），会让一个 step 永不结束。声明 `always` 的候选 provider 在配置加载时拒绝，不在运行时 veto。
+- **一个 step 的花费上界 = Σ(`maxRetries + 1`)**：末位候选打满自己的次数后不多打（`tests/run.mjs` 的 `last-candidate-cap-fires-no-extra-call`）。用户没勾切换的失败码不由插件计数，由 DSH 按自己的策略重试并收尾——这是唯一不受插件控制的路径。
+- **插件填的次数受 provider 策略截断**：实际同 route 调用数 = 1 + min(`maxRetries`, provider 的 `retryPolicy.maxRetries`，默认 5)。设置入口在 Models 页，插件不复制这个配置。
 
 **重试时的选路**：`prepareRequest` 在上一次已记录 header 时用 `requestProposal(persistedHeader)` 作种子（[`agent.ts:583-592`](file:///D:/sudy/github/deepseek-harness/packages/core/agent-loop/src/agent.ts#L583)），即上一次的 route；随后 `installModelSelection` 又覆盖回用户选择。所以 Router 每次拿到的都是用户选择，**必须靠自己的 per-(agent, turn, step) 索引决定前进到第几个 candidate**。
 
@@ -252,7 +253,7 @@ turn/end           reason=completed
 | 本 listener 返回 `{kind:'retry'}` 后 `agent/request` 第三次触发 | 交接真实成立，failover 可行 |
 | 无需复制退避逻辑 | 两层各有一个 owner，不形成第二处真相源 |
 
-**这一条在 2026-10-17 被修订**：spike 当时注册在内层，据此得出"若 Router 在最外层且委派，永远等不到放弃信号"。后来的实测推翻了这个结论——用 `prepend: true` 注册到 root ctx 后 Router 在最外层，`await next()` 照样看得到 llm-retry 的放弃（`next()` 一路到默认 thunk 返回 `undefined`），且硬总上限从此可执（同一"整条链都死"场景：内层 7 次 vs 外层 2 次真实调用）。旧结论作废，现行设计见 G2 与 `.agents/notes/implemented/2026-10-17-attempt-budget-two-layers.md`。
+**注册位置的实证**：用 `prepend: true` 注册到 root ctx 后 Router 在最外层，`await next()` 照样看得到 llm-retry 的放弃（`next()` 一路到默认 thunk 返回 `undefined`）。同一"整条链都死"场景（两候选各 1 次调用）：内层 7 次、外层 2 次真实调用——外层位置是候选次数可执的前提。现行设计见 G2。
 
 ### 7.5 spike 自身踩到的坑
 

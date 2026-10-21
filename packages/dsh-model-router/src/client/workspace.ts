@@ -1,10 +1,10 @@
-/** Global channel health & telemetry workspace, aggregated per physical route. */
+/** Global channel health & telemetry, aggregated per physical route. */
 
 import { useEffect, useMemo, useState } from 'react'
+import { Button, Input, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import { h } from './dom.ts'
 import { routeKeyOf, routeParts } from '../routes.ts'
-import { S } from './styles.ts'
-import { fill, formatLatency, formatWindowHours, healthToneBadge, healthToneStyle, routeStatus, shortModelName } from './format.ts'
+import { fill, formatLatency, formatWindowHours, healthToneStyle, routeStatus, shortModelName } from './format.ts'
 import { ChannelMetricsDashboard } from './health-ui.ts'
 import { bucketTimeline, windowSuccessRate } from '../timeline.ts'
 import { Icon, ICON_BOLT, ICON_CHART, ICON_CLOCK, ICON_GEAR, ICON_SEARCH, ICON_SPINNER } from './icons.ts'
@@ -50,6 +50,29 @@ function connectivityUnavailableTitle(t, verdict) {
   return t('connectivityUnavailable')
 }
 
+/** The tag tone one health status uses. */
+function statusTone(status) {
+  if (status === 'healthy') return 'success'
+  if (status === 'degraded') return 'warning'
+  if (status === 'unhealthy') return 'danger'
+  return 'outline'
+}
+
+/** The tag text one health status carries. */
+function statusLabel(t, status) {
+  if (status === 'healthy') return t('healthStatusHealthy')
+  if (status === 'degraded') return t('healthStatusDegraded')
+  if (status === 'unhealthy') return t('healthStatusUnhealthy')
+  return t('compactHealthIdle')
+}
+
+/** The probe verdict's tag tone. */
+function probeTone(verdict) {
+  if (verdict.kind === 'reachable') return 'success'
+  if (verdict.kind === 'unreachable') return 'danger'
+  return 'outline'
+}
+
 export function GlobalHealthWorkspace(props) {
   var t = props.t
   var draft = props.draft
@@ -61,7 +84,7 @@ export function GlobalHealthWorkspace(props) {
   var probing = props.probing === true
   var probingRoutes = props.probingRoutes || {}
   // The jump target is an object, so clicking the same route twice re-arms
-  // the scroll; entering through the nav entry clears it (null).
+  // the scroll; entering through the tab clears it (null).
   var focusRouteKey = props.focusRoute ? props.focusRoute.route : null
 
   var filterState = useState('all')
@@ -89,12 +112,6 @@ export function GlobalHealthWorkspace(props) {
   // from the configured half: it is whatever model the user picked in DSH, which
   // the plugin does not know until a request arrives, so it can only appear once
   // it has been observed.
-  //
-  // Note: 这里曾读 `draft.profiles` / `draft.default`——单链化之后那两个键不复
-  // 存在，整段变成死代码，配置的降级候选因此一个都不进大盘（用户问"是所有配置的
-  // 还是你咋获取的"时发现的）。
-  // Note: 为何第一跳不在"配置的那一半"、以及为何不改成只显示配置的 —— 见
-  // .agents/notes/implemented/2026-10-19-health-dashboard-lost-its-configured-half.md
   var allChannels = useMemo(function () {
     var map = {}
     var ensure = function (provider, model) {
@@ -112,135 +129,121 @@ export function GlobalHealthWorkspace(props) {
     }
 
     if (draft && draft.chain && draft.chain.candidates) {
-      draft.chain.candidates.forEach(function (c, idx) {
-        var ch = ensure(c.provider, c.model)
+      draft.chain.candidates.forEach(function (candidate, index) {
+        var channel = ensure(candidate.provider, candidate.model)
         // 单链之下没有"哪条规则"可跳：所有候选都属于同一条链。所以 usage 只说明
-        // 它在这条链里的位次，不再做按规则的跳转（那个 action 已随规则一起删除，
-        // 点下去是 undefined 调用）。
-        if (ch) ch.usages.push({
+        // 它在这条链里的位次，不再做按规则的跳转。
+        if (channel) channel.usages.push({
           name: '__chain__',
-          label: t('channelUsedInChain') + ' #' + (idx + 1),
+          label: t('channelUsedInChain') + ' #' + (index + 1),
         })
       })
     }
 
-    if (passive) {
-      Object.keys(passive).forEach(function (key) {
-        var parts = routeParts(key)
-        ensure(parts.provider, parts.model)
-      })
-    }
-
-    if (discover) {
-      Object.keys(discover).forEach(function (key) {
-        var parts = routeParts(key)
-        ensure(parts.provider, parts.model)
-      })
-    }
-
-    if (probe) {
-      Object.keys(probe).forEach(function (key) {
-        var parts = routeParts(key)
-        ensure(parts.provider, parts.model)
-      })
-    }
+    if (passive) Object.keys(passive).forEach(function (key) { var parts = routeParts(key); ensure(parts.provider, parts.model) })
+    if (discover) Object.keys(discover).forEach(function (key) { var parts = routeParts(key); ensure(parts.provider, parts.model) })
+    if (probe) Object.keys(probe).forEach(function (key) { var parts = routeParts(key); ensure(parts.provider, parts.model) })
 
     return Object.values(map)
   }, [draft, passive, discover, probe, t])
 
-  // Filtered channels
-  var filteredChannels = allChannels.filter(function (ch) {
-    var status = routeStatus(passive, discover, probe, ch.route)
-
+  var filteredChannels = allChannels.filter(function (channel) {
+    var status = routeStatus(passive, discover, probe, channel.route)
     if (filter === 'healthy' && status !== 'healthy') return false
     if (filter === 'issue' && status !== 'degraded' && status !== 'unhealthy') return false
     if (filter === 'idle' && status !== 'unknown') return false
-
     if (search.trim()) {
-      var q = search.trim().toLowerCase()
-      return ch.route.toLowerCase().indexOf(q) !== -1 || ch.model.toLowerCase().indexOf(q) !== -1 || ch.provider.toLowerCase().indexOf(q) !== -1
+      var query = search.trim().toLowerCase()
+      return channel.route.toLowerCase().indexOf(query) !== -1
+        || channel.model.toLowerCase().indexOf(query) !== -1
+        || channel.provider.toLowerCase().indexOf(query) !== -1
     }
     return true
   })
 
-  return h('div', { style: S.detailWorkspace },
-    // Workspace Header Card with Global Diagnostic Tools
-    h('section', { style: S.workspaceHeaderCard },
-      h('div', { style: S.workspaceHeaderLeft },
-        h('div', { style: Object.assign({}, S.workspaceAvatar, { background: 'linear-gradient(135deg, rgba(6,182,212,0.2) 0%, rgba(59,130,246,0.15) 100%)', color: '#06B6D4' }) },
-          h(Icon, { d: ICON_CHART, size: 18 })),
-        h('div', { style: S.workspaceTitles },
-          h('div', { style: S.workspaceTitleRow },
-            h('h2', { style: S.workspaceModelName }, t('globalHealthTitle')),
-            h('span', { style: S.countBadge }, fill(t('navHealthCount'), { n: allChannels.length }))),
-          h('p', { style: S.workspaceDesc }, t('globalHealthSubtitle')))),
-      h('div', { style: S.channelActionGroup },
-        h('button', {
-          type: 'button',
-          className: 'dsh-router-tool-btn',
-          style: Object.assign({}, S.toolBtn, checking ? { opacity: 0.6, cursor: 'wait' } : null),
+  return h('div', { className: 'dsh-router-health' },
+    h('section', { className: 'dsh-router-section' },
+      h('div', { className: 'dsh-router-section-head' },
+        h('h2', { className: 'dsh-router-section-title' }, t('globalHealthTitle')),
+        h('span', { className: 'dsh-router-section-count' }, fill(t('navHealthCount'), { n: allChannels.length })),
+        h('span', { className: 'dsh-router-section-spacer' }),
+        h(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          icon: h(Icon, { d: checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: checking }),
           disabled: props.disabled || checking,
           title: t('toolCheckAllTooltip'),
           onClick: props.onCheckAll,
-        }, h(Icon, { d: checking ? ICON_SPINNER : ICON_BOLT, size: 13, spin: checking }), checking ? t('checkingText') : t('toolCheckAllConnectivity')),
-        h('button', {
-          type: 'button',
-          className: 'dsh-router-tool-btn',
-          style: Object.assign({}, S.toolBtn, probing ? { opacity: 0.6, cursor: 'wait' } : null),
+        }, checking ? t('checkingText') : t('toolCheckAllConnectivity')),
+        h(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          icon: h(Icon, { d: probing ? ICON_SPINNER : ICON_BOLT, size: 13, spin: probing }),
           disabled: props.disabled || probing,
           title: t('toolProbeAllTooltip'),
           onClick: props.onProbeAll,
-        }, h(Icon, { d: probing ? ICON_SPINNER : ICON_BOLT, size: 13, spin: probing }), probing ? t('probingText') : t('toolProbeAll')),
-        h('button', {
-          type: 'button',
-          className: 'dsh-router-tool-btn',
-          style: S.toolBtn,
+        }, probing ? t('probingText') : t('toolProbeAll')),
+        h(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          icon: h(Icon, { d: ICON_GEAR, size: 13 }),
           disabled: props.disabled,
           title: t('healthConfigBtn'),
           onClick: props.onOpenHealthModal,
-        }, h(Icon, { d: ICON_GEAR, size: 13 }), t('toolHealthConfig')),
-        h('button', {
-          type: 'button',
-          className: 'dsh-router-tool-btn',
-          style: S.toolBtn,
+        }, t('toolHealthConfig')),
+        h(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          icon: h(Icon, { d: ICON_CLOCK, size: 13 }),
           title: t('failoverHistoryButton'),
           onClick: props.onOpenDrawer,
-        }, h(Icon, { d: ICON_CLOCK, size: 13 }), t('toolHistory')))),
+        }, t('toolHistory'))),
       // 时间轴怎么读：一格多长时间、看多远、高度与颜色各是什么。一行说完，细节进
       // tooltip——这一行每张卡片上都看得见，写长了就是噪声。
-      h('div', { style: S.timelineScopeHint, title: t('timelineLegend') },
-        h(Icon, { d: ICON_CHART, size: 12, style: { color: 'var(--dsh-router-accent-text)' } }),
+      h('div', { className: 'dsh-router-scope-line', title: t('timelineLegend') },
+        h(Icon, { d: ICON_CHART, size: 12 }),
         h('span', null, fill(t('timelineScopeLine'), {
           bucket: props.bucketSeconds ?? 600,
           window: formatWindowHours(props.bucketSeconds ?? 600),
         }))),
+      // A history that could not be read is not an empty history. The dot
+      // carries the tone (text is never the tone colour), and the line stays
+      // until a read succeeds, because the empty rows it produces look exactly
+      // like channels that never ran.
+      props.passiveError
+        ? h('div', { className: 'dsh-router-health-warning', role: 'status' },
+            h('span', { className: 'dsh-router-health-warning-dot', style: healthToneStyle('degraded') }),
+            h('span', null, props.passiveError))
+        : null,
       // What the last run found. Kept on screen until the next run: a run whose
       // results match what was already there changes nothing visible, so the
       // counts are what tell the user the click did something.
       (checking || probing || (props.checkSummary && props.checkSummary.total > 0) || (props.probeSummary && props.probeSummary.total > 0))
-        ? h('div', { style: S.healthRunSummary },
-            checking ? h('span', { style: S.healthRunSummaryItem }, t('checkingText')) : null,
+        ? h('div', { className: 'dsh-router-run-summary' },
+            checking ? h('span', null, t('checkingText')) : null,
             props.checkSummary && props.checkSummary.total > 0 && !checking
-              ? h('span', { style: S.healthRunSummaryItem }, fill(t('checkSummaryLine'), { text: props.checkSummary.text }))
+              ? h('span', null, fill(t('checkSummaryLine'), { text: props.checkSummary.text }))
               : null,
-            probing ? h('span', { style: S.healthRunSummaryItem }, t('probingText')) : null,
+            probing ? h('span', null, t('probingText')) : null,
             props.probeSummary && props.probeSummary.total > 0 && !probing
-              ? h('span', { style: S.healthRunSummaryItem }, fill(t('probeSummaryLine'), { text: props.probeSummary.text }))
+              ? h('span', null, fill(t('probeSummaryLine'), { text: props.probeSummary.text }))
               : null,
-            h('span', { style: S.healthRunSummaryHint }, t('perRouteProbeHint')))
-        : null,
+            null)
+        : null),
 
-    // Filter and Search Bar
-    h('div', { style: S.healthFilterBar },
-      h('div', { style: S.healthFilterPills },
-        ['all', 'healthy', 'issue', 'idle'].map(function (key) {
+    h('div', { className: 'dsh-router-filter-bar' },
+      h(SegmentedControl, {
+        id: 'health-filter',
+        value: filter,
+        label: t('filterAll'),
+        options: ['all', 'healthy', 'issue', 'idle'].map(function (key) {
           var count = 0
-          allChannels.forEach(function (ch) {
-            var st = routeStatus(passive, discover, probe, ch.route)
+          allChannels.forEach(function (channel) {
+            var status = routeStatus(passive, discover, probe, channel.route)
             if (key === 'all') count++
-            else if (key === 'healthy' && st === 'healthy') count++
-            else if (key === 'issue' && (st === 'degraded' || st === 'unhealthy')) count++
-            else if (key === 'idle' && st === 'unknown') count++
+            else if (key === 'healthy' && status === 'healthy') count++
+            else if (key === 'issue' && (status === 'degraded' || status === 'unhealthy')) count++
+            else if (key === 'idle' && status === 'unknown') count++
           })
           var labelMap = {
             all: t('filterAll'),
@@ -248,137 +251,83 @@ export function GlobalHealthWorkspace(props) {
             issue: t('filterUnhealthy'),
             idle: t('filterIdle'),
           }
-          var isCurrent = filter === key
-          return h('button', {
-            key: key,
-            type: 'button',
-            className: 'dsh-router-filter-pill' + (isCurrent ? ' active' : ''),
-            style: Object.assign({}, S.filterPill, isCurrent ? S.filterPillActive : null),
-            onClick: function () { setFilter(key) },
-          }, labelMap[key] + ' (' + count + ')')
-        })),
-      h('div', { style: Object.assign({}, S.searchBox, { maxWidth: 260 }) },
-        h(Icon, { d: ICON_SEARCH, size: 12, style: S.searchIcon }),
-        h('input', {
-          type: 'text',
-          placeholder: t('searchChannelPlaceholder'),
-          'aria-label': t('searchChannelPlaceholder'),
-          value: search,
-          onChange: function (e) { setSearch(e.target.value) },
-          style: Object.assign({}, S.searchInput, { height: 28, fontSize: 11.5 }),
-        }))),
+          return { value: key, label: labelMap[key] + ' (' + count + ')' }
+        }),
+        onChange: function (next) { setFilter(next) },
+      }),
+      h(Input, {
+        type: 'search',
+        className: 'dsh-router-search',
+        icon: h(Icon, { d: ICON_SEARCH, size: 12 }),
+        placeholder: t('searchChannelPlaceholder'),
+        'aria-label': t('searchChannelPlaceholder'),
+        value: search,
+        onChange: function (event) { setSearch(event.target.value) },
+      })),
 
-    // Channel Cards List — the workspace's only scrolling region, so the header
-    // and the filter bar above stay where they are.
-    h('div', { style: S.workspaceScroll },
+    h('ul', { className: 'dsh-router-list dsh-router-channel-list' },
       filteredChannels.length === 0
-        ? h('div', { style: S.telemetryEmptyBox }, allChannels.length === 0 ? t('noChannelsConfigured') : t('noChannelsFound'))
-        : filteredChannels.map(function (ch) {
-            var record = passive[ch.route] || null
-          var disc = discover[ch.route] || null
-          var probeVerdict = probe[ch.route] || null
-          var isFocused = focusRouteKey === ch.route
-          var isCheckingThis = Boolean(checkingRoutes[ch.route])
-          var isProbingThis = Boolean(probingRoutes[ch.route])
-          var status = routeStatus(passive, discover, probe, ch.route)
+        ? h('li', { className: 'dsh-router-empty' }, allChannels.length === 0 ? t('noChannelsConfigured') : t('noChannelsFound'))
+        : filteredChannels.map(function (channel) {
+            var record = passive[channel.route] || null
+            var disc = discover[channel.route] || null
+            var probeVerdict = probe[channel.route] || null
+            var isFocused = focusRouteKey === channel.route
+            var isCheckingThis = Boolean(checkingRoutes[channel.route])
+            var isProbingThis = Boolean(probingRoutes[channel.route])
+            var status = routeStatus(passive, discover, probe, channel.route)
+            var bucketSeconds = props.bucketSeconds ?? 600
+            var timeline = record && Array.isArray(record.timeline) ? record.timeline : []
+            var bars = bucketTimeline(timeline, bucketSeconds, Date.now())
+            var availRateRaw = windowSuccessRate(bars)
+            var availRate = availRateRaw === null ? null : Math.round(availRateRaw * 1000) / 10
 
-          // Metrics & the timeline window. The bucket length is user config, so
-          // the same 24 bars cover 1 hour or 24 depending on what was chosen —
-          // the window label on the card says which.
-          var bucketSeconds = props.bucketSeconds ?? 600
-          var timeline = record && Array.isArray(record.timeline) ? record.timeline : []
-          var bars = bucketTimeline(timeline, bucketSeconds, Date.now())
-          // 可用率与时间轴同一个窗口、同一套权重，且只有一处算法（../timeline.ts 的
-          // windowSuccessRate）。它曾在这里内联算，多乘了一个 bar.count——healthy
-          // 本身就是桶内计数，再乘就是平方：一个桶十次观测印出 1000%，用户实测
-          // 3578%。两处各算一套正是这个错能同时出现在卡片徽标和大盘表头的原因。
-          var availRateRaw = windowSuccessRate(bars)
-          // 没有观测时是 —，不是 0%。
-          var availRate = availRateRaw === null ? null : Math.round(availRateRaw * 1000) / 10
-
-          return h('div', {
-            key: ch.route,
-            id: 'channel-' + ch.route.replace(/[^a-zA-Z0-9_-]/g, '_'),
-            style: Object.assign({}, S.channelCard, isFocused ? S.channelCardFocused : null),
-          },
-            // Card Top Row
-            h('div', { style: S.channelCardTopRow },
-              h('div', { style: S.channelRouteGroup },
-                h('span', { style: Object.assign({}, S.channelStatusDot, healthToneStyle(status)) }),
-                h('span', { style: S.providerBadge }, ch.provider),
-                h('span', { style: S.channelModelName, title: ch.model }, shortModelName(ch.model)),
-                h('span', { style: Object.assign({}, S.channelStatusPill, healthToneBadge(status)) },
-                  status === 'healthy' ? t('healthStatusHealthy') : status === 'degraded' ? t('healthStatusDegraded') : status === 'unhealthy' ? t('healthStatusUnhealthy') : t('compactHealthIdle'),
-                  availRate === null ? null : ' · ' + t('availabilityRate') + ' ' + availRate + '%'),                // The probe verdict, on the card. It used to live only in the
-                // button's tooltip, so a user who clicked 测速 and did not hover
-                // saw nothing change — which reads as a dead button. The dot
-                // carries the colour and the text stays `label-primary`: a
-                // tone-coloured badge measured 1.00:1 on dark (text invisible,
-                // the badge read as a blank red bar) and 1.37:1 on light.
-                isProbingThis
-                  ? h('span', { style: Object.assign({}, S.probeVerdictBadge, healthToneBadge('degraded')) },
-                      h('span', { style: Object.assign({}, S.toneDot, healthToneStyle('degraded')) }), t('probingText'))
-                  : probeVerdict
-                    ? h('span', {
-                        style: Object.assign({}, S.probeVerdictBadge, healthToneBadge(
-                          probeVerdict.kind === 'reachable' ? 'healthy' : probeVerdict.kind === 'unreachable' ? 'unhealthy' : 'unknown')),
-                        title: probeVerdictTitle(t, probeVerdict),
-                      },
-                        h('span', { style: Object.assign({}, S.toneDot, healthToneStyle(
-                          probeVerdict.kind === 'reachable' ? 'healthy' : probeVerdict.kind === 'unreachable' ? 'unhealthy' : 'unknown')) }),
-                        probeVerdictText(t, probeVerdict))
-                    : null,
-                ch.usages.length === 0
-                  ? h('span', { style: S.channelUsageBadge }, t('channelNotUsed'))
-                  : ch.usages.map(function (u, i) {
-                      // 位次徽标，不是跳转按钮：单链之下"这条渠道被哪条规则用"
-                      // 这个问题没有第二个答案，跳转也就没有目标。做成按钮却调
-                      // 一个不存在的 action，点一次就是 TypeError。
-                      return h('span', {
-                        key: i,
-                        style: S.channelUsageBadge,
-                        title: t('channelUsedInChainTip'),
-                      }, u.label)
-                    })),
-
-              h('div', { style: S.channelActionGroup },
-                // Inline Action 1: 0 Token Connectivity Check
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-btn-action',
-                  // While it runs the button says so: a real check takes
-                  // seconds, and a spinning 11px icon alone reads as nothing
-                  // happening.
-                  style: Object.assign({}, S.btnActionSmall, isCheckingThis ? { opacity: 0.75, cursor: 'wait' } : null),
-                  disabled: isCheckingThis || props.disabled,
-                  title: disc
-                    ? (disc.kind === 'reachable' ? t('connectivityReachable')
-                      : disc.kind === 'notAdvertised' ? t('connectivityNotAdvertised') + '（' + t('connectivityAdvertisedCount') + ' ' + (disc.advertised ?? 0) + '）'
-                        : disc.kind === 'unavailable' ? connectivityUnavailableTitle(t, disc)
-                          : t('connectivityUnreachable') + (disc.error ? '（' + disc.error + '）' : ''))
-                    : t('connectivityNotRun'),
-                  onClick: function () { props.onCheckRoute(ch.provider, ch.model) },
-                },
-                  h(Icon, { d: isCheckingThis ? ICON_SPINNER : ICON_BOLT, size: 11, spin: isCheckingThis }),
-                  isCheckingThis ? t('checkingText') : t('checkRouteBtn') + ' (' + t('checkRouteCost') + ')'),
-
-                // Inline Action 2: the 1-token end-to-end probe. It answers what
-                // the connectivity check cannot: whether a completion can
-                // actually be produced on this route. The cost is stated on the
-                // button because it is real — one generated token, cut at the
-                // first content byte.
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-btn-action',
-                  style: Object.assign({}, S.btnActionSmall, isProbingThis ? { opacity: 0.75, cursor: 'wait' } : null),
-                  disabled: isProbingThis || props.disabled,
-                  title: probeVerdictTitle(t, probeVerdict),
-                  onClick: function () { props.onProbeRoute(ch.provider, ch.model) },
-                },
-                  h(Icon, { d: isProbingThis ? ICON_SPINNER : ICON_BOLT, size: 11, spin: isProbingThis }),
-                  isProbingThis ? t('probingText') : t('probeBtn') + ' (' + t('probeCost') + ')'))),
-
-            // Metrics & the timeline window
-            h(ChannelMetricsDashboard, { t: t, record: record, bucketSeconds: bucketSeconds }))
+            return h('li', {
+              key: channel.route,
+              id: 'channel-' + channel.route.replace(/[^a-zA-Z0-9_-]/g, '_'),
+              className: 'dsh-router-row dsh-router-channel-row' + (isFocused ? ' dsh-router-channel-row-focus' : ''),
+            },
+              h('div', { className: 'dsh-router-row-line' },
+                h('span', { className: 'dsh-router-dot', style: healthToneStyle(status) }),
+                h('div', { className: 'dsh-router-row-main' },
+                  h('div', { className: 'dsh-router-row-title' },
+                    h('span', { className: 'dsh-router-provider' }, channel.provider),
+                    h('span', { className: 'dsh-router-row-meta', title: channel.model }, shortModelName(channel.model)),
+                    h(Tag, { tone: statusTone(status) },
+                      statusLabel(t, status) + (availRate === null ? '' : ' · ' + t('availabilityRate') + ' ' + availRate + '%')),
+                    isProbingThis
+                      ? h(Tag, { tone: 'warning' }, t('probingText'))
+                      : probeVerdict
+                        ? h(Tag, { tone: probeTone(probeVerdict), title: probeVerdictTitle(t, probeVerdict) }, probeVerdictText(t, probeVerdict))
+                        : null),
+                  h('div', { className: 'dsh-router-row-sub' },
+                    channel.usages.length === 0
+                      ? h(Tag, { tone: 'quiet' }, t('channelNotUsed'))
+                      : channel.usages.map(function (usage, index) {
+                          return h(Tag, { key: index, tone: 'neutral', title: t('channelUsedInChainTip') }, usage.label)
+                        }))),
+                h('div', { className: 'dsh-router-row-end' },
+                  h(Button, {
+                    variant: 'ghost',
+                    size: 'sm',
+                    icon: h(Icon, { d: isCheckingThis ? ICON_SPINNER : ICON_BOLT, size: 12, spin: isCheckingThis }),
+                    disabled: isCheckingThis || props.disabled,
+                    title: disc
+                      ? (disc.kind === 'reachable' ? t('connectivityReachable')
+                        : disc.kind === 'notAdvertised' ? t('connectivityNotAdvertised') + '（' + t('connectivityAdvertisedCount') + ' ' + (disc.advertised ?? 0) + '）'
+                          : disc.kind === 'unavailable' ? connectivityUnavailableTitle(t, disc)
+                            : t('connectivityUnreachable') + (disc.error ? '（' + disc.error + '）' : ''))
+                      : t('connectivityNotRun'),
+                    onClick: function () { props.onCheckRoute(channel.provider, channel.model) },
+                  }, isCheckingThis ? t('checkingText') : t('checkRouteBtn') + ' (' + t('checkRouteCost') + ')'),
+                  h(Button, {
+                    variant: 'ghost',
+                    size: 'sm',
+                    icon: h(Icon, { d: isProbingThis ? ICON_SPINNER : ICON_BOLT, size: 12, spin: isProbingThis }),
+                    disabled: isProbingThis || props.disabled,
+                    title: probeVerdictTitle(t, probeVerdict),
+                    onClick: function () { props.onProbeRoute(channel.provider, channel.model) },
+                  }, isProbingThis ? t('probingText') : t('probeBtn') + ' (' + t('probeCost') + ')'))),
+              h(ChannelMetricsDashboard, { t: t, record: record, bucketSeconds: bucketSeconds }))
           })))
 }

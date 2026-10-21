@@ -129,49 +129,6 @@ export function healthToneStyle(tone) {
 }
 
 /**
- * A semantic badge: tinted surface, hairline tone border, and text in
- * `label-primary`. The text is deliberately NOT the tone colour — DSH's
- * `state-*` tokens are mid-tone in one theme or the other, so tone-coloured
- * text measured 1.00:1 (dark, error) and 1.37:1 (light, error) and 2.09:1
- * (light, success) against AA's 4.5:1. `label-primary` on the tone's own 12%
- * tint is a matched pair in both themes, and the dot plus border still carry
- * the colour at a glance.
- *
- * @param tone - the health tone the badge reports.
- */
-export function healthToneBadge(tone) {
-  var color = healthToneColor(tone)
-  return {
-    background: 'color-mix(in srgb, ' + color + ' 12%, var(--dsw-alias-bg-layer-2))',
-    color: 'var(--dsw-alias-label-primary)',
-    border: '0.5px solid color-mix(in srgb, ' + color + ' 40%, transparent)',
-  }
-}
-
-
-/**
- * A configuration-state badge (rule active, image routing configured): the same
- * shape as `healthToneBadge`, tinted with the plugin accent instead of a health
- * tone.
- *
- * The text stays `label-primary` for the same measured reason: accent used as
- * the text colour measured 2.61:1 (dark) and 4.28:1 (light) against AA's 4.5:1,
- * while accent-tinted surface with `label-primary` text reads 13:1+ in both.
- * Colour therefore lives in the tint and the hairline border only.
- *
- * Note: 语义色单源与 AA 取舍 —— 见
- * .agents/notes/implemented/2026-10-16-single-surface-dialog-and-tone-system.md
- */
-export function accentBadge() {
-  return {
-    background: 'color-mix(in srgb, var(--dsh-router-accent) 12%, var(--dsw-alias-bg-layer-2))',
-    color: 'var(--dsw-alias-label-primary)',
-    border: '0.5px solid color-mix(in srgb, var(--dsh-router-accent) 40%, transparent)',
-  }
-}
-
-
-/**
  * The status one route's card shows. A real conversation outcome outranks a
  * synthetic check — the probe measures one generated token, the passive fold
  * measures what the model actually did — and a check that could not run at all

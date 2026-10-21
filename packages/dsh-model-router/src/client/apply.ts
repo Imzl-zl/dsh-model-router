@@ -36,7 +36,7 @@ export const PANEL_ID = 'model-router' as MainPanelId
 // （client/modules/src/client/manifest.ts 与 ui-workspace/src/client/index.ts:88-98 的
 // 注释），dsh.client.inject 只是加载/预取元数据，"never apply sequencing"。顺序由依赖
 // 表达：fiber inject 让本插件等 shortcuts 服务就绪才激活。ui-workspace 同款注入。
-export const inject = ['slots', 'locale', 'configForms', 'layout', 'remote', 'remote.session', 'shortcuts']
+export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session', 'shortcuts']
 
 /**
  * Mount the config page for this bundle.
@@ -153,15 +153,15 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onDiscard: function () { controller.discard() },
     onEnabled: function (value) { controller.setEnabled(value) },
     onActive: function (id) { controller.setActive(id) },
-    onMaxAttempts: function (index, value) { controller.setMaxAttempts(index, value) },
+    onMaxRetries: function (index, value) { controller.setMaxRetries(index, value) },
     onNeeds: function (index, patch) { controller.setNeeds(index, patch) },
     onMove: function (index, direction) { controller.moveCandidate(index, direction) },
     onReorder: function (fromIndex, toIndex) { controller.reorderCandidates(fromIndex, toIndex) },
     onRemove: function (index) { controller.removeCandidate(index) },
-    onMaxTotal: function (value) { controller.setMaxTotalAttempts(value) },
     onStickyTurns: function (value) { controller.setStickyTurns(value) },
     onToggleSwitchOn: function (key) { controller.toggleSwitchOn(key) },
     onStrategy: function (value) { controller.setStrategy(value) },
+    onFirstHopMaxRetries: function (value) { controller.setFirstHopMaxRetries(value) },
     onWeight: function (index, value) { controller.setWeight(index, value) },
     onOpenAddCandidate: function () { controller.openModal({ kind: 'add-candidate' }) },
     onCloseModal: function () { controller.closeModal() },
@@ -176,8 +176,6 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onUpdateHealth: function (patch) { controller.updateHealth(patch) },
     retainSurface: function () { controller.retainSurface() },
     releaseSurface: function () { controller.releaseSurface() },
-    // 回到会话：面板是主列的一个 seat，`selectPanel(null)` 是 DSH 自己的回退路径。
-    onClose: function () { ctx.layout.selectPanel(null) },
   }
 
   // 一个载体：侧栏面板列表里的一行 → 主列面板。点那行由 DSH 自己接管

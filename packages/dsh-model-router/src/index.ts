@@ -6,17 +6,16 @@
  *
  * - `agent/request` with `prepend: true`, so this listener runs OUTSIDE
  *   `installModelSelection` and its post-`next()` override wins. Every attempt
- *   passes through here, which is what makes the per-candidate attempt cap
+ *   passes through here, which is what makes the per-candidate retry budget
  *   enforceable while `llm-retry` owns same-route retries.
  * - `agent/request-error` with `prepend: true` on the root ctx (registered once;
  *   the agent comes from the payload), so it is the OUTERMOST listener: it sees
- *   `llm-retry`'s decision after `await next()` and then honors it, vetoes it
- *   when the budget is spent, or decides the failover itself. Measured: the same
- *   "whole chain dies" scenario fires 7 real calls with this listener inside
- *   `llm-retry` and 2 with it outermost — the hard total cap is only enforceable
- *   from out here. Since 2026-10-17 it also decides "this candidate's budget is
- *   spent && this error should switch" BEFORE `await next()`, so llm-retry's
- *   backoff and its two `llm/retry` durable records never happen for that case.
+ *   `llm-retry`'s decision after `await next()` and then honors it or decides
+ *   the failover itself. Since 2026-10-17 it also decides "this candidate's
+ *   budget is spent && this error should switch" BEFORE `await next()`, so
+ *   llm-retry's backoff and its two `llm/retry` durable records never happen for
+ *   that case. Since 2026-10-20 there is no request-wide cap: the chain's own
+ *   candidates and each candidate's budget bound the step.
  *
  * Nothing here re-implements backoff, adapter dispatch, credentials, or the
  * durable attempt record. What the plugin adds is the candidate cursor, the
@@ -40,7 +39,6 @@ import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
   Config,
   assertStructural,
-  type Candidate,
   type ChainConfig,
   type HealthConfig,
   type RouterOptions,
@@ -49,12 +47,13 @@ import { decideAfterInner, decideBeforeInner, hasImageContent, isSwitchOnEligibl
 import type { AfterInnerRuling, BeforeInnerRuling } from './router.ts'
 import { configuredRoutes, routeKeyOf, routeParts } from './routes.ts'
 import { DEFAULT_PROBE_PROMPT, DEFAULT_PROBE_TIMEOUT_SECONDS } from './defaults.ts'
-import { RouterState, candidateConfig, type StepChain, type StepConditions } from './state.ts'
+import { RouterState, candidateConfig, type StepCandidate, type StepChain, type StepConditions } from './state.ts'
 import { conditionSkipNotice, failoverNotice, breakerNotice, skipNotice, routeMissingNotice, adapterDefectNotice } from './notice.ts'
 import { precheckTierOf, type PrecheckTier } from './precheck.ts'
 import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
 import { channelHealthProjection } from './health.ts'
 import { CircuitBreaker, type RouteBlock } from './breaker.ts'
+import { waitBeforeRetry } from './backoff.ts'
 import { checkConnectivity, type ConnectivityLlm, type ConnectivitySettings } from './connectivity.ts'
 import { probePromptFor, probeRoute } from './probe.ts'
 import { effectiveChain, type ChainSource } from './chain.ts'
@@ -212,8 +211,10 @@ export default class ModelRouter extends TypertRemoteService {
             const chain = resolveChain(resolved, readConfig(config).chain)
             if (chain === undefined) return resolved
             states.setStickyTurns(agent, chain.stickyTurns)
-            // 策略只决定从哪条开始；起点之后的前进逻辑与策略无关。
-            const start = resolveStartIndex(chain.candidates, chain.strategy, states.nextCursor(agent.session, chain.candidates.length))
+            // 策略只决定第一跳失败后从哪条降级候选开始；第一跳恒在链首，不参与抽签。
+            // 起点之后的前进逻辑与策略无关。
+            const fallbacks = chain.candidates.slice(1)
+            const start = resolveStartIndex(fallbacks, chain.strategy, states.nextCursor(agent.session, fallbacks.length))
             state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step), start)
             states.start(agent, state)
           }
@@ -230,9 +231,9 @@ export default class ModelRouter extends TypertRemoteService {
           // is the automatic machinery: breaker cooldowns and capability
           // pre-validation, which DSH already settled when the selection was made.
           let index = plan.state.index
-          const skipped: { candidate: Candidate; tier: PrecheckTier | undefined; code: string | undefined }[] = []
-          const conditionSkipped: { candidate: Candidate; reason: string }[] = []
-          const blocked: { candidate: Candidate; block: RouteBlock }[] = []
+          const skipped: { candidate: StepCandidate; tier: PrecheckTier | undefined; code: string | undefined }[] = []
+          const conditionSkipped: { candidate: StepCandidate; reason: string }[] = []
+          const blocked: { candidate: StepCandidate; block: RouteBlock }[] = []
           let outgoing: LlmCallConfig | undefined
           const now = Date.now()
           breaker.sweep(now)
@@ -309,8 +310,7 @@ export default class ModelRouter extends TypertRemoteService {
             // user's own route so the real failure surfaces there instead of a
             // silent swap. The chain is spent for this step: record it, or every
             // retry re-walks the same dead chain, the recovery listener keeps
-            // answering "continue" (totalAttempts never moves), and the turn
-            // spins on the user's route until the boot is killed.
+            // answering "continue", and the step never ends.
             // Note: 这个 exhausted 修复的来龙去脉 —— 见
             // .agents/notes/implemented/2026-10-14-image-route-conditions-and-admission-gate-boundary.md
             states.start(agent, { ...plan.state, exhausted: true })
@@ -342,13 +342,12 @@ export default class ModelRouter extends TypertRemoteService {
 
     // 最外层 on agent/request-error（`prepend: true`，注册在 root ctx 一次，agent 从
     // payload 取——按 agent/created 逐个注册会让每个 agent 漏一条 root listener）。
-    // 位置是"硬上限"能否成立的关键：注册在 llm-retry 内层时，它自己的 5 次同路由重试
-    // 发生在插件看不到的地方，用户配的 maxTotalAttempts 会被越过（实测：配 2 打 7 次）。
+    // 位置是"每条候选重试几次"能否成立的关键：注册在 llm-retry 内层时，它自己的同路由
+    // 重试发生在插件看不到的地方，用户填的候选次数会被越过（实测：配 2 打 7 次）。
     // 所以这里先 `await next()` 让内层（llm-retry / compaction）各自决定，再处置：
-    //   内层决定重试 + 预算已尽 → 否决（返回 undefined 即终态）；
-    //   内层决定重试 + 预算还有 → 原样放行（与注册在内层时行为一致）；
+    //   内层决定重试 → 原样放行（额度耗尽的那条根本轮不到内层，已在下面提前接管）；
     //   内层全部放弃（undefined）→ 才轮到插件做跨候选 failover。
-    // 三条分支的裁决与副作用声明都在 router.ts 的两个纯函数里（decideBeforeInner /
+    // 两条分支的裁决与副作用声明都在 router.ts 的两个纯函数里（decideBeforeInner /
     // decideAfterInner，含"记不记熔断"的规则与日志文案）；本 handler 是解释器：调
     // 决策、按声明应用副作用、返回决策。语义依据：open-questions 第五节第 2 项；
     // 五分支收编的来龙去脉（待办 4 是症状不是独立问题）见
@@ -377,18 +376,43 @@ export default class ModelRouter extends TypertRemoteService {
         if (ruling.log !== '') ctx.logger.warn(ruling.log)
       }
 
-      const before = decideBeforeInner(state, failure.code, signal.aborted)
+      // The provider's resolved policy rides in on the payload; it supplies the
+      // backoff shape and the default when the candidate declares no count.
+      const before = decideBeforeInner(state, failure.code, signal.aborted, {
+        policy: payload.retryPolicy,
+        retryAfterMs: failure.providerRetryAfterMs,
+      })
+      if (before.kind === 'retry-self') {
+        apply(before)
+        // Same route, so the next fire must NOT advance. The wait is the
+        // plugin's own since it owns the retry; the signal fuses caller
+        // cancellation into it.
+        state.pendingAdvance = false
+        const waited = await waitBeforeRetry(before.delayMs, signal)
+        // A cancelled wait is not a channel fact: let the loop's own abort win.
+        return waited ? { kind: 'retry' as const } : undefined
+      }
       if (before.kind !== 'delegate') {
         apply(before)
-        return before.kind === 'retry' ? { kind: 'retry' as const } : undefined
+        if (before.kind === 'advance') {
+          state.pendingAdvance = true
+        }
+        return before.kind === 'advance' ? { kind: 'retry' as const } : undefined
       }
 
       const inner = await next()
       const after = decideAfterInner(state, failure.code, signal.aborted, inner?.kind === 'retry' ? 'retry' : undefined)
       apply(after)
       // honor：原样放行——llm-retry 还在重试同一条路由，失败尚未定论。
-      if (after.kind === 'honor') return inner
-      return after.kind === 'retry' ? { kind: 'retry' as const } : undefined
+      if (after.kind === 'honor') {
+        state.pendingAdvance = false
+        return inner
+      }
+      if (after.kind === 'advance') {
+        state.pendingAdvance = true
+        return { kind: 'retry' as const }
+      }
+      return undefined
     }, { prepend: true })
   }
 
@@ -537,7 +561,7 @@ function readConfig(config: Config): {
 }
 
 /** Stable identity of one turn's condition-skip set, for the once-per-turn notice. */
-function conditionSkipKey(skipped: readonly { candidate: Candidate; reason: string }[]): string {
+function conditionSkipKey(skipped: readonly { candidate: StepCandidate; reason: string }[]): string {
   return skipped.map(entry => `${routeKeyOf(entry.candidate.provider, entry.candidate.model)}:${entry.reason}`).join('|')
 }
 
@@ -562,11 +586,12 @@ function mayAdvance(
  * 拒绝候选 provider 声明 `always` 重试策略。
  *
  * 这是已记录的加载时拒绝项（docs/design/dsh-capability-boundary.md §三 G2 与
- * open-questions 一.3）：always 模式没有重试上限（llm/src/retry-policy.ts），且它先
- * await 下游——下游说终态它仍会自行退避重试。放着它，`maxTotalAttempts` 就不是硬上限，
- * 用户没勾选的失败码也会被无限重试，"绝不盲重试"的承诺失效。策略是用户在每个渠道的
- * Models 设置里自己选的（llm-deepseek/src/config.ts 的 RetryPolicySchema），所以必须在
- * 这里挡住，而不是在运行时悄悄降级——降级会静默改变用户依赖的重试行为。
+ * open-questions 一.3）：always 模式没有重试上限（llm/src/retry-policy.ts），而且它对
+ * **每个**失败码都重试——包括用户没勾 switchOn 的码，那些码本插件不切换、只等 DSH 收尾。
+ * 放着它，一个没勾的码就能把这一 step 永远重试下去（"绝不盲重试"的承诺失效）。策略是
+ * 用户在每个渠道的 Models 设置里自己选的（llm-deepseek/src/config.ts 的
+ * RetryPolicySchema），所以必须在这里挡住，而不是在运行时悄悄降级——降级会静默改变
+ * 用户依赖的重试行为。
  *
  * `providerRetryPolicy` 是 llm 服务的原生读口（llm/src/index.ts:656），只对已注册的
  * provider 调用（未注册的会抛），未注册的漂移由 warnUnregisteredProviders 处理。
@@ -583,7 +608,7 @@ function assertNoAlwaysPolicy(ctx: Context, config: { chain: ChainConfig }): voi
     if (policy?.mode === 'always') {
       throw new Error(
         `model-router: candidate ${routeKeyOf(candidate.provider, candidate.model)} names a provider whose retry policy is "always" — `
-        + 'unbounded same-route retries would make the total attempt cap unenforceable; '
+        + 'unbounded same-route retries would never end the step for a failure the chain does not switch on; '
         + 'set that provider back to the normal policy, or remove it from the chain',
       )
     }
@@ -614,7 +639,7 @@ function registeredProviderIds(ctx: Context): Set<string> {
  */
 function eachConfiguredCandidate(
   config: { chain: ChainConfig },
-  visit: (candidate: Candidate) => void,
+  visit: (candidate: { provider: string; model: string }) => void,
 ): void {
   for (const candidate of config.chain.candidates) visit(candidate)
 }

@@ -83,7 +83,7 @@ Agent 主请求的运行顺序：
 3. Agent 将实际物理 route 写入 request header/context，并 dispatch 到所绑定 adapter。
 4. 成功时 assistant source 和 usage 对应实际 candidate；profile/attempt lineage 需由受支持的状态机制表达。
 5. Adapter dispatch、iterator construction 和 iteration error 由 LLM runtime 规范化为终态 failure chunk 并进入 `agent/request-error`；`NO_ADAPTER` preparation error 会在 Agent 中延迟至 dispatch，因此也进入该路径。其他 preparation error、`llm/stream` middleware error 和 consumer error 可能直接终止 step。Route 不得假定所有失败都会触发下一 candidate。
-6. Retry 或跨 candidate failover 必须有唯一的预算 owner；有界 candidate chain 应有硬性总上限。
+6. Retry 或跨 candidate failover 必须有唯一的预算 owner；候选次数有限、候选列表有限，一个 step 的花费因此有界，不另设整请求总上限。
 7. Candidate 切换不得伪造物理 provider、凭证或失败诊断。
 
 ### Failure 类别提案
@@ -107,28 +107,15 @@ DSH normal retry policy 的默认 eligible codes 是 `EMPTY_RESPONSE`、`RATE_LI
 ```yaml
 - name: dsh-model-router
   config:
-    profiles:
-      - id: coding-main
-        displayName: Coding model
-        logicalModel: coding-model
-        candidates:
-          - id: provider-a-primary
-            provider: provider-a
-            model: model-x
-            maxAttempts: 3
-          - id: provider-b-backup
-            provider: provider-b
-            model: model-y
-            maxAttempts: 1
-        retry:
-          eligibleFailureCodes: [RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
-          initialDelayMs: 500
-          maxDelayMs: 10000
-          jitterRatio: 0.1
-        maxTotalAttempts: 4
+    chain:
+      firstHopMaxRetries: 0
+      candidates:
+        - { provider: provider-b, model: model-y, maxRetries: 1 }
+        - { provider: provider-c, model: model-z, maxRetries: 0 }
+      switchOn: { rateLimit: true, server: true, timeout: true, transport: true }
 ```
 
-配置 parser 应验证 profile/candidate ID 唯一、引用存在、attempt 上限有界且合法、delay 范围有效，以及候选 route 是否可由已注册 adapter 解析。由于 failure code 是开放字符串，不得校验成封闭枚举；retryability 应显式配置或遵循实际 provider policy。排序和 config version 的来源仍需定义。
+配置 parser 应验证候选 route 唯一且可由已注册 adapter 解析、`maxRetries` 在 `0..99` 内。由于 failure code 是开放字符串，不得校验成封闭枚举；retryability 应显式配置或遵循实际 provider policy。
 
 ## 会话记录、重放和 UI
 

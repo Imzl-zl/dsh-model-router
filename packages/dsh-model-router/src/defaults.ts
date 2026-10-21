@@ -17,32 +17,36 @@
  * .agents/notes/implemented/2026-10-17-finish-the-abstractions.md
  */
 
-/** One candidate's own cap: how many real calls a single route may take. */
-export const DEFAULT_MAX_ATTEMPTS = 1
+/**
+ * One candidate's own retry budget: retries AFTER its first call.
+ * 0 = the first failure moves on, which is the default.
+ */
+export const DEFAULT_MAX_RETRIES = 0
+
+/** The implicit first hop's default retry budget; 0 = quick failover. */
+export const DEFAULT_FIRST_HOP_MAX_RETRIES = 0
 
 /**
- * The default pool's implicit first hop — the user's own route — fires exactly
- * once. Deliberately NOT {@link DEFAULT_MAX_ATTEMPTS}: that is the schema
- * default for a candidate the user configured, and it moves with product
- * decisions; the implicit hop's single shot is structural — the plugin does
- * not own retries on the user's own route, the chain exists to move ON.
+ * The upper bound both retry fields accept. A sanity bound for the stepper, not
+ * a policy: the real bound is the provider's own retry policy, which is what
+ * actually supplies the retries.
  */
-export const IMPLICIT_HOP_MAX_ATTEMPTS = 1
-
-/** One request's hard total cap for the chain — same-route retries included. */
-export const DEFAULT_MAX_TOTAL_ATTEMPTS = 6
-
-/**
- * The cap a freshly created chain starts at, and the schema default for
- * `chain.maxTotalAttempts`.
- */
-export const DEFAULT_POOL_MAX_TOTAL_ATTEMPTS = 3
+export const MAX_RETRIES = 99
 
 /** After an image turn, keep routing to the vision model for this many text turns. */
 export const DEFAULT_STICKY_TURNS = 0
 
 /** Where a chain starts: the first candidate, by order. */
 export const DEFAULT_STRATEGY = 'order'
+
+/**
+ * The start strategies, one list for the host schema and the browser's
+ * segmented control. Only the START differs; every strategy then walks the
+ * same remaining candidates. A fourth value is added here once.
+ */
+export type Strategy = 'order' | 'weight' | 'round-robin'
+
+export const STRATEGIES: readonly Strategy[] = ['order', 'weight', 'round-robin']
 
 /** No schedule: the health timers are opt-in because they spend money or quota. */
 export const DEFAULT_INTERVAL_SECONDS = 0

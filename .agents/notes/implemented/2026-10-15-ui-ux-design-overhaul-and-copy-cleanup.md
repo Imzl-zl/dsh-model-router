@@ -84,7 +84,7 @@ Status: implemented
 
 用户追问「自定义也必须设置里已配置，那何必手填？」后做了一轮完整审查，抓到 5 个自己引入的问题：
 
-1. **DSH 原生接口已覆盖全部已配置模型**：`ctx.remote.session.modelCatalog()`（`session-controller/src/catalog.ts` 的 `buildModelCatalog`）就是 DSH 对话框模型切换器本身使用的接口，按 provider 分组返回 Settings → Models 里登记过的每个模型。所谓「手动输入」只对「网关提供、但用户没登记到 DSH」的透传模型有意义，却被做成了并列主按钮，制造了重复感。修法：主界面只留一个 `[+ 添加候选渠道]`，弹窗内用 Tab 区分「已配置目录直接勾选」与「自定义 Model ID」，并把引导文案改成「上一个 Tab 已列出您登记过的全部模型」。
+1. **DSH 原生接口已覆盖全部已配置模型**：`ctx.remote.session.modelCatalog()`（`session-controller/src/catalog.ts` 的 `buildModelCatalog`）就是 DSH 对话框模型切换器本身使用的接口，按 provider 分组返回 Settings → Models 里登记过的每个模型。所谓「手动输入」只对「网关提供、但用户没登记到 DSH」的透传模型有意义，却被做成了并列主按钮，制造了重复感。修法：主界面只留一个 `[+ 添加候选渠道]`，弹窗内用 Tab 区分「已配置目录直接勾选」与「自定义 Model ID」，并把引导文案改成「上一个 Tab 已列出您登记过的全部模型」。（**本条被取代**：2026-10-20 整个「自定义模型 ID」Tab 已删除，见 `2026-10-20-remove-manual-model-id-tab.md`。）
 2. **空态文案张冠李戴**：合并弹窗的目录 Tab 在无模型时复用了 `noUnconfiguredModels`（「所有已目录模型都已配置规则」）——那是新建 Profile 弹窗的语义，放在「加候选」语境下是错的。改为专用 `addCandidateEmpty`。
 3. **死代码一批**：`onOpenManual` action、`modal.kind === 'manual'` 分支、`ManualChannelModal` / `CatalogPickerModal` 两个只剩转发的壳、`onOpenManual` prop 穿线、`catalogLoading` 死 prop、字典键 `addFromCatalog` / `addManual` / `manualModalTitle` / `catalogModalTitle`、样式 `signalDotBtn` / `iconBtnDisabled`、CSS 规则 `.dsh-router-manual-btn:hover`。两个 modal kind 合并为单一 `'add-candidate'`。
 4. **一条 CSS 选择器从未生效**：`.dsh-router-need-control [class*="SegmentedTabs"]` 猜了组件名，而 DSH 的 CSS modules 模式是 `[hash]_[local]`（`packages/client/tsdown.client.ts:562`），生成的类名是 `<hash>_tabs`——选择器永远匹配不上。改用 `role="tablist"` / `role="tab"` 这类不依赖哈希的稳定钩子，并去掉会与内联 `gridTemplateColumns` 打架的 `display: flex` 覆盖（防折行只靠 `white-space: nowrap`）。

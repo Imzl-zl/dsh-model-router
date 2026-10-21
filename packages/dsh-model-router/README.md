@@ -40,33 +40,27 @@ Two more things the plugin adds:
 
 ```yaml
 enabled: true                 # master switch
-profiles:                     # matched by exact provider/model
-  - id: coding-main
-    when: { provider: deepseek-official, model: deepseek-v4-flash }
-    candidates:               # [0] is pinned to the when model
-      - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2, needs: { images: false } }
-      - { provider: pi-ai-gpt, model: gpt-5, maxAttempts: 1, needs: { images: true } }
-      - { provider: pi-ai-claude, model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
-    switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-    maxTotalAttempts: 6
-    stickyTurns: 0            # no-image turns to keep the image route after an image turn
-default:                      # pure fallback pool for unconfigured models
-  enabled: false
-  candidates:
-    - { provider: deepseek-official, model: deepseek-chat, maxAttempts: 1 }
+chain:
+  candidates:                 # fallbacks; the selected model is the implicit first hop
+    - { provider: deepseek-official, model: deepseek-v4-flash, maxRetries: 1, needs: { images: false } }
+    - { provider: pi-ai-gpt, model: gpt-5, maxRetries: 0, needs: { images: true } }
+    - { provider: pi-ai-claude, model: claude-sonnet-5, maxRetries: 0, needs: { minContextTokens: 120000 } }
   switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  maxTotalAttempts: 3
+  firstHopMaxRetries: 0       # retries after the first hop's first call
+  stickyTurns: 0              # no-image turns to keep the image route after an image turn
 ```
 
-- `candidates[0]` of a matched profile must be the `when` model — it cannot be
-  removed or reordered. Explicitly configured `needs` conditions apply to it
-  like any other candidate (skipping it is honoring your configuration, and it
-  is announced); it stays exempt only from the automatic gates (breaker
-  cooldowns, capability pre-validation).
-- The default pool is pure fallback: the model you picked is always the first
-  hop, with one attempt.
-- Backoff is not configurable: it belongs to `llm-retry`. Each switch is
-  preceded by one backoff wait (about 0.5–10 s with the default policy).
+- `maxRetries` / `firstHopMaxRetries` count retries **after** the first call; 0 means
+  the first failure moves on. The first hop is always the model you selected in DSH.
+- Explicitly configured `needs` conditions apply to every candidate, including the
+  first hop (skipping it is honoring your configuration, and it is announced); it
+  stays exempt only from the automatic gates (breaker cooldowns, capability
+  pre-validation).
+- There is no request-wide cap. A step costs at most the sum of the candidates'
+  own budgets, and each retry is executed by DSH — see the first limitation below.
+- Each switch is immediate: no backoff is inserted between candidates. The wait
+  between two tries on the *same* candidate is DSH's (`llm-retry`), about 0.5–10 s
+  with the default policy, and it is not configurable here.
 - **What counts as a failure is `switchOn`.** Defaults follow DSH's own retryable set
   (`RATE_LIMIT`, `SERVER`, `TIMEOUT`, `TRANSPORT`, `EMPTY_RESPONSE`) plus `AUTH` and
   `QUOTA`: a dead key or a spent quota is the channel's own fault, and another channel
@@ -111,13 +105,18 @@ step.
   runtime with `INVALID_REQUEST` (deepseek) or `PI_AI_ERROR` (pi-ai); enable
   `invalidRequest` in `switchOn` to let the chain continue past it. The
   classification is provider-dependent and not guaranteed.
-- **The attempt budget has two layers, one owner each.** `maxTotalAttempts` is a hard
-  cap on real calls for one request: same-route retries (with backoff) belong to
-  DSH's `llm-retry`, cross-candidate failover belongs to this plugin, and the cap
-  bounds both — the plugin listens on `agent/request-error` with `prepend: true`, so
-  it sees `llm-retry`'s decision and terminates once the budget is spent instead of
-  letting another same-route retry through. A provider whose retry policy is
-  `always` (unbounded retries) is rejected at load.
+- **Retries on a routed step belong to this plugin, alone.** For a code listed in
+  `switchOn`, the plugin waits and retries the same route itself and returns
+  `{ kind: 'retry' }` — the configured `maxRetries` is the real number, with no
+  provider-policy ceiling on top. The wait copies DSH's curve from the provider's
+  `retryPolicy` (`initialDelayMs`, `maxDelayMs`, `jitterRatio`, and the failure's
+  `Retry-After`; a `Retry-After` beyond the ceiling gives up instead of waiting).
+  A code **not** in `switchOn` is passed down to DSH unchanged, so `llm-retry`
+  still owns those retries and its own cap. Two consequences worth knowing: the
+  trajectory shows no `llm/retry` rows for routed steps (those retries are not
+  `llm-retry`'s), while every failed attempt is still recorded as
+  `assistant/attempt`; and a provider whose policy is `always` (unbounded) is
+  rejected at load.
 - **The candidate cursor is process memory.** It resets on restart; the
   durable attempt lineage is rebuilt from the session log, not from the
   cursor. Cross-restart continuation is deferred.
@@ -175,6 +174,7 @@ step.
 
 ```sh
 npm install                       # repo root: installs the DSH CLI + peers
+npm test                          # all four suites: unit, client-controller, remote, run
 npm run bundle --prefix packages/dsh-model-router   # build lib/ (host + client + typert)
 node packages/dsh-model-router/tests/unit.mjs    # pure decision logic
 node packages/dsh-model-router/tests/run.mjs     # Loader composition tests

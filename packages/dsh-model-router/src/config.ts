@@ -16,14 +16,17 @@ import z from '@deepseek-ai/schemastery'
 import {
   DEFAULT_BREAKER_COOLDOWN_SECONDS,
   DEFAULT_BREAKER_SCOPE,
+  DEFAULT_FIRST_HOP_MAX_RETRIES,
   DEFAULT_INTERVAL_SECONDS,
-  DEFAULT_MAX_ATTEMPTS,
-  DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
+  DEFAULT_MAX_RETRIES,
+  MAX_RETRIES,
   DEFAULT_PROBE_PROMPT,
   DEFAULT_PROBE_TIMEOUT_SECONDS,
   DEFAULT_STICKY_TURNS,
   DEFAULT_STRATEGY,
   DEFAULT_SWITCH_ON,
+  STRATEGIES,
+  type Strategy,
   DEFAULT_TIMELINE_BUCKET_SECONDS,
 } from './defaults.ts'
 import { structuralViolations } from './rules.ts'
@@ -38,36 +41,38 @@ import { structuralViolations } from './rules.ts'
  * the next request. Both are read once per step (agent/pre-step and the
  * projection), so they are stable across the step's retries — with `images`
  * accumulating across a turn's steps, because a tool-loop turn's later steps
- * claim no new input. The gates apply to every candidate including a matched
- * profile's pinned `candidates[0]`: an explicit condition is the user's stated
+ * claim no new input. The gates apply to every candidate including the first
+ * hop (the user's own selection): an explicit condition is the user's stated
  * intent, and honoring it is configuration, not a silent reroute. What stays
  * exempt is the automatic machinery (breaker cooldowns, capability
  * pre-validation) — DSH validated the selection when it was made.
  */
 // 联合手写而不用 `(typeof STRATEGIES)[number]`：Typert 的 Zod 发射器不支持
 // indexed-access 节点（packages/typert/generator/src/emitter.ts:777-788），
-// 而 `Profile` 的 Typert surface 经由 `strategy` 引用它。`STRATEGIES` 的显式
-// 注解让两份清单在编译期保持同源——写错一个值 tsc 就红。
+// 而 `ChainConfig` 的 Typert surface 经由 `strategy` 引用它。清单本身在
+// ./defaults.ts（浏览器半包也读它，不能把 schemastery 拖进 bundle），显式
+// 注解让 schema 与 UI 的选项在编译期保持同源。
 /**
- * 选路策略：只决定"从哪条渠道开始"。
+ * 降级起点策略：只决定"第一跳失败后，从哪条降级候选开始"。
  *
- * 三种策略失败之后的行为完全一样——继续试链上其余渠道，直到成功或用尽预算。
- * 它们唯一的区别是起点：永远第一条、按权重比例随机抽一条、还是轮流顺移。
- * DSH 核心没有任何原生的权重/轮询/负载均衡，所以这里自己实现，但枚举用
- * schemastery 的 `union` 写法（`llm-pi-ai` 的 `transport` 同款），没有 `z.enum`。
+ * 第一跳永远是用户当前选中的模型、永远先试——选一个模型就意味着先试它，
+ * 起点策略不能悄悄推翻这件事。三种策略只改降级候选的起点：按顺序、按权重
+ * 随机抽、还是轮流顺移；之后的前进逻辑完全一样，继续试其余候选直到成功或
+ * 用尽预算。DSH 核心没有任何原生的权重/轮询/负载均衡，所以这里自己实现，
+ * 但枚举用 schemastery 的 `union` 写法（`llm-pi-ai` 的 `transport` 同款），
+ * 没有 `z.enum`。
  */
-export type Strategy = 'order' | 'weight' | 'round-robin'
-
-export const STRATEGIES: readonly Strategy[] = ['order', 'weight', 'round-robin']
+export type { Strategy }
+export { STRATEGIES }
 
 export const strategySchema = z.union([...STRATEGIES]).default(DEFAULT_STRATEGY)
-  .description('从哪条渠道开始：按顺序 / 按权重随机 / 轮询')
+  .description('第一跳（你选中的模型）失败后从哪条降级候选开始：按顺序 / 按权重随机 / 轮询。第一跳永远先试，不参与抽签')
 
 export const candidateSchema = z.object({
   provider: z.string().required().description('provider 标识，例如 deepseek-official'),
   model: z.string().required().description('模型 ID，例如 deepseek-v4-flash'),
-  maxAttempts: z.number().step(1).min(1).max(5).default(DEFAULT_MAX_ATTEMPTS)
-    .description('这条渠道最多真实调用多少次（凭证/额度类失败直接切换、不等待；本候选额度用尽后的切换也不等 llm-retry 的退避）'),
+  maxRetries: z.number().step(1).min(0).max(MAX_RETRIES).default(DEFAULT_MAX_RETRIES)
+    .description('这条渠道失败后最多重试几次（不含首次调用；0 = 失败即切下一条）。重试由 DSH 执行，实际次数还受该 provider 重试策略的限制'),
   weight: z.number().step(1).min(0).max(100).default(0)
     .description('权重；只有「按权重」策略会读它，其他策略下写多少都不影响'),
   needs: z.object({
@@ -82,7 +87,7 @@ export const switchOnSchema = z.object({
   server: z.boolean().default(DEFAULT_SWITCH_ON.server).description('服务端错误（SERVER）'),
   timeout: z.boolean().default(DEFAULT_SWITCH_ON.timeout).description('超时（TIMEOUT）'),
   transport: z.boolean().default(DEFAULT_SWITCH_ON.transport).description('网络传输失败（TRANSPORT）'),
-  emptyResponse: z.boolean().default(DEFAULT_SWITCH_ON.emptyResponse).description('空回复（EMPTY_RESPONSE）。注意 llm-retry 的默认策略自己也会重试这个码，所以勾选后的切换发生在它的重试耗尽之后'),
+  emptyResponse: z.boolean().default(DEFAULT_SWITCH_ON.emptyResponse).description('空回复（EMPTY_RESPONSE）。勾选时按候选的重试次数用尽后切换；不勾则由 DSH 按它自己的策略重试，重试完即失败、不切换'),
   invalidRequest: z.boolean().default(DEFAULT_SWITCH_ON.invalidRequest).description('请求被拒绝 / 能力不兼容（INVALID_REQUEST）；分类依赖 provider，不保证精确'),
   // 凭证与额度是"渠道自己的毛病"，换一条渠道往往立刻就能救——另一条渠道有自己的
   // 密钥和额度。2026-10-16 修订：此前把它们列为"配置坏了，切换只会把问题藏起来"而
@@ -92,24 +97,15 @@ export const switchOnSchema = z.object({
   quota: z.boolean().default(DEFAULT_SWITCH_ON.quota).description('额度用尽（QUOTA）：同上，换渠道可继续；熔断会让后续请求先跳过这条'),
 })
 
-/**
- * The one global fallback chain.
- *
- * `candidates` are the FALLBACKS only. The first hop is whatever model the user
- * selected in DSH — it is not configured here because it is not a constant, and
- * the plugin does not own it. A failure moves from that hop through this list in
- * order. An empty list means "nothing to fall back to", and the plugin then
- * stays out of the request path entirely.
- */
 export const chainSchema = z.object({
   candidates: z.array(candidateSchema).default([])
-    .description('降级候选：第一跳永远是你当前选中的模型（只打一次），失败后按这里的顺序走'),
+    .description('降级候选：第一跳永远是你当前选中的模型、永远先试；失败后从这里的候选里按起点策略开始走'),
   switchOn: switchOnSchema.default({}).description('哪些失败会切换到下一个候选'),
-  maxTotalAttempts: z.number().step(1).min(1).default(DEFAULT_POOL_MAX_TOTAL_ATTEMPTS)
-    .description('这个请求最多真实调用多少次（硬上限：含同渠道重试与跨渠道降级，llm-retry 的同路由重试也会被它截断）'),
   stickyTurns: z.number().step(1).min(0).max(99).default(DEFAULT_STICKY_TURNS)
     .description('带图轮之后，继续按「有图」路由的无图轮数；0 = 无图轮立即切回（默认）'),
   strategy: strategySchema,
+  firstHopMaxRetries: z.number().step(1).min(0).max(MAX_RETRIES).default(DEFAULT_FIRST_HOP_MAX_RETRIES)
+    .description('第一跳（当前选中的模型）失败后最多重试几次（不含首次调用；0 = 首发失败即降级）'),
 })
 
 /**
@@ -209,7 +205,8 @@ import type { Volatile } from '@deepseek-ai/cordis'
 export interface Candidate {
   provider: string
   model: string
-  maxAttempts: number
+  /** Retries AFTER the first call; the step core works in call counts (`maxRetries + 1`). */
+  maxRetries: number
   /** Only read by the `weight` strategy. */
   weight: number
   needs?: { images?: boolean; minContextTokens?: number }
@@ -241,9 +238,10 @@ export interface SwitchOn {
 export interface ChainConfig {
   candidates: Candidate[]
   switchOn: SwitchOn
-  maxTotalAttempts: number
   stickyTurns: number
   strategy: Strategy
+  /** Retries AFTER the first hop's first call; the step core converts to calls. */
+  firstHopMaxRetries: number
 }
 
 /** "敲门"档配置：要一份模型清单，不生成内容。 */

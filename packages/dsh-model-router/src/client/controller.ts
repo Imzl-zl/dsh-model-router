@@ -9,12 +9,12 @@
  */
 
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { clone, deepEqual, summarize } from './format.ts'
+import { clone, deepEqual, fill, summarize } from './format.ts'
 import { normalizeChain, normalizeHealth, validate } from './validate.ts'
 import { effectiveChain } from '../chain.ts'
 import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
-import { DEFAULT_MAX_ATTEMPTS } from '../defaults.ts'
+import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, MAX_RETRIES } from '../defaults.ts'
 
 export function createController(ctx, scope, t) {
   var seed = function () {
@@ -63,6 +63,14 @@ export function createController(ctx, scope, t) {
     // counts are the feedback, not the dots.
     checkSummary: null,
     probeSummary: null,
+    // Why the channel history could not be read, or null when the last read was
+    // whole. A failed read used to fall through to an empty fold, which renders
+    // exactly like "no channel has ever run" — the one lie this workspace cannot
+    // afford, since its whole job is telling the user what a channel did.
+    //
+    // Note: 为何"读不到"必须上屏 —— 见
+    // .agents/notes/implemented/2026-10-21-connectivity-deadline-and-honest-history.md
+    passiveError: null,
   }
   var saving = false
   var failed = false
@@ -109,6 +117,7 @@ export function createController(ctx, scope, t) {
         probingRoutes: ui.probingRoutes,
         checkSummary: ui.checkSummary,
         probeSummary: ui.probeSummary,
+        passiveError: ui.passiveError,
       },
     }
   }
@@ -212,11 +221,21 @@ export function createController(ctx, scope, t) {
    * fact, so this merges the same window the failover drawer reads rather
    * than pretending one session is the whole story.
    */
+  /** An error as one line of text, for a message that has to be shown as-is. */
+  function describeError(error) {
+    if (error && typeof error.message === 'string' && error.message.length > 0) return error.message
+    return String(error)
+  }
+
   function loadPassive() {
     var session = ctx.remote && ctx.remote.session
     if (!session) return
+    // Failures are collected rather than swallowed: a read that yields nothing
+    // renders identically to "this channel never ran", so the difference has to
+    // reach the screen (see `ui.passiveError`).
+    var failures = []
     session.list({}).then(function (result) {
-      if (!result.ok) return
+      if (!result.ok) throw new Error(describeError(result.error) || 'session.list was refused')
       var sessions = (result.value?.items ?? []).slice()
         .sort(function (a, b) { return (a.updatedAt ?? 0) - (b.updatedAt ?? 0) })
         .slice(-20)
@@ -230,18 +249,34 @@ export function createController(ctx, scope, t) {
           // read carries cached values only. Either way the key is read
           // straight out of `values` — no `kind` gate (the wire payload
           // does not carry one).
-          var values = read.ok && read.value !== null ? (read.value.values ?? {}) : {}
+          // A refused read is not "no records": the two must not fold into the
+          // same empty state.
+          if (!read.ok) throw new Error(describeError(read.error) || 'the projection read was refused')
+          var values = read.value !== null ? (read.value.values ?? {}) : {}
           // 先拷贝再写入：store 的 set 会 dev-freeze 它收到的对象，之后往
           // 原对象上赋值在 dev 构建里会静默失败（圆点永远显示"未探测"）。
           return values['router/channel-health'] ?? null
-        }).catch(function () { return null })
-      }))
-    }).then(function (reads) {
-      for (var i = 0; i < reads.length; i++) {
-        mergePassiveRecords(reads[i])
+        }).catch(function (error) {
+          failures.push(describeError(error))
+          return null
+        })
+      })).then(function (reads) { return { reads: reads, total: sessions.length } })
+    }).then(function (page) {
+      for (var i = 0; i < page.reads.length; i++) {
+        mergePassiveRecords(page.reads[i])
       }
+      ui.passiveError = failures.length === 0
+        ? null
+        : failures.length === page.total
+          ? fill(t('healthHistoryUnreadable'), { error: failures[0] })
+          : fill(t('healthHistoryPartial'), { failed: failures.length, total: page.total, error: failures[0] })
       publish()
-    }).catch(function () {})
+    }).catch(function (error) {
+      // The list itself failed, so not one session was read. Say that instead of
+      // publishing the empty fold the old code left behind.
+      ui.passiveError = fill(t('healthHistoryUnreadable'), { error: describeError(error) })
+      publish()
+    })
   }
   loadPassive()
 
@@ -273,6 +308,9 @@ export function createController(ctx, scope, t) {
   // 信号经 Typert 的 cancellation 通道到宿主（描述符声明 signal 末参即注入，
   // 与 probeAll 同一机制），宿主把取消传进 discoverModels。
   var checkAborts = new Set()
+  // 在飞的探测：与连通性检查同契约。探测花的是真 token，面板一关就必须停，
+  // 不能只靠宿主侧的超时兜底。
+  var probeAborts = new Set()
   function runCheck(routes, signal) {
     var health = ctx.remote && ctx.remote.routerHealth
     var cannotCheck = function () {
@@ -360,9 +398,8 @@ export function createController(ctx, scope, t) {
     /** Add fallback candidates to the one chain. */
     addCandidates: function (entries) {
       entries.forEach(function (entry) {
-        // 默认值先给、entry 后覆盖：目录选择不带 maxAttempts（1 是它的默认），
-        // 手动录入带了就必须按用户填的走——写死 1 会静默吞掉用户输入。
-        draft.chain.candidates.push(Object.assign({ maxAttempts: DEFAULT_MAX_ATTEMPTS }, entry))
+        // 目录选择只带 route（provider/model）：重试次数先给默认值，之后在链上逐条改。
+        draft.chain.candidates.push(Object.assign({ maxRetries: DEFAULT_MAX_RETRIES }, entry))
       })
       ui.modal = null
       publish()
@@ -383,10 +420,10 @@ export function createController(ctx, scope, t) {
       // 与相邻交换），边界守卫各写各的，改一边忘了另一边就静默出错。
       controller.reorderCandidates(index, index + direction)
     },
-    setMaxAttempts: function (index, value) {
+    setMaxRetries: function (index, value) {
       var candidate = draft.chain.candidates[index]
       var parsed = Number(value)
-      candidate.maxAttempts = Number.isFinite(parsed) ? Math.min(5, Math.max(1, Math.round(parsed))) : DEFAULT_MAX_ATTEMPTS
+      candidate.maxRetries = Number.isFinite(parsed) ? Math.min(MAX_RETRIES, Math.max(0, Math.round(parsed))) : DEFAULT_MAX_RETRIES
       publish()
     },
     /** Patch one candidate's `needs`; an empty patch clears the field. */
@@ -411,9 +448,9 @@ export function createController(ctx, scope, t) {
       draft.chain.stickyTurns = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
       publish()
     },
-    setMaxTotalAttempts: function (value) {
+    setFirstHopMaxRetries: function (value) {
       var parsed = Number(value)
-      draft.chain.maxTotalAttempts = Number.isFinite(parsed) ? Math.max(1, Math.round(parsed)) : 1
+      draft.chain.firstHopMaxRetries = Number.isFinite(parsed) ? Math.min(MAX_RETRIES, Math.max(0, Math.round(parsed))) : DEFAULT_FIRST_HOP_MAX_RETRIES
       publish()
     },
     toggleSwitchOn: function (key) {
@@ -485,7 +522,7 @@ export function createController(ctx, scope, t) {
       })
     },
     closeDrawer: function () { ui.drawerOpen = false; publish() },
-    /** Run a connectivity check on every configured route: profiles and the default pool alike. */
+    /** Run a connectivity check on every configured route (the chain's candidates). */
     checkAll: function () {
       if (ui.checking) return
       ui.checking = true
@@ -511,7 +548,7 @@ export function createController(ctx, scope, t) {
         ui.checkSummary = summarizeChecks(routes.map(function (route) {
           return next[routeKeyOf(route.provider, route.model)]
             ?? { provider: route.provider, model: route.model, kind: 'unavailable', reason: 'hostUnavailable' }
-        }))
+        }), t)
         // 连通性检查跑完顺带重取被动快照：定时轮次开着的时候，健康工作台要跟着
         // 真实发生的事走，而不是停在页面挂载那一刻。
         loadPassive()
@@ -610,7 +647,10 @@ export function createController(ctx, scope, t) {
       ui.probingRoutes[key] = true
       publish()
       var started = Date.now()
-      health.probeAll({ routes: [{ provider: provider, model: model }] }).then(function (result) {
+      var abort = new AbortController()
+      probeAborts.add(abort)
+      health.probeAll({ routes: [{ provider: provider, model: model }] }, abort.signal).then(function (result) {
+        probeAborts.delete(abort)
         if (result && result.ok === true) {
           var next = Object.assign({}, ui.probe)
           ;(result.value.routes ?? []).forEach(function (entry) {
@@ -624,6 +664,7 @@ export function createController(ctx, scope, t) {
           publish()
         })
       }).catch(function () {
+        probeAborts.delete(abort)
         controller.holdBusy(started, function () {
           ui.probingRoutes = Object.assign({}, ui.probingRoutes)
           delete ui.probingRoutes[key]
@@ -631,7 +672,7 @@ export function createController(ctx, scope, t) {
         })
       })
     },
-    /** Probe every configured route: profiles and the default pool alike. */
+    /** Probe every configured route (the chain's candidates). */
     probeAll: function () {
       if (ui.probing) return
       var health = ctx.remote && ctx.remote.routerHealth
@@ -641,14 +682,17 @@ export function createController(ctx, scope, t) {
       ui.probeSummary = null
       publish()
       var started = Date.now()
-      health.probeAll({ routes: routes }).then(function (result) {
+      var abort = new AbortController()
+      probeAborts.add(abort)
+      health.probeAll({ routes: routes }, abort.signal).then(function (result) {
+        probeAborts.delete(abort)
         if (result && result.ok === true) {
           var next = Object.assign({}, ui.probe)
           ;(result.value.routes ?? []).forEach(function (entry) {
             next[routeKeyOf(entry.provider, entry.model)] = entry
           })
           ui.probe = next
-          ui.probeSummary = summarizeProbes(result.value.routes ?? [])
+          ui.probeSummary = summarizeProbes(result.value.routes ?? [], t)
         }
         loadProbeReport()
         controller.holdBusy(started, function () {
@@ -656,6 +700,7 @@ export function createController(ctx, scope, t) {
           publish()
         })
       }).catch(function () {
+        probeAborts.delete(abort)
         controller.holdBusy(started, function () {
           ui.probing = false
           publish()
@@ -673,6 +718,8 @@ export function createController(ctx, scope, t) {
       armedSeconds = -1
       checkAborts.forEach(function (abort) { abort.abort() })
       checkAborts.clear()
+      probeAborts.forEach(function (abort) { abort.abort() })
+      probeAborts.clear()
     },
   }
   return controller
@@ -683,29 +730,29 @@ export function createController(ctx, scope, t) {
  * refused, and could-not-check are four different answers and are counted
  * separately — the last one says nothing about the channel.
  */
-function summarizeChecks(verdicts) {
+function summarizeChecks(verdicts, t) {
   return summarize(verdicts, function (verdict) {
     if (verdict.kind === 'reachable') return 'ok'
     if (verdict.kind === 'notAdvertised') return 'partial'
     if (verdict.kind === 'unreachable') return 'bad'
     return 'unknown'
   }, [
-    { key: 'ok', label: '可达' },
-    { key: 'partial', label: '在清单但非此模型' },
-    { key: 'bad', label: '不可达' },
-    { key: 'unknown', label: '没能检查' },
+    { key: 'ok', label: t('checkSummaryOk') },
+    { key: 'partial', label: t('checkSummaryPartial') },
+    { key: 'bad', label: t('checkSummaryBad') },
+    { key: 'unknown', label: t('checkSummaryUnknown') },
   ])
 }
 
 /** What a probe run found: passed, refused, and could-not-run. */
-function summarizeProbes(routes) {
+function summarizeProbes(routes, t) {
   return summarize(routes, function (entry) {
     if (entry.kind === 'reachable') return 'ok'
     if (entry.kind === 'unreachable') return 'bad'
     return 'unknown'
   }, [
-    { key: 'ok', label: '通过' },
-    { key: 'bad', label: '未通过' },
-    { key: 'unknown', label: '没能测' },
+    { key: 'ok', label: t('probeSummaryOk') },
+    { key: 'bad', label: t('probeSummaryBad') },
+    { key: 'unknown', label: t('probeSummaryUnknown') },
   ])
 }

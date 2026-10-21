@@ -8,7 +8,7 @@
  * promising they were in sync, and they had already drifted. The rules now
  * exist once, here.
  *
- * Single-field bounds (an empty provider, maxAttempts out of range) are NOT
+ * Single-field bounds (an empty provider, maxRetries out of range) are NOT
  * here and never were: the schema owns them on the host, and the browser's
  * draft-shape checks (client/validate.ts) own them pre-save. That boundary
  * is deliberate — see assertStructural's docstring in config.ts.

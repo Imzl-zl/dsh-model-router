@@ -18,9 +18,24 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { Candidate, Strategy, SwitchOn } from './config.ts'
 
+/**
+ * One candidate as the step core sees it: a CALL budget, not a retry count.
+ *
+ * The config speaks retries (`maxRetries`); `resolveChain` converts once, so
+ * every decision below counts real calls and never has to remember the +1.
+ */
+export interface StepCandidate {
+  provider: string
+  model: string
+  /** Total real calls allowed on this candidate; always >= 1. */
+  maxAttempts: number
+  weight: number
+  needs?: Candidate['needs']
+}
+
 /** The candidate chain snapshot for one step, frozen at the step's first request. */
 export interface StepChain {
-  readonly candidates: readonly Candidate[]
+  readonly candidates: readonly StepCandidate[]
   /**
    * 每条候选在用户列表里的原始下标，与 `candidates` 平行。
    *
@@ -29,7 +44,6 @@ export interface StepChain {
    */
   readonly order: readonly number[]
   readonly switchOn: SwitchOn
-  readonly maxTotalAttempts: number
   /** No-image turns the image condition holds for after an image turn. */
   readonly stickyTurns: number
   readonly strategy: Strategy
@@ -46,10 +60,21 @@ export interface StepState {
   index: number
   /** `agent/request` fires on the current candidate; the cap advances the index. */
   attemptsOnCandidate: number
-  /** `agent/request` fires in this step across all candidates. */
+  /** `agent/request` fires in this step across all candidates (the step's cost). */
   totalAttempts: number
-  /** Set when the last candidate hit its cap: only a terminal decision remains. */
+  /**
+   * The chain has no servable candidate left for this step. Set by the
+   * fall-back path (nothing in the chain can take this request) and by the
+   * defensive last-candidate branch in `planFire`; `decideRecovery` reads it as
+   * terminal.
+   */
   exhausted: boolean
+  /**
+   * Explicit intent from the recovery layer: `true` = the next fire lands on
+   * the next candidate, `false` = stay on the current one because llm-retry
+   * still owns the same-route retry. Consumed (and cleared) by `planFire`.
+   */
+  pendingAdvance?: boolean
 }
 
 /**
@@ -247,6 +272,6 @@ export class RouterState {
 }
 
 /** The candidate config for one attempt: the resolved controls on a swapped route. */
-export function candidateConfig(resolved: LlmCallConfig, candidate: Candidate): LlmCallConfig {
+export function candidateConfig(resolved: LlmCallConfig, candidate: StepCandidate): LlmCallConfig {
   return { ...resolved, provider: candidate.provider, model: candidate.model }
 }

@@ -87,10 +87,9 @@ const overlay = `- insert:
         # 一条全局降级链：候选就是降级候选，第一跳是用户选中的模型（隐式）。
         chain:
           candidates:
-            - { provider: stub-primary, model: stub-model, maxAttempts: 1 }
-            - { provider: stub-third, model: stub-model, maxAttempts: 1 }
+            - { provider: stub-primary, model: stub-model, maxRetries: 0 }
+            - { provider: stub-third, model: stub-model, maxRetries: 0 }
           switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-          maxTotalAttempts: 6
         health:
           probe:
             # The schedule is on here so the timer itself is exercised: the
@@ -390,3 +389,4 @@ console.log(`\n${passed} remote test(s) passed`)
   console.log('    ok  unloading the plugin stops its scheduled probe timer')
   passed += 1
 }
+

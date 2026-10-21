@@ -1,547 +1,511 @@
-/** The fallback chain editor: the implicit first hop, candidate nodes, connectors, switch-on grid, budget row and the failover drawer. */
-
-import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { routeKeyOf } from '../routes.ts'
-import { h } from './dom.ts'
-import { S } from './styles.ts'
-import { accentBadge, fill, healthToneBadge } from './format.ts'
-import { HealthSignalDot, reasoningLabelOf } from './health-ui.ts'
-import { Icon, ICON_ARROW_DOWN, ICON_BOLT, ICON_CLOSE, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_ROUTE, ICON_SHIELD, ICON_TRASH, ICON_UP, ICON_WARN } from './icons.ts'
-import { SegmentedTabs, Tag, useModalLayer } from '@deepseek-ai/dsh-client-ui-primitives'
-import { STRATEGY_OPTIONS } from './validate.ts'
-import { DEFAULT_MAX_TOTAL_ATTEMPTS, DEFAULT_STRATEGY, SWITCH_ON_CODES } from '../defaults.ts'
-
 /**
- * The first hop is the model the user selected in DSH, so it cannot be a card
- * with a provider and a model — the plugin does not know which one it will be
- * until a request arrives. It states what the chain does instead: your
- * selection is the first hop, and the configured fallbacks follow it.
+ * The chain editor's sections and the failover-history dialog.
+ *
+ * Layout follows DSH's own pages: each section is a title row plus content,
+ * rows are flat list items separated by a hairline (ui-plugin-manager `.row`),
+ * and controls are the primitives (Button / Checkbox / Input / SegmentedControl
+ * / Tag). There is no card inside a card: the page already owns the surface.
+ *
+ * Note: 分区/行/弹窗的布局契约与原生出处 —— 见 docs/design/ui-layout-redesign.md
  */
-function FirstHopCard(props) {
-  var t = props.t
-  return h('div', { style: S.node },
-    h('div', { className: 'dsh-router-node-card', style: Object.assign({}, S.nodeCard, S.nodeCardFirstHop) },
-      h('div', { style: S.nodeMainRow },
-        h('div', { style: Object.assign({}, S.rankBadge, S.rankBadgeFirstHop) }, '★'),
-        h('div', { style: S.nodeContent },
-          h('div', { style: S.modelInfo },
-            h('div', { style: S.modelNameRow },
-              h('span', { style: S.modelName }, t('firstHopTitle')),
-              h('span', { style: S.firstHopBadge }, t('firstHopBadge'))))))))
+
+import { useState } from 'react'
+import { Button, Checkbox, Input, Modal, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
+import { h } from './dom.ts'
+import { fill, routeStatus } from './format.ts'
+import { Icon, ICON_BOLT, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_TRASH, ICON_UP } from './icons.ts'
+import { routeKeyOf } from '../routes.ts'
+import { DEFAULT_FIRST_HOP_MAX_RETRIES, MAX_RETRIES, STRATEGIES, SWITCH_ON_CODES } from '../defaults.ts'
+
+/** The status text one route's health tag carries. */
+function statusLabel(t, status) {
+  if (status === 'healthy') return t('healthStatusHealthy')
+  if (status === 'degraded') return t('healthStatusDegraded')
+  if (status === 'unhealthy') return t('healthStatusUnhealthy')
+  return t('compactHealthIdle')
 }
 
-export function CandidateNode(props) {
+/** The tag tone one health status uses. */
+function statusTone(status) {
+  if (status === 'healthy') return 'success'
+  if (status === 'degraded') return 'warning'
+  if (status === 'unhealthy') return 'danger'
+  return 'outline'
+}
+
+/** The dictionary label for one failure code, falling back to the raw code. */
+export function codeLabel(t, code) {
+  var entry = SWITCH_ON_CODES.find(function (candidate) { return candidate.code === code })
+  return entry === undefined ? code : t(entry.labelKey + 'Name')
+}
+
+/**
+ * A compact numeric stepper: one button per direction, a text field between
+ * them. The field stays controlled so the draft is the only source of truth.
+ */
+function Stepper(props) {
+  var t = props.t
+  var value = props.value
+  var min = props.min ?? 1
+  var max = props.max
+  var atMin = value <= min
+  var atMax = max !== undefined && value >= max
+  return h('span', { className: 'dsh-router-stepper' },
+    h('button', {
+      type: 'button',
+      className: 'dsh-router-stepper-btn',
+      disabled: props.disabled || atMin,
+      title: t('stepMinus'),
+      'aria-label': t('stepMinus'),
+      onClick: function () { props.onChange(Math.max(min, value - 1)) },
+    }, h(Icon, { d: ICON_MINUS, size: 10 })),
+    h('input', {
+      className: 'dsh-router-stepper-input',
+      type: 'text',
+      inputMode: 'numeric',
+      value: String(value),
+      disabled: props.disabled,
+      'aria-label': props.label,
+      onChange: function (event) {
+        var parsed = Number(event.target.value)
+        if (!Number.isFinite(parsed)) return
+        var next = Math.max(min, Math.round(parsed))
+        if (max !== undefined) next = Math.min(max, next)
+        props.onChange(next)
+      },
+    }),
+    h('button', {
+      type: 'button',
+      className: 'dsh-router-stepper-btn',
+      disabled: props.disabled || atMax,
+      title: t('stepPlus'),
+      'aria-label': t('stepPlus'),
+      onClick: function () { props.onChange(max === undefined ? value + 1 : Math.min(max, value + 1)) },
+    }, h(Icon, { d: ICON_PLUS, size: 10 })))
+}
+
+/**
+ * The first hop: the model the user selected in DSH. It is not configured here
+ * because it is not a constant — only its retry budget is.
+ */
+export function FirstHopSection(props) {
+  var t = props.t
+  var retries = Math.max(0, Math.min(MAX_RETRIES, Number(props.maxRetries) || DEFAULT_FIRST_HOP_MAX_RETRIES))
+  return h('section', { className: 'dsh-router-section' },
+    h('div', { className: 'dsh-router-section-head' },
+      h('h2', { className: 'dsh-router-section-title' }, t('firstHopSectionTitle')),
+      h('span', { className: 'dsh-router-section-hint' }, t('firstHopSectionHint'))),
+    h('div', { className: 'dsh-router-row dsh-router-row-firsthop' },
+      h('div', { className: 'dsh-router-row-line' },
+        h('span', { className: 'dsh-router-icon' }, h(Icon, { d: ICON_BOLT, size: 16 })),
+        h('div', { className: 'dsh-router-row-main' },
+          h('div', { className: 'dsh-router-row-title' },
+            t('firstHopTitle'),
+            h(Tag, { tone: 'info' }, t('firstHopBadge'))),
+          h('div', { className: 'dsh-router-row-sub' }, t('firstHopDesc'))),
+        h('div', { className: 'dsh-router-row-end' },
+          h('span', { className: 'dsh-router-muted' }, t('retryLimit')),
+          h(Stepper, {
+            t: t,
+            value: retries,
+            min: 0,
+            max: MAX_RETRIES,
+            disabled: props.disabled,
+            label: t('retryLimit'),
+            onChange: function (next) { if (props.onMaxRetries) props.onMaxRetries(next) },
+          }),
+          h('span', { className: 'dsh-router-muted' }, t('timesUnit')))),
+    h('p', { className: 'dsh-router-note' },
+      fill(t('firstHopRetriesNote'), { n: retries }))))
+}
+
+/** The conditions panel under one candidate row. */
+function ConditionsPanel(props) {
   var t = props.t
   var candidate = props.candidate
   var index = props.index
-  var expandedState = useState(false)
-  var expanded = expandedState[0]
-  var setExpanded = expandedState[1]
-  // 页头的识图路由徽标要求展开某个节点时，这个节点跟着打开。页头点的是
-  // 第一个配了条件的节点，但用户也可能手动关掉它，所以这里单向跟随：
-  // imageFocus 只在"点了徽标"时变化，不接管用户之后的开关。
-  useEffect(function () {
-    if (props.imageFocus === props.index) setExpanded(true)
-  }, [props.imageFocus])
-  var needs = candidate.needs ?? {}
-  var hasActiveNeeds = (needs.images !== undefined) || (needs.minContextTokens > 0)
-  var imagesMode = needs.images === true ? 'require' : needs.images === false ? 'forbid' : 'any'
-  var reasoning = reasoningLabelOf(props.catalog, candidate.provider, candidate.model)
+  var images = candidate.needs?.images
+  var imagesMode = images === true ? 'require' : images === false ? 'forbid' : 'any'
+  var minContext = candidate.needs?.minContextTokens
+  return h('div', { className: 'dsh-router-conditions' },
+    h('div', { className: 'dsh-router-field' },
+      h('span', { className: 'dsh-router-label' }, t('needImagesTitle')),
+      h(SegmentedControl, {
+        id: 'needs-images-' + index,
+        value: imagesMode,
+        label: t('needImagesTitle'),
+        disabled: props.disabled,
+        options: [
+          { value: 'any', label: t('needImagesAnyLabel') },
+          { value: 'require', label: t('needImagesRequireLabel') },
+          { value: 'forbid', label: t('needImagesForbidLabel') },
+        ],
+        onChange: function (next) {
+          if (next === 'any') props.onNeeds({ imagesMode: 'any' })
+          else if (next === 'require') props.onNeeds({ imagesMode: 'require' })
+          else props.onNeeds({ imagesMode: 'forbid' })
+        },
+      }),
+      h('span', { className: 'dsh-router-hint' }, t('needImagesHint'))),
+    h('div', { className: 'dsh-router-field' },
+      h('label', { className: 'dsh-router-label', htmlFor: 'needs-context-' + index }, t('needContextTitle')),
+      h(Input, {
+        id: 'needs-context-' + index,
+        type: 'text',
+        inputMode: 'numeric',
+        value: minContext === undefined ? '' : String(minContext),
+        placeholder: '0',
+        disabled: props.disabled,
+        onChange: function (event) {
+          var parsed = Number(event.target.value)
+          props.onNeeds({ minContextTokens: Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0 })
+        },
+      }),
+      h('span', { className: 'dsh-router-hint' }, t('needContextHint'))))
+}
 
-  var canMoveUp = index > 0 && !props.disabled
-  var canMoveDown = index < props.total - 1 && !props.disabled
-  var canDrag = props.total > 0 && !props.disabled
-
-  /**
-   * 从卡片内部任何地方都能开始拖，除了控件本身。
-   *
-   * HTML5 拖拽的 draggable 挂在整张卡上，所以起点可能在按钮、数字输入框或已展开
-   * 的条件面板里——那些地方一拖就该是它们自己的行为（点按钮、选中输入框里的文字），
-   * 而不是把卡片搬走。这里在 dragstart 上按起点判定，命中交互元素就取消这次拖拽。
-   *
-   * 判据必须**止于本卡**（`closest` 的边界传给卡片自己，而不是默认的 document）：
-   * 卡片外面也有一层 `role="tabpanel"`（选路策略那个面板），拿整篇文档当边界会把每一
-   * 张卡都判成"在面板里"，拖拽从此一次也发不起来——浏览器实测踩过。
-   *
-   * 为什么不用指针事件自己做一套：HTML5 拖放已经处理了拖影、放置目标与滚动容器
-   * 内的自动滚动，自建一套要把这些重做一遍，而触屏上两者都不可用（上下按钮仍在）。
-   */
-  var cardRef = useRef(null)
-  var handleDragStart = function (e) {
-    if (!canDrag) { e.preventDefault(); return }
-    var target = e.target
-    var card = cardRef.current
-    // 边界是本卡：命中的交互元素必须真的在这张卡里才取消拖拽；卡外那层
-    // `role="tabpanel"`（选路策略面板）不算——见上面的说明。
-    var hit = target && typeof target.closest === 'function'
-      ? target.closest('button, input, textarea, select, a, [contenteditable="true"], [role="tabpanel"]')
-      : null
-    if (hit !== null && card !== null && card.contains(hit)) {
-      e.preventDefault()
-      return
-    }
-    if (props.onDragStart) props.onDragStart(e, index)
-  }
-
-  return h('div', { style: S.node },
-    h('div', {
-      ref: cardRef,
-      className: 'dsh-router-node-card',
-      style: Object.assign(
-        {},
-        S.nodeCard,
-        props.isDragging ? S.nodeCardDragging : null,
-        props.isDragTarget && !props.isDragging ? S.nodeCardDragOver : null,
-      ),
-      draggable: canDrag,
-      onDragStart: handleDragStart,
-      onDragOver: function (e) { if (props.onDragOver) props.onDragOver(e, index) },
-      onDrop: function (e) { if (props.onDrop) props.onDrop(e, index) },
-      onDragEnd: function (e) { if (props.onDragEnd) props.onDragEnd(e) },
+/** One fallback candidate as a flat row: identity, health, and its controls. */
+function CandidateRow(props) {
+  var t = props.t
+  var candidate = props.candidate
+  var index = props.index
+  var route = routeKeyOf(candidate.provider, candidate.model)
+  var status = routeStatus(props.passive, props.discover, props.probe, route)
+  var needs = candidate.needs
+  var hasConditions = needs !== undefined && (needs.images !== undefined || (needs.minContextTokens ?? 0) > 0)
+  var dragActive = props.dragSource === index
+  return h('li', {
+    className: 'dsh-router-row' + (dragActive ? ' dsh-router-row-dragging' : ''),
+    draggable: !props.disabled,
+    onDragStart: function (event) {
+      if (props.disabled) { event.preventDefault(); return }
+      // 只允许从卡面本身发起拖拽：按钮/输入框上的按下不是重排手势。边界收窄到
+      // 本行（row.contains），外层同角色的包裹层不再把整行判成"在交互元素里"。
+      var hit = event.target
+      if (hit && typeof hit.closest === 'function') {
+        var interactive = hit.closest('button, input, select, textarea, a, [role="tab"]')
+        if (interactive && event.currentTarget.contains(interactive)) { event.preventDefault(); return }
+      }
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+      props.onDragStart(index)
     },
-      h('div', { style: S.nodeMainRow },
-        // 握把不再是唯一的拖拽起点，而是"这张卡可以拖"的视觉提示；命中区比图标大，
-        // 颜色在手感上给出 grab 反馈。
-        h('div', {
-          className: 'dsh-router-grip-handle',
-          style: Object.assign({}, S.gripHandle, !canDrag ? S.gripHandleDisabled : null),
-          title: t('dragReorderHint'),
-          'aria-hidden': true,
-        }, h(Icon, { d: ICON_GRIP, size: 14 })),
-        h('div', { style: S.rankBadge }, String(index + 1).padStart(2, '0')),
-        h('div', { style: S.nodeContent },
-          h('div', { style: S.modelInfo },
-            h('div', { style: S.modelNameRow },
-              h('span', { style: S.modelName, title: candidate.model }, candidate.model || '—'),
-              h('span', { style: S.providerBadge }, candidate.provider),
-              h(HealthSignalDot, {
-                t: t,
-                route: routeKeyOf(candidate.provider, candidate.model),
-                record: props.passive ? props.passive[routeKeyOf(candidate.provider, candidate.model)] : null,
-                passive: props.passive,
-                discover: props.discover,
-                probe: props.probe,
-                onJumpHealth: props.onJumpHealth,
-              }),
-              reasoning === undefined ? null : h('span', { style: S.reasoningBadge }, t('reasoningBadge') + ': ' + reasoning),
-              h('button', {
-                type: 'button',
-                className: 'dsh-router-needs-btn',
-                style: Object.assign({}, S.needsBtn, hasActiveNeeds ? S.needsBtnActive : null),
-                'aria-expanded': expanded,
-                onClick: function () { setExpanded(!expanded) },
-              }, hasActiveNeeds ? '⚙️ ● ' + t('toggleNeedsBtn') : '⚙️ ' + t('toggleNeedsBtn'))),
-            h('span', { style: S.modelPath, title: routeKeyOf(candidate.provider, candidate.model) }, routeKeyOf(candidate.provider, candidate.model))),
-          h('div', { style: S.nodeControls },
-            h('div', { style: S.nodeTuning },
-              h('div', { style: S.attemptPicker, title: t('attemptLimitHint') },
-                h('span', { style: { whiteSpace: 'nowrap' } }, t('singleAttemptLimit')),
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-stepper-btn',
-                  style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts <= 1) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
-                  disabled: props.disabled || candidate.maxAttempts <= 1,
-                  title: t('stepMinus'),
-                  onClick: function () { props.onMaxAttempts(index, Math.max(1, candidate.maxAttempts - 1)) },
-                }, h(Icon, { d: ICON_MINUS, size: 10 })),
-                h('input', {
-                  style: S.attemptInput,
-                  type: 'text',
-                  inputMode: 'numeric',
-                  maxLength: 2,
-                  'aria-label': t('singleAttemptLimit') + ' (' + t('attemptRangeHint') + ')',
-                  value: String(candidate.maxAttempts),
-                  disabled: props.disabled,
-                  onChange: function (event) { props.onMaxAttempts(index, event.target.value) },
-                }),
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-router-stepper-btn',
-                  style: Object.assign({}, S.stepperBtn, (props.disabled || candidate.maxAttempts >= 5) ? { opacity: 0.35, cursor: 'not-allowed' } : null),
-                  disabled: props.disabled || candidate.maxAttempts >= 5,
-                  title: t('stepPlus'),
-                  onClick: function () { props.onMaxAttempts(index, Math.min(5, candidate.maxAttempts + 1)) },
-                }, h(Icon, { d: ICON_PLUS, size: 10 })),
-                h('span', { style: { whiteSpace: 'nowrap' } }, t('timesUnit'))),
-              props.showWeight ? h('div', { style: S.attemptPicker, title: t('weightHint') },
-                h('span', { style: { whiteSpace: 'nowrap' } }, t('weightLabel')),
-                h('input', {
-                  style: S.attemptInput,
-                  type: 'text',
-                  inputMode: 'numeric',
-                  maxLength: 3,
-                  'aria-label': t('weightLabel'),
-                  value: String(candidate.weight || 0),
-                  disabled: props.disabled,
-                  onChange: function (event) { props.onWeight(index, event.target.value) },
-                }),
-                h('span', { style: { whiteSpace: 'nowrap' } }, props.weightShare + '%')) : null),
-            h('div', { style: S.nodeActions },
-              h('button', {
-                key: 'up',
-                type: 'button',
-                className: 'dsh-router-action-btn',
-                style: Object.assign({}, S.actionBtn, !canMoveUp ? S.actionBtnDisabled : null),
-                disabled: !canMoveUp,
-                title: t('moveUp'),
-                onClick: function () { props.onMove(index, -1) },
-              }, h(Icon, { d: ICON_UP, size: 13 })),
-              h('button', {
-                key: 'down',
-                type: 'button',
-                className: 'dsh-router-action-btn',
-                style: Object.assign({}, S.actionBtn, !canMoveDown ? S.actionBtnDisabled : null),
-                disabled: !canMoveDown,
-                title: t('moveDown'),
-                onClick: function () { props.onMove(index, 1) },
-              }, h(Icon, { d: ICON_DOWN, size: 13 })),
-              h('button', {
-                key: 'del',
-                type: 'button',
-                className: 'dsh-router-action-btn dsh-router-action-btn-danger',
-                style: Object.assign({}, S.actionBtn, S.actionBtnDanger),
-                disabled: props.disabled,
-                title: t('removeNode'),
-                onClick: function () { props.onRemove(index) },
-              }, h(Icon, { d: ICON_TRASH, size: 12 })))))),
-      expanded ? h('div', { style: S.needsPanel },
-        h('div', { style: S.needsGrid },
-          h('div', { style: S.needCard, id: 'images-' + imagesMode + '-panel-' + index, role: 'tabpanel', 'aria-labelledby': 'images-' + imagesMode + '-' + index },
-            h('div', { style: S.needHeader },
-              h('span', { style: S.needCardTitle }, t('needImagesTitle')),
-              h('span', { style: imagesMode === 'any' ? S.needStatusBadgeMuted : S.needStatusBadgeActive },
-                imagesMode === 'require' ? t('needImagesRequireBadge') : imagesMode === 'forbid' ? t('needImagesForbidBadge') : t('needImagesAnyBadge'))),
-            h('div', { className: 'dsh-router-need-control', style: S.needControlRow },
-              h(SegmentedTabs, {
-                items: [
-                  { value: 'any', label: t('needImagesAnyLabel'), id: 'images-any-' + index, panelId: 'images-any-panel-' + index },
-                  { value: 'require', label: t('needImagesRequireLabel'), id: 'images-require-' + index, panelId: 'images-require-panel-' + index },
-                  { value: 'forbid', label: t('needImagesForbidLabel'), id: 'images-forbid-' + index, panelId: 'images-forbid-panel-' + index },
-                ],
-                value: imagesMode,
-                onChange: function (value) { props.onNeeds(index, { imagesMode: value }) },
-              })),
-            h('span', { style: S.needHint }, t('needImagesHint')),
-            // 粘滞只在「预留了识图路」时才有意义：imagesMode 为 any/forbid 时
-            // 这个数永远不会被读到，摆在旁边只会让人以为设了就会生效。
-            // 它属于识图语义，不属于预算 —— 见 docs/design/ui-review.md P0-1；
-            // Note: 为何不在三种图片态下都显示 —— 见 .agents/notes/implemented/2026-10-18-vision-sticky-follows-image-condition.md
-            imagesMode === 'require' ? h('div', { style: S.needStickyRow },
-              h('span', { style: S.needCardTitle }, t('stickyTurns')),
-              h('div', { style: S.needStickyControl },
-                h('input', {
-                  style: Object.assign({}, S.needInput, { width: 52 }),
-                  type: 'text',
-                  inputMode: 'numeric',
-                  maxLength: 2,
-                  'aria-label': t('stickyTurns'),
-                  value: String(props.stickyTurns ?? 0),
-                  disabled: props.disabled,
-                  onChange: function (event) { props.onStickyTurns(event.target.value) },
-                }),
-                h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('turnsUnit'))),
-              h('span', { style: S.needHint }, t('stickyTurnsHint'))) : null),
-          h('div', { style: S.needCard },
-            h('div', { style: S.needHeader },
-              h('span', { style: S.needCardTitle }, t('needContextTitle')),
-              h('span', { style: (needs.minContextTokens ?? 0) > 0 ? S.needStatusBadgeActive : S.needStatusBadgeMuted },
-                (needs.minContextTokens ?? 0) > 0 ? fill(t('needContextBadge'), { n: needs.minContextTokens }) : t('needContextAnyBadge'))),
-            h('div', { style: S.needControlRow },
+    onDragOver: function (event) {
+      if (props.dragSource === null) return
+      // The row under the pointer is the drop target; the browser needs the
+      // default prevented or it refuses the drop entirely.
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    },
+    onDrop: function (event) {
+      event.preventDefault()
+      props.onDrop(index)
+    },
+    onDragEnd: function () { props.onDragEnd() },
+  },
+    h('div', { className: 'dsh-router-row-line' },
+      h('span', { className: 'dsh-router-row-grip', title: t('dragReorderHint'), 'aria-hidden': 'true' },
+        h(Icon, { d: ICON_GRIP, size: 12 })),
+      h('span', { className: 'dsh-router-order' }, String(index + 1)),
+      h('div', { className: 'dsh-router-row-main' },
+        h('div', { className: 'dsh-router-row-title' },
+          h('span', { className: 'dsh-router-provider' }, candidate.provider),
+          h('span', { className: 'dsh-router-row-meta' }, candidate.model)),
+        h('div', { className: 'dsh-router-row-sub' },
+          h('button', {
+            type: 'button',
+            className: 'dsh-router-tag-btn',
+            title: t('jumpToHealth'),
+            onClick: function () { if (props.onJumpHealth) props.onJumpHealth(route) },
+          }, h(Tag, { tone: statusTone(status), className: 'dsh-router-health-tag' }, statusLabel(t, status))),
+          hasConditions
+            ? h(Tag, { tone: 'info' },
+                needs.images === true ? t('needImagesRequireBadge')
+                  : needs.images === false ? t('needImagesForbidBadge')
+                    : fill(t('needContextBadge'), { n: needs.minContextTokens }))
+            : null,
+          props.strategy === 'weight' && (candidate.weight ?? 0) > 0
+            ? h(Tag, { tone: 'quiet' }, t('weightLabel') + ' ' + candidate.weight)
+            : null)),
+      h('div', { className: 'dsh-router-row-end' },
+        props.strategy === 'weight'
+          ? h('span', { className: 'dsh-router-inline-field' },
+              h('span', { className: 'dsh-router-muted' }, t('weightLabel')),
               h('input', {
-                style: S.needInput,
+                className: 'dsh-router-inline-input',
                 type: 'text',
                 inputMode: 'numeric',
-                placeholder: '0',
-                'aria-label': t('needContextTitle'),
-                value: String(needs.minContextTokens ?? 0),
+                value: String(candidate.weight ?? 0),
                 disabled: props.disabled,
+                'aria-label': t('weightLabel'),
                 onChange: function (event) {
                   var parsed = Number(event.target.value)
-                  props.onNeeds(index, { minContextTokens: Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0 })
+                  if (Number.isFinite(parsed)) props.onWeight(index, Math.max(0, Math.min(100, Math.round(parsed))))
                 },
-              })),
-            h('span', { style: S.needHint }, t('needContextHint'))))) : null))
+              }))
+          : null,
+        h('span', { className: 'dsh-router-inline-field' },
+          h('span', { className: 'dsh-router-muted' }, t('retryLimit')),
+          h(Stepper, {
+            t: t,
+            value: candidate.maxRetries,
+            min: 0,
+            max: MAX_RETRIES,
+            disabled: props.disabled,
+            label: t('retryLimit'),
+            onChange: function (next) { props.onMaxRetries(index, next) },
+          })),
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-link-btn',
+          'aria-expanded': props.open,
+          onClick: function () { props.onToggleConditions(index) },
+        }, t('toggleNeedsBtn') + (props.open ? ' ▴' : ' ▾')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-icon-btn',
+          title: t('moveUp'),
+          'aria-label': t('moveUp'),
+          disabled: props.disabled || index === 0,
+          onClick: function () { props.onMove(index, -1) },
+        }, h(Icon, { d: ICON_UP, size: 12 })),
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-icon-btn',
+          title: t('moveDown'),
+          'aria-label': t('moveDown'),
+          disabled: props.disabled || index === props.total - 1,
+          onClick: function () { props.onMove(index, 1) },
+        }, h(Icon, { d: ICON_DOWN, size: 12 })),
+        h('button', {
+          type: 'button',
+          className: 'dsh-router-icon-btn dsh-router-icon-btn-danger',
+          title: t('removeNode'),
+          'aria-label': t('removeNode'),
+          disabled: props.disabled,
+          onClick: function () { props.onRemove(index) },
+        }, h(Icon, { d: ICON_TRASH, size: 12 })))),
+    props.open
+      ? h(ConditionsPanel, {
+          t: t,
+          candidate: candidate,
+          index: index,
+          disabled: props.disabled,
+          onNeeds: function (patch) { props.onNeeds(index, patch) },
+        })
+      : null)
 }
 
+/** The fallback candidates: one flat list, one add action, one empty state. */
+export function CandidatesSection(props) {
+  var t = props.t
+  var [openIndex, setOpenIndex] = useState(-1)
+  var [dragSource, setDragSource] = useState(null)
+  var candidates = props.candidates
+  var imageIndex = -1
+  candidates.forEach(function (candidate, index) {
+    if (imageIndex === -1 && candidate.needs && candidate.needs.images !== undefined) imageIndex = index
+  })
+  var toggleConditions = function (index) { setOpenIndex(openIndex === index ? -1 : index) }
+  var handleDrop = function (index) {
+    if (dragSource !== null) props.onReorder(dragSource, index)
+    setDragSource(null)
+  }
+  return h('section', { className: 'dsh-router-section' },
+    h('div', { className: 'dsh-router-section-head' },
+      h('h2', { className: 'dsh-router-section-title' }, t('fallbackChainSection')),
+      h('span', { className: 'dsh-router-section-count' }, String(candidates.length)),
+      imageIndex >= 0
+        ? h('button', {
+            type: 'button',
+            className: 'dsh-router-link-btn',
+            title: t('imageRouteBadgeHint'),
+            onClick: function () { setOpenIndex(imageIndex) },
+          }, '🖼️ ' + t('imageRouteBadge'))
+        : null,
+      h('span', { className: 'dsh-router-section-spacer' }),
+      h(Button, {
+        variant: 'primary',
+        icon: h(Icon, { d: ICON_PLUS, size: 14 }),
+        disabled: props.disabled,
+        onClick: props.onOpenAddCandidate,
+      }, t('addCandidateBtn'))),
+    candidates.length === 0
+      ? h('p', { className: 'dsh-router-empty' }, t('fallbackEmptyTitle') + ' — ' + t('fallbackEmptyDesc'))
+      : h('ul', { className: 'dsh-router-list' },
+          candidates.map(function (candidate, index) {
+            return h(CandidateRow, {
+              key: routeKeyOf(candidate.provider, candidate.model) + ':' + index,
+              t: t,
+              candidate: candidate,
+              index: index,
+              total: candidates.length,
+              strategy: props.strategy,
+              disabled: props.disabled,
+              passive: props.passive,
+              discover: props.discover,
+              probe: props.probe,
+              open: openIndex === index,
+              onToggleConditions: toggleConditions,
+              onMaxRetries: props.onMaxRetries,
+              onWeight: props.onWeight,
+              onMove: props.onMove,
+              onNeeds: props.onNeeds,
+              onRemove: props.onRemove,
+              onJumpHealth: props.onJumpHealth,
+              dragSource: dragSource,
+              onDragStart: function (index) { setDragSource(index) },
+              onDrop: handleDrop,
+              onDragEnd: function () { setDragSource(null) },
+            })
+          })))
+}
+
+/** Which failures move the chain forward: one checkbox per code. */
+export function SwitchOnSection(props) {
+  var t = props.t
+  var checked = SWITCH_ON_CODES.filter(function (entry) { return Boolean(props.value[entry.key]) }).length
+  return h('section', { className: 'dsh-router-section' },
+    h('div', { className: 'dsh-router-section-head' },
+      h('h2', { className: 'dsh-router-section-title' }, t('switchOnTitle')),
+      h('span', { className: 'dsh-router-section-hint' },
+        fill(t('triggerSummaryLine'), { n: checked, total: SWITCH_ON_CODES.length }))),
+    h('div', { className: 'dsh-router-check-grid' },
+      SWITCH_ON_CODES.map(function (entry) {
+        return h(Checkbox, {
+          key: entry.key,
+          className: 'dsh-router-check',
+          checked: Boolean(props.value[entry.key]),
+          disabled: props.disabled,
+          label: t(entry.labelKey + 'Name') + ' · ' + entry.code,
+          title: t(entry.labelKey + 'Desc'),
+          onChange: function () { props.onToggle(entry.key) },
+        })
+      })))
+}
+
+/** One field in the two-column form: label, control, hint. */
+function FieldCol(props) {
+  return h('div', { className: 'dsh-router-field-col' },
+    h('span', { className: 'dsh-router-label' }, props.label),
+    props.children,
+    props.hint === undefined ? null : h('span', { className: 'dsh-router-hint' }, props.hint))
+}
 
 /**
- * 历史抽屉里的失败码文案。字典只覆盖 switchOn 能配的六码 + 终态三码；缺键时 DSH 的
- * locale 会回退成键本身（"codeABORTED"），所以这里显式回退成原始码——用户看到码
- * 比看到内部键名好。宿主 notice.ts 另有一份中文标签，两边各管各的显示面。
+ * The start strategy is the first decision a user makes — it decides which
+ * FALLBACK a request starts from after the first hop fails — so it is the first
+ * section, not a field buried under the budget. The first hop itself is always
+ * tried first and never participates in the draw.
  */
-export function codeLabel(t, code) {
-  var label = t('code' + code)
-  return label === 'code' + code ? code : label
+export function StrategySection(props) {
+  var t = props.t
+  return h('section', { className: 'dsh-router-section' },
+    h('div', { className: 'dsh-router-section-head' },
+      h('h2', { className: 'dsh-router-section-title' }, t('strategySectionTitle')),
+      h('span', { className: 'dsh-router-section-hint' }, t('strategySectionHint'))),
+    h('div', { className: 'dsh-router-field-grid' },
+      h(FieldCol, { label: t('strategyLabel'), hint: t('strategyDetail' + props.strategy) },
+        h(SegmentedControl, {
+          id: 'router-strategy',
+          value: props.strategy,
+          label: t('strategyLabel'),
+          disabled: props.disabled,
+          options: STRATEGIES.map(function (value) {
+            return { value: value, label: t('strategy' + value) }
+          }),
+          onChange: function (next) { props.onStrategy(next) },
+        }))))
 }
 
+/**
+ * What one model call can cost, and the one turn-scoped setting next to it.
+ *
+ * This used to be a "budget" section with a third number (a request-wide hard
+ * cap). That number could only ever cut a request short — it never switched,
+ * never added a call — and it made every user do the arithmetic themselves.
+ * Removed 2026-10-20: the retry numbers per candidate are the budget, and the
+ * line below is read-only so nobody has to add `+1` in their head.
+ */
+export function RetrySection(props) {
+  var t = props.t
+  var first = Math.max(0, Number(props.firstHopMaxRetries) || 0)
+  var candidates = props.candidates ?? []
+  var retries = candidates.reduce(function (sum, candidate) {
+    return sum + Math.max(0, Number(candidate.maxRetries) || 0)
+  }, 0)
+  var calls = first + retries + 1 + candidates.length
+  var formula = candidates.length === 0
+    ? fill(t('retryFormulaFirstOnly'), { calls: calls })
+    : fill(t('retryFormula'), { first: first, candidates: retries, calls: calls })
+  var stickyOptions = [0, 1, 2, 3, 5]
+  var current = Math.max(0, Math.min(99, Number(props.stickyTurns) || 0))
+  if (stickyOptions.indexOf(current) === -1) stickyOptions.push(current)
+  stickyOptions.sort(function (left, right) { return left - right })
+  return h('section', { className: 'dsh-router-section' },
+    h('div', { className: 'dsh-router-section-head' },
+      h('h2', { className: 'dsh-router-section-title' }, t('retrySectionTitle')),
+      h('span', { className: 'dsh-router-section-hint' }, t('retrySectionHint'))),
+    h('div', { className: 'dsh-router-field-grid' },
+      h(FieldCol, { label: t('stickyTurns'), hint: t('stickyTurnsHint') },
+        h(SegmentedControl, {
+          id: 'router-sticky-turns',
+          value: String(current),
+          label: t('stickyTurns'),
+          disabled: props.disabled,
+          options: stickyOptions.map(function (turns) {
+            return { value: String(turns), label: turns === 0 ? t('stickyTurnsOff') : String(turns) }
+          }),
+          onChange: function (next) { props.onStickyTurns(Number(next)) },
+        }))),
+    h('p', { className: 'dsh-router-formula' }, formula),
+    h('p', { className: 'dsh-router-note' }, t('retryHierarchyNote')))
+}
 
-export function FailoverDrawer(props) {
+/**
+ * The failover ledger as a centred dialog — the same `Modal` every other DSH
+ * secondary view uses. It replaced a self-built right-edge drawer whose close
+ * button sat next to the desktop window's own close control.
+ */
+export function FailoverHistoryModal(props) {
   var t = props.t
   var ui = props.state.ui
   var rows = ui.drawerRows
-  var panelRef = useRef(null)
-  // 抽屉是自建的 body-portal 层。接入官方的 modal 层栈：Escape 先关它而不是
-  // 关它下面的快捷控制中心，焦点也圈在抽屉里；z-index 抬到 Modal 之上，
-  // 从控制中心里打开时才真的看得见。
-  useModalLayer(panelRef, ui.drawerOpen, props.onClose)
-  var body = []
-  if (ui.drawerLoading) body.push(h('p', { key: 'loading', style: S.drawerHint }, t('failoverHistoryLoading')))
+  var body
+  if (ui.drawerLoading) body = h('p', { className: 'dsh-router-muted' }, t('failoverHistoryLoading'))
   else if (ui.drawerError) {
-    body.push(h('p', { key: 'error', style: S.drawerHint }, t('failoverHistoryError')))
-    body.push(h('button', { key: 'retry', type: 'button', style: S.manualBtn, onClick: props.onReload }, t('failoverHistoryRetry')))
-  } else if (rows.length === 0) body.push(h('p', { key: 'empty', style: S.drawerHint }, t('failoverHistoryEmpty')))
+    body = h('div', null,
+      h('p', { className: 'dsh-router-muted' }, t('failoverHistoryError')),
+      h(Button, { variant: 'outline', size: 'sm', onClick: props.onReload }, t('failoverHistoryRetry')))
+  } else if (rows.length === 0) body = h('p', { className: 'dsh-router-muted' }, t('failoverHistoryEmpty'))
   else {
-    rows.forEach(function (row, rowIndex) {
-      if (rowIndex > 0) body.push(h('div', { key: 'sep' + rowIndex, style: { height: 1, background: 'var(--dsw-alias-border-l2)', margin: '12px 0' } }))
-      body.push(h('div', { key: 's' + rowIndex, style: S.drawerSession }, t('failoverSessionLabel') + ' ' + String(row.sessionId).slice(0, 8)))
-      row.entries.forEach(function (entry, index) {
-        body.push(h('div', { key: 'e' + rowIndex + '_' + index, style: S.drawerEntry },
-          h('div', { style: S.drawerEntryTime }, new Date(entry.time).toLocaleString()),
-          h('div', { style: S.drawerEntryText },
-            fill(t('failoverEntryLine'), { from: entry.from, code: codeLabel(t, entry.code), to: entry.to }),
-            h('span', { style: Object.assign({}, S.failoverTag, entry.settled ? null : { color: 'var(--dsw-alias-state-warn-primary)' }) },
-              entry.settled ? t('failoverEntrySettled') : t('failoverEntryUnsettled')))))
-      })
-    })
-  }
-  return createPortal(
-    h('div', {
-      style: S.drawerOverlay,
-      onClick: function (e) {
-        if (e.target === e.currentTarget) props.onClose()
-      },
-    },
-      h('div', { ref: panelRef, style: S.drawerPanel, role: 'dialog', 'aria-modal': true, 'aria-label': t('failoverHistoryDrawerTitle') },
-        h('div', { style: S.drawerHeader },
-          h('h3', { style: { fontSize: 15, fontWeight: 600, margin: 0 } }, t('failoverHistoryDrawerTitle')),
-          h('button', { type: 'button', style: S.iconBtn, 'aria-label': t('close'), onClick: props.onClose }, h(Icon, { d: ICON_CLOSE }))),
-        h('div', { style: S.drawerBody },
-          h('p', { style: S.drawerHint }, t('failoverHistoryHint')),
-          body))),
-    document.body,
-  )
-}
-
-
-export function Connector(props) {
-  var t = props.t
-  return h('div', { style: S.connector },
-    h('div', { style: S.connectorLine }),
-    h('span', { style: S.failoverTag },
-      h(Icon, { d: ICON_ARROW_DOWN, size: 10 }),
-      t('failoverTag')),
-    h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } },
-      fill(t('failoverNotice'), { n: props.toIndex })))
-}
-
-
-export function PipelineEditor(props) {
-  var t = props.t
-  var candidates = props.candidates
-  var strategy = props.strategy === 'weight' || props.strategy === 'round-robin' ? props.strategy : DEFAULT_STRATEGY
-  var weightTotal = candidates.reduce(function (sum, c) { return sum + Math.max(0, c.weight || 0) }, 0)
-
-  var dragSourceIndexState = useState(null)
-  var dragSourceIndex = dragSourceIndexState[0]
-  var setDragSourceIndex = dragSourceIndexState[1]
-
-  var dragTargetIndexState = useState(null)
-  var dragTargetIndex = dragTargetIndexState[0]
-  var setDragTargetIndex = dragTargetIndexState[1]
-
-  var handleDragStart = function (e, index) {
-    setDragSourceIndex(index)
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = 'move'
-      e.dataTransfer.setData('text/plain', String(index))
-    }
-  }
-
-  var handleDragOver = function (e, index) {
-    // 拖拽源自己也要能当放置目标之外的"滚回去"目标。
-    e.preventDefault()
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-    if (dragTargetIndex !== index) {
-      setDragTargetIndex(index)
-    }
-  }
-
-  var handleDrop = function (e, toIndex) {
-    e.preventDefault()
-    var from = dragSourceIndex
-    setDragSourceIndex(null)
-    setDragTargetIndex(null)
-    if (from !== null && from !== toIndex) {
-      if (props.onReorder) {
-        props.onReorder(from, toIndex)
-      }
-    }
-  }
-
-  var handleDragEnd = function () {
-    setDragSourceIndex(null)
-    setDragTargetIndex(null)
-  }
-
-  var nodes = []
-  // 1. 第一跳：用户自己选中的模型，只打一次（不在这里配置）
-  nodes.push(h(FirstHopCard, { key: 'first-hop', t: t }))
-
-  // 2. 流程指示
-  nodes.push(h('div', { key: 'flow-indicator', style: S.flowConnector },
-    h('div', { style: S.flowConnectorPill },
-      h(Icon, { d: ICON_ARROW_DOWN, size: 12 }),
-      t('flowIndicatorText'))))
-
-  // 3. 降级候选
-  nodes.push(h('div', { key: 'fallback-header', style: S.fallbackSectionHeader },
-    h('span', { style: S.fallbackSectionTitle },
-      h(Icon, { d: ICON_ROUTE, size: 14 }),
-      t('fallbackChainSection'),
-      h('span', { style: S.countBadge }, String(candidates.length)))))
-
-  if (candidates.length === 0) {
-    nodes.push(h('div', { key: 'fallback-empty', style: S.fallbackEmptyCard },
-      h(Icon, { d: ICON_ROUTE, size: 28, style: { opacity: 0.35, color: 'var(--dsh-router-accent)' } }),
-      h('h4', { style: S.fallbackEmptyTitle }, t('fallbackEmptyTitle')),
-      h('p', { style: S.fallbackEmptyDesc }, t('fallbackEmptyDesc')),
-      h('button', {
-        type: 'button',
-        className: 'dsh-router-catalog-btn',
-        style: S.catalogBtnSm,
-        disabled: props.disabled,
-        onClick: props.onOpenAddCandidate,
-      }, h(Icon, { d: ICON_PLUS, size: 12 }), t('addCandidateBtn'))))
-  } else {
-    candidates.forEach(function (candidate, index) {
-      if (index > 0) {
-        nodes.push(h(Connector, { key: 'c' + index, t: t, toIndex: index + 1 }))
-      }
-      nodes.push(h(CandidateNode, {
-        key: 'n' + index,
-        t: t,
-        candidate: candidate,
-        index: index,
-        total: candidates.length,
-        disabled: props.disabled,
-        catalog: props.catalog,
-        passive: props.passive,
-        discover: props.discover,
-        probe: props.probe,
-        showWeight: strategy === 'weight',
-        weightShare: strategy === 'weight' && weightTotal > 0 ? Math.round((Math.max(0, candidate.weight || 0) / weightTotal) * 100) : 0,
-        isDragging: dragSourceIndex === index,
-        isDragTarget: dragTargetIndex === index,
-        onDragStart: handleDragStart,
-        onDragOver: handleDragOver,
-        onDrop: handleDrop,
-        onDragEnd: handleDragEnd,
-        onMaxAttempts: props.onMaxAttempts,
-        onWeight: props.onWeight,
-        onMove: props.onMove,
-        onRemove: props.onRemove,
-        onNeeds: props.onNeeds,
-        stickyTurns: props.stickyTurns,
-        onStickyTurns: props.onStickyTurns,
-        imageFocus: props.imageFocus,
-      }))
-    })
-  }
-
-  if (props.onJumpPolicies) {
-    nodes.push(h('div', { key: 'policy-summary', style: S.policySummaryCard },
-      h('div', { style: S.policySummaryText },
-        h(Icon, { d: ICON_SHIELD, size: 14, style: { color: 'var(--dsh-router-accent)' } }),
-        fill(t('policySummaryPrefix'), { n: props.maxTotalAttempts || DEFAULT_MAX_TOTAL_ATTEMPTS })),
-      h('button', {
-        type: 'button',
-        className: 'dsh-router-policy-summary-btn',
-        style: S.policySummaryBtn,
-        onClick: props.onJumpPolicies,
-      }, t('policySummaryBtn'))))
-  }
-  return h('div', null,
-    h('div', { style: S.strategyRow },
-      h('span', { style: S.formLabel }, t('strategyLabel')),
-      h(SegmentedTabs, {
-        items: STRATEGY_OPTIONS.map(function (entry) {
-          return { value: entry, label: t('strategy' + entry), id: 'strategy-' + entry, panelId: 'strategy-panel-' + entry }
-        }),
-        value: strategy,
-        onChange: function (value) { if (props.onStrategy) props.onStrategy(value) },
+    body = h('div', { className: 'dsh-router-history' },
+      rows.map(function (row, rowIndex) {
+        return h('section', { key: 's' + rowIndex, className: 'dsh-router-history-session' },
+          h('h3', { className: 'dsh-router-history-title' },
+            t('failoverSessionLabel') + ' ' + String(row.sessionId).slice(0, 8)),
+          h('ul', { className: 'dsh-router-list' },
+            row.entries.map(function (entry, index) {
+              return h('li', { key: 'e' + index, className: 'dsh-router-history-row' },
+                h('span', { className: 'dsh-router-history-time' }, new Date(entry.time).toLocaleString()),
+                h('span', { className: 'dsh-router-history-text' },
+                  fill(t('failoverEntryLine'), {
+                    from: entry.from,
+                    code: codeLabel(t, entry.code),
+                    to: entry.to,
+                  })),
+                h(Tag, { tone: entry.settled ? 'success' : 'warning' },
+                  entry.settled ? t('failoverEntrySettled') : t('failoverEntryUnsettled')))
+            })))
       }),
-      h('span', { style: S.strategyHintTag, title: t('strategyDetail' + strategy) }, t('strategyHint' + strategy))),
-    // 三个策略共用同一个面板：id 跟着选中项走，aria-controls 才指向真实节点。
-    h('div', {
-      id: 'strategy-panel-' + strategy,
-      role: 'tabpanel',
-      'aria-labelledby': 'strategy-' + strategy,
-    }, nodes))
-}
-
-
-export function SwitchOnGrid(props) {
-  var t = props.t
-  // 这个页签的真实任务是「我该勾哪几个」，而 6 张卡片各带一句场景说明、下面
-  // 还有一张安全说明卡，用户要先读 8 行字才能开始决定。一行实时摘要让勾选
-  // 的结果当场可见，而不是靠读描述在脑子里推。见 ui-review.md P2-7。
-  var checkedCount = SWITCH_ON_CODES.filter(function (entry) { return Boolean(props.value[entry.key]) }).length
-  return h('div', null,
-    h('div', { style: S.triggerSummary },
-      h(Icon, { d: checkedCount > 0 ? ICON_SHIELD : ICON_WARN, size: 13, style: { color: checkedCount > 0 ? 'var(--dsh-router-accent)' : 'var(--dsh-router-tone-warn)' } }),
-      h('span', null, fill(t('triggerSummaryLine'), { n: checkedCount, total: SWITCH_ON_CODES.length }))),
-    h('div', { style: S.triggerGrid },
-      SWITCH_ON_CODES.map(function (entry) {
-        var on = Boolean(props.value[entry.key])
-        return h('label', {
-          key: entry.key,
-          className: 'dsh-router-trigger-card',
-          style: Object.assign({}, S.triggerCard, on ? S.triggerCardChecked : null),
-        },
-          h('input', {
-            type: 'checkbox',
-            style: S.triggerChk,
-            checked: on,
-            disabled: props.disabled,
-            onChange: function () { props.onToggle(entry.key) },
-          }),
-          h('div', { style: { flex: 1 } },
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-              h('span', { style: S.triggerName }, t(entry.labelKey + 'Name')),
-              h('span', { style: S.triggerCode }, entry.code)),
-            h('div', { style: S.triggerDesc }, t(entry.labelKey + 'Desc'))))
-      })),
-    h('div', { style: S.safetyBox },
-      h(Icon, { d: ICON_WARN, size: 16 }),
-      h('div', null,
-        h('strong', null, t('safetyNoticeTitle')),
-        ' ' + t('safetyNoticeText'))))
-}
-
-
-export function BudgetRow(props) {
-  var t = props.t
-  return h('div', { style: S.budgetGrid },
-    h('div', { style: S.budgetItem },
-      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        h('span', { style: S.budgetTitle }, t('maxTotalAttempts')),
-        h('span', { style: S.budgetHint }, t('maxTotalAttemptsHint'))),
-      h('div', { style: S.budgetInput },
-        h('input', {
-          style: S.budgetInputField,
-          type: 'text',
-          inputMode: 'numeric',
-          maxLength: 2,
-          'aria-label': t('maxTotalAttempts'),
-          value: String(props.maxTotalAttempts),
-          disabled: props.disabled,
-          onChange: function (event) { props.onMaxTotal(event.target.value) },
-        }),
-        h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } }, t('timesUnit')))),
-    h('div', { style: S.budgetItem },
-      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        h('span', { style: S.budgetTitle }, t('backoffTitle')),
-        h('span', { style: S.budgetHint }, t('backoffHint'))),
-      h(Tag, { tone: 'neutral' }, t('backoffBadge'))))
+      h('p', { className: 'dsh-router-hint' }, t('failoverHistoryHint')))
+  }
+  return h(Modal, {
+    open: true,
+    onClose: props.onClose,
+    title: t('failoverHistoryDrawerTitle'),
+    closeLabel: t('close'),
+    className: 'dsh-router-history-modal',
+    contentClassName: 'dsh-router-modal-content',
+    footer: h(Button, { variant: 'outline', onClick: props.onClose }, t('close')),
+  }, body)
 }

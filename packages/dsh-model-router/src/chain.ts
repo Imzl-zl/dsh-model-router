@@ -19,7 +19,13 @@
 import type { ChainConfig } from './config.ts'
 import type { Strategy } from './config.ts'
 import type { Candidate, SwitchOn } from './config.ts'
-import { DEFAULT_POOL_MAX_TOTAL_ATTEMPTS, DEFAULT_STICKY_TURNS, DEFAULT_STRATEGY, DEFAULT_SWITCH_ON } from './defaults.ts'
+import {
+  DEFAULT_FIRST_HOP_MAX_RETRIES,
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_STICKY_TURNS,
+  DEFAULT_STRATEGY,
+  DEFAULT_SWITCH_ON,
+} from './defaults.ts'
 
 /** Where the effective chain came from, for a one-time log line. */
 export type ChainSource = 'chain' | 'default' | 'profile' | 'empty'
@@ -37,28 +43,44 @@ export function emptyChain(): ChainConfig {
   return {
     candidates: [],
     switchOn: { ...DEFAULT_SWITCH_ON },
-    maxTotalAttempts: DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
     stickyTurns: DEFAULT_STICKY_TURNS,
     strategy: DEFAULT_STRATEGY,
+    firstHopMaxRetries: DEFAULT_FIRST_HOP_MAX_RETRIES,
   }
+}
+
+/**
+ * A candidate as an older build wrote it: a CALL count, not a retry count.
+ *
+ * `maxAttempts` is the pre-2026-10-20 field. Schemastery preserves unknown keys
+ * (verified against the real library), so a legacy record reaches this file with
+ * BOTH keys — the schema stamps its `maxRetries` default onto every object it
+ * validates. That is why {@link normalizeCandidate} keys the migration on the
+ * legacy field's PRESENCE, never on which value "looks configured".
+ */
+interface LegacyCandidate {
+  provider: string
+  model: string
+  maxRetries?: number
+  maxAttempts?: number
+  weight?: number
+  needs?: Candidate['needs']
 }
 
 /** The shape of the old `profiles[]` entry, read only for migration. */
 interface LegacyProfile {
   id?: string
   when?: { provider: string; model: string }
-  candidates?: Candidate[]
+  candidates?: LegacyCandidate[]
   switchOn?: Partial<SwitchOn>
-  maxTotalAttempts?: number
   stickyTurns?: number
   strategy?: Strategy
 }
 
 /** The shape of the old `default` pool, read only for migration. */
 interface LegacyDefault {
-  candidates?: Candidate[]
+  candidates?: LegacyCandidate[]
   switchOn?: Partial<SwitchOn>
-  maxTotalAttempts?: number
   stickyTurns?: number
   strategy?: Strategy
 }
@@ -68,24 +90,52 @@ interface LegacyDefault {
  *
  * `default`/`profiles` are `unknown` on purpose: they are not in the schema, so
  * their shape is whatever an older build wrote. {@link effectiveChain} checks
- * the shape it needs instead of trusting a cast.
+ * the shape it needs instead of trusting a cast. `chain` names the one legacy
+ * key it still reads: `firstHopMaxAttempts` (a call count, superseded by
+ * `firstHopMaxRetries`).
  */
 export interface LegacyAwareConfig {
-  chain?: Partial<ChainConfig>
+  chain?: Partial<ChainConfig> & { firstHopMaxAttempts?: number }
   default?: unknown
   profiles?: unknown
 }
 
 function chainFrom(
-  candidates: Candidate[],
-  over: { switchOn?: Partial<SwitchOn>; maxTotalAttempts?: number; stickyTurns?: number; strategy?: Strategy },
+  candidates: LegacyCandidate[],
+  over: { switchOn?: Partial<SwitchOn>; stickyTurns?: number; strategy?: Strategy; firstHopMaxRetries?: number; firstHopMaxAttempts?: number },
 ): ChainConfig {
   return {
-    candidates,
+    candidates: candidates.map(normalizeCandidate),
     switchOn: { ...DEFAULT_SWITCH_ON, ...over.switchOn },
-    maxTotalAttempts: typeof over.maxTotalAttempts === 'number' ? over.maxTotalAttempts : DEFAULT_POOL_MAX_TOTAL_ATTEMPTS,
     stickyTurns: typeof over.stickyTurns === 'number' ? over.stickyTurns : DEFAULT_STICKY_TURNS,
     strategy: over.strategy === 'weight' || over.strategy === 'round-robin' ? over.strategy : DEFAULT_STRATEGY,
+    firstHopMaxRetries: firstHopRetriesOf(over),
+  }
+}
+
+/**
+ * Retries after the first hop's first call, from either vocabulary.
+ *
+ * Same rule as the candidates: the legacy key wins by presence. A config saved
+ * before 2026-10-20 has `firstHopMaxAttempts` (calls); the schema then stamps
+ * the new `firstHopMaxRetries: 0` default beside it.
+ */
+function firstHopRetriesOf(over: { firstHopMaxRetries?: number; firstHopMaxAttempts?: number }): number {
+  if (typeof over.firstHopMaxAttempts === 'number') return Math.max(0, over.firstHopMaxAttempts - 1)
+  return typeof over.firstHopMaxRetries === 'number' ? over.firstHopMaxRetries : DEFAULT_FIRST_HOP_MAX_RETRIES
+}
+
+/** One candidate in the config's vocabulary: retries, not total calls. */
+function normalizeCandidate(candidate: LegacyCandidate): Candidate {
+  const maxRetries = typeof candidate.maxAttempts === 'number'
+    ? Math.max(0, candidate.maxAttempts - 1)
+    : typeof candidate.maxRetries === 'number' ? candidate.maxRetries : DEFAULT_MAX_RETRIES
+  return {
+    provider: candidate.provider,
+    model: candidate.model,
+    maxRetries,
+    weight: candidate.weight ?? 0,
+    ...(candidate.needs === undefined ? {} : { needs: candidate.needs }),
   }
 }
 
@@ -121,9 +171,16 @@ export function effectiveChain(raw: LegacyAwareConfig): EffectiveChain {
   if (profiles.length > 0) {
     const adopted = profiles[0]!
     // candidates[0] is the pinned `when` model — it is the implicit first hop now.
+    // Its call count is exactly what the first hop's retry budget means today
+    // (calls - 1), so the migration carries it instead of resetting a configured
+    // 3-call hop back to the default of no retry.
+    const pinned = (adopted.candidates ?? [])[0]
     const fallbacks = (adopted.candidates ?? []).slice(1)
     return {
-      chain: chainFrom(fallbacks, adopted),
+      chain: chainFrom(fallbacks, {
+        ...adopted,
+        ...(pinned?.maxAttempts === undefined ? {} : { firstHopMaxAttempts: pinned.maxAttempts }),
+      }),
       source: 'profile',
       ignoredProfiles: Math.max(0, profiles.length - 1),
     }

@@ -1,17 +1,8 @@
-/** Channel telemetry surfaces: the metrics dashboard and the compact health pill. */
+/** One route's telemetry: the 24-bar window and the two figures that must not be blended. */
 
 import { h } from './dom.ts'
-import { S } from './styles.ts'
-import { fill, formatLatency, formatThroughput, formatTime, formatWindowHours, healthToneStyle, routeStatus } from './format.ts'
+import { fill, formatLatency, formatThroughput, formatTime, formatWindowHours, healthToneStyle } from './format.ts'
 import { bucketTimeline, bucketTone, DEFAULT_TIMELINE_BUCKET_SECONDS, windowSuccessRate } from '../timeline.ts'
-
-export function reasoningLabelOf(catalog, provider, model) {
-  var group = (catalog?.groups ?? []).find(function (entry) { return entry.id === provider })
-  var entry = (group?.models ?? []).find(function (item) { return item.id === model })
-  var efforts = entry?.reasoning?.efforts
-  if (!efforts || efforts.length === 0) return undefined
-  return efforts.map(function (effort) { return effort.name }).join(' / ')
-}
 
 /**
  * 时间轴的一格：高度是该桶的成功率，颜色按分档，空桶是无数据。
@@ -30,8 +21,8 @@ function TimelineBar(props) {
   var tone = bucketTone(bar)
   var rate = bar.successRate
   // 空桶不是 0%：没有任何观测时画一条贴底的空槽，让它读作"没数据"而不是"全失败"。
-  var height = rate === undefined ? 3 : Math.max(4, Math.round(rate * props.maxHeight))
-  var style = Object.assign({}, S.timelineBar, { height: height })
+  var height = rate === undefined ? 6 : Math.max(4, Math.round(rate * props.maxHeight))
+  var style = { height: height }
   if (rate === undefined) {
     style.background = 'transparent'
     style.border = '0.5px dashed var(--dsw-alias-border-l3)'
@@ -54,7 +45,7 @@ function TimelineBar(props) {
   }
   return h('div', {
     key: 'bar-' + bar.start,
-    className: 'dsh-timeline-bar',
+    className: 'dsh-router-timeline-bar dsh-timeline-bar',
     style: style,
     title: tip,
   })
@@ -113,61 +104,24 @@ export function ChannelMetricsDashboard(props) {
 
   var hasRealOutput = record && typeof record.throughputTps === 'number' && record.throughputTps > 0
 
-  return h('div', { style: S.channelMetricsCard },
-    h('div', { style: S.metricsColStatus },
-      h('div', { style: S.metricsStatusHeader },
-        h('span', { style: S.metricsLabel }, fill(t('timelineWindowLabel'), { window: formatWindowHours(bucketSeconds) })),
+  // 行内只放数据：窗口、成功率、时间轴、延迟、吞吐。解释文字收进 tooltip——
+  // 每行都重复一遍图例和指标说明，会把数据淹掉（用户："信息密度全是说明了"）。
+  return h('div', { className: 'dsh-router-metrics' },
+    h('div', { className: 'dsh-router-metrics-status' },
+      h('div', { className: 'dsh-router-metrics-header' },
+        h('span', { className: 'dsh-router-metrics-label' }, fill(t('timelineWindowLabel'), { window: formatWindowHours(bucketSeconds) })),
         // 观测条数只说明"窗口里发生了多少次调用"；窗口本身由标签上的时长说，
         // 不再写一个看起来像上限的 /24。
-        h('span', { style: S.metricsStatusValue },
+        h('span', { className: 'dsh-router-metrics-value' },
           windowRate === null ? t('timelineNoData') : Math.round(windowRate * 1000) / 10 + '%')),
-      h('div', { style: S.timelineBarContainer }, barElements),
-      h('span', { style: S.timelineLegend }, t('timelineLegend'))),
-    h('div', { style: S.metricsColValue },
-      h('span', { style: S.metricsLabel }, t('healthMetricLatency')),
-      h('span', { style: S.metricsValNumber }, formatLatency(record ? record.latencyMs : undefined)),
-      h('span', { style: S.metricsColHint }, t('healthMetricLatencyHint'))),
-    h('div', { style: S.metricsColValue },
-      h('span', { style: S.metricsLabel }, t('healthMetricThroughput')),
-      h('span', { style: S.metricsValNumber }, hasRealOutput ? formatThroughput(record.throughputTps) : '—'),
-      h('span', { style: S.metricsColHint }, hasRealOutput ? t('healthMetricThroughputHint') : t('healthMetricThroughputNone'))))
-}
-
-
-export function HealthSignalDot(props) {
-  var t = props.t
-  var record = props.record
-  // 状态走 routeStatus 单源派生（format.ts），和侧栏、健康大盘同一套口径：只看
-  // passive 记录会让"探测刚判失败的渠道"在这里显示成未观测，同屏两个颜色。
-  var status = routeStatus(props.passive, props.discover, props.probe, props.route)
-  // 两套指标分开说：被动的端到端耗时与真实输出速率来自真实对话，探测只有首字
-  // 延迟。混在一行会让用户以为 161.1t/s 是探测测出来的（探测不产生输出）。
-  var passiveLatency = record && typeof record.latencyMs === 'number' ? formatLatency(record.latencyMs) : null
-  var passiveThroughput = record && typeof record.throughputTps === 'number' && record.throughputTps > 0 ? formatThroughput(record.throughputTps) : null
-  var verdict = props.probe && props.probe[props.route]
-  var probeLatency = verdict && verdict.kind === 'reachable' && typeof verdict.latencyMs === 'number'
-    ? formatLatency(verdict.latencyMs)
-    : null
-  var statusText = t(status === 'healthy' ? 'healthStatusHealthy' : status === 'degraded' ? 'healthStatusDegraded' : status === 'unhealthy' ? 'healthStatusUnhealthy' : 'compactHealthIdle')
-
-  var parts = [statusText]
-  if (passiveLatency) parts.push(t('healthMetricLatency') + ' ' + passiveLatency)
-  if (passiveThroughput) parts.push(t('healthMetricThroughput') + ' ' + passiveThroughput)
-  if (probeLatency) parts.push(t('probeFirstToken') + ' ' + probeLatency)
-  var tip = (props.route || '') + ': ' + parts.join(' · ') + ' (' + t('clickToJumpHealth') + ')'
-  // 标签行只放状态 + 一个主指标：真实对话的端到耗时优先，没有才落到探测首字。
-  var label = statusText + (passiveLatency ? ' · ' + passiveLatency : probeLatency ? ' · ' + t('probeFirstTokenShort') + ' ' + probeLatency : '')
-
-  return h('button', {
-    type: 'button',
-    className: 'dsh-router-signal-dot-btn',
-    style: S.signalBadgeBtn,
-    title: tip,
-    onClick: function (e) {
-      e.stopPropagation()
-      if (props.onJumpHealth) props.onJumpHealth(props.route)
+      h('div', { className: 'dsh-router-timeline', title: t('timelineLegend') }, barElements)),
+    h('div', { className: 'dsh-router-metrics-col', title: t('healthMetricLatencyHint') },
+      h('span', { className: 'dsh-router-metrics-label' }, t('healthMetricLatency')),
+      h('span', { className: 'dsh-router-metrics-number' }, formatLatency(record ? record.latencyMs : undefined))),
+    h('div', {
+      className: 'dsh-router-metrics-col',
+      title: hasRealOutput ? t('healthMetricThroughputHint') : t('healthMetricThroughputNone'),
     },
-  },
-    h('span', { style: Object.assign({}, S.signalDot, healthToneStyle(status)) }),
-    h('span', { style: S.signalBadgeText }, label))
+      h('span', { className: 'dsh-router-metrics-label' }, t('healthMetricThroughput')),
+      h('span', { className: 'dsh-router-metrics-number' }, hasRealOutput ? formatThroughput(record.throughputTps) : '—')))
 }

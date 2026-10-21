@@ -31,7 +31,21 @@ import type {
   LlmModelDiscoveryRequest,
 } from '@deepseek-ai/dsh-llm'
 import type { ConnectivityVerdict, ProbeRoute } from './types.ts'
-import { routeKeyOf } from './routes.ts'
+import { fuseDeadline } from './deadline.ts'
+
+/**
+ * How long one route's discovery may take, in seconds.
+ *
+ * A listing is a real network round trip to the gateway, and the whole run waits
+ * on the slowest route, so this is not a token budget but a patience budget: ten
+ * seconds is far longer than any healthy listing and far shorter than a user
+ * staring at a spinner. It is a constant rather than a config field because the
+ * user has nothing to decide here — a slower endpoint is a broken endpoint.
+ *
+ * Note: 为何是常数、为何超时判 unreachable 而不是"没能检查" —— 见
+ * .agents/notes/implemented/2026-10-21-connectivity-deadline-and-honest-history.md
+ */
+export const CONNECTIVITY_TIMEOUT_SECONDS = 10
 
 /** The llm face the check needs: the directory, and one discovery call. */
 export interface ConnectivityLlm {
@@ -118,6 +132,10 @@ function storedBaseURL(
  * @param route - the physical route to check.
  * @param signal - cancels the discovery; an aborted check rethrows instead of
  *   answering, because "we stopped asking" is not "the endpoint did not answer".
+ * @param timeoutSeconds - the hard cap per route; when it expires the verdict is
+ *   `unreachable` with `TIMEOUT`, the same tier the probe's deadline uses. The
+ *   cap is not a formality: without it an endpoint that accepts the connection
+ *   and never answers leaves the run — and the browser's busy flag — hanging.
  * @returns the route's verdict; a discovery that refuses becomes `unreachable`
  *   carrying its provider-neutral code — unless the code says the runtime never
  *   invoked a discovery at all (see {@link NEVER_DISCOVERED_CODES}), which is
@@ -129,6 +147,7 @@ export async function checkConnectivity(
   settings: ConnectivitySettings | undefined,
   route: ProbeRoute,
   signal?: AbortSignal,
+  timeoutSeconds: number = CONNECTIVITY_TIMEOUT_SECONDS,
 ): Promise<ConnectivityVerdict> {
   const entry = llm.listConfigurableProviders().find(candidate => candidate.provider === route.provider)
   // Not in the directory: DSH has no settings namespace to interrogate for this
@@ -137,8 +156,17 @@ export async function checkConnectivity(
   const request: LlmModelDiscoveryRequest = { provider: route.provider }
   const baseURL = storedBaseURL(settings, entry)
   if (baseURL !== undefined) request.baseURL = baseURL
+  const deadline = fuseDeadline(signal, timeoutSeconds)
   try {
-    const models = await llm.discoverModels(entry.settingsNs, request, signal)
+    // Racing the deadline is what makes "this always answers" an invariant
+    // rather than a hope. Aborting the signal asks the discovery to stop; the
+    // race guarantees our side settles even if it ignores the signal. An
+    // abandoned listing is one dangling request, which is a smaller lie than a
+    // busy flag that never clears.
+    const models = await Promise.race([
+      llm.discoverModels(entry.settingsNs, request, deadline.signal),
+      deadline.whenExpired,
+    ])
     return models.some(model => model.id === route.model)
       ? { provider: route.provider, model: route.model, kind: 'reachable' }
       : { provider: route.provider, model: route.model, kind: 'notAdvertised', advertised: models.length }
@@ -146,6 +174,12 @@ export async function checkConnectivity(
     // 调用方取消了这一轮：中止不是"端点没应答"。原样抛回去，让远程调用以拒绝
     // 结束——客户端本就跑在拒绝路径上（忙态收尾、计数不变）。
     if (signal?.aborted) throw error
+    // Our own deadline: the discovery ran and the endpoint did not answer in
+    // time. Same tier as the probe's timeout, so a stuck gateway cannot be read
+    // as "could not check" (which the UI paints as unknown, not as a fault).
+    if (deadline.expired()) {
+      return { provider: route.provider, model: route.model, kind: 'unreachable', error: 'TIMEOUT' }
+    }
     const code = (error as { code?: unknown }).code
     if (typeof code === 'string' && NEVER_DISCOVERED_CODES.has(code)) {
       return { provider: route.provider, model: route.model, kind: 'unavailable', reason: 'noDiscovery', error: code }
@@ -154,5 +188,7 @@ export async function checkConnectivity(
       ? code
       : error instanceof Error ? error.message : String(error)
     return { provider: route.provider, model: route.model, kind: 'unreachable', error: reason }
+  } finally {
+    deadline.dispose()
   }
 }

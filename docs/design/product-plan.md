@@ -34,14 +34,14 @@ last_updated: "2026-10-12"
 ```yaml
 - when: { provider: deepseek-official, model: deepseek-v4-flash }
   candidates:
-    - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2 }
-    - { provider: pi-ai-gpt,        model: gpt-5,           maxAttempts: 1 }
-    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxAttempts: 1 }
+    - { provider: deepseek-official, model: deepseek-v4-flash, maxRetries: 1 }
+    - { provider: pi-ai-gpt,        model: gpt-5,           maxRetries: 0 }
+    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxRetries: 0 }
 ```
 
 - 第一个候选**必须**就是用户自己选的那个（`candidates[0]` 钉死为 `when` 模型，不可删、不可换序、不适用条件）——让它先试，符合直觉；跳过它就是无失败也静默改路。
 - 顺序即优先级，行内上移/下移调整（DSH 设置表单无拖拽先例）。
-- 每个候选可单独设「在这条渠道上试几次再往下走」。
+- 每个候选可单独设「失败后重试几次再往下走」（`maxRetries`，0 = 首发失败即切）。
 
 ### 2.2 什么情况算失败（`switchOn`）
 
@@ -53,23 +53,27 @@ last_updated: "2026-10-12"
 
 **默认切换的**（2026-10-16 修订）：`AUTH`（凭证被拒）与 `QUOTA`（额度用尽）。此前把它们归入"配置坏了，切换只会把问题藏起来"而不切换——该理由不成立：熔断本来就会让后续请求跳过死渠道（系统早已决定绕着走，旧设计只是把第一次请求也搭进去），且切换从不是静默的（中文 notice 点名失败渠道与码 + 熔断冷却）。对 agent/工作流，"带提示的成功"严格优于硬失败。依据见[决策笔记](../../.agents/notes/implemented/2026-10-16-switch-on-auth-and-quota.md)。
 
-### 2.3 总上限与退避
+### 2.3 重试次数与退避
 
 ```yaml
-  maxTotalAttempts: 6
+  firstHopMaxRetries: 0
+  candidates:
+    - { provider: pi-ai-gpt, model: gpt-5, maxRetries: 2 }
 ```
 
-- `maxTotalAttempts` 是**硬上限**。DSH 的 Agent step 循环本身没有任何 attempt 上限，所以这个必须由插件兜住，否则一个坏请求能跑很久。
-- 退避**不可配置、UI 只读**：同渠道重试的退避归 `llm-retry`（500ms 起步、10s 封顶、0.1 jitter），插件不另设一套；跨候选切换前会先经历一次这样的退避等待，UI hint 必须披露。
+- 字段是**失败后重试几次**（`0..99`），首发不计入；0 = 首发失败即切下一条。每条候选各自独立，没有整请求总上限——一个 step 的花费上界就是各候选 `maxRetries + 1` 之和。
+- 重试由 DSH 的 `llm-retry` 执行，插件只数次数并在额度用尽时切走；因此实际次数还受该 provider 的 `retryPolicy.maxRetries` 限制，填得比它大也没人执行。设置入口在 Models 页，插件不复制这个配置。
+- 未勾选 `switchOn` 的失败码不归插件切：插件不介入，由 DSH 按自己的策略重试并收尾。
+- 退避**不可配置、UI 只读**：同渠道重试之间的退避归 `llm-retry`（500ms 起步、10s 封顶、0.1 jitter），插件不另设一套；跨候选切换是立即的，不插入退避。
 
 ### 2.4 条件路由（images 三态 + 上下文门槛 + 推理档位自动维度）
 
 候选可以带条件，只有条件满足才轮到它。`images` 是**三态**：`true` = 仅带图轮，`false` = 仅无图轮，不填 = 不限——一对互斥条件就是把一条链拆成「识图路 / 文本路」的表达方式：
 
 ```yaml
-    - { provider: deepseek-official, model: deepseek-v4-flash, maxAttempts: 2, needs: { images: false } }
-    - { provider: pi-ai-gpt,        model: gpt-5,           maxAttempts: 1, needs: { images: true } }
-    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
+    - { provider: deepseek-official, model: deepseek-v4-flash, maxRetries: 1, needs: { images: false } }
+    - { provider: pi-ai-gpt,        model: gpt-5,           maxRetries: 0, needs: { images: true } }
+    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxRetries: 0, needs: { minContextTokens: 120000 } }
 ```
 
 | 维度 | 判断依据 | 精确度 |
@@ -97,8 +101,8 @@ last_updated: "2026-10-12"
 
 一条全局降级链，对所有模型生效（`enabled` 开着时）：
 
-- **第一跳是用户当前选中的模型**，只打一次，不在配置里；
-- 失败后按 `chain.candidates` 的顺序试降级候选；
+- **第一跳是用户当前选中的模型**，重试次数由 `chain.firstHopMaxRetries` 配置（默认 0），不在候选列表里；
+- 失败后从 `chain.candidates` 里按起点策略开始（`order` 按顺序 / `weight` 按权重抽 / `round-robin` 轮询）；第一跳永远先试、不参与抽签；
 - `chain.candidates` 为空 = 没有降级可走，插件整个不进入请求路径（不接管）。
 
 ## 三、配置示例（canonical schema，已定稿）
@@ -106,13 +110,14 @@ last_updated: "2026-10-12"
 ```yaml
 enabled: false                # 接管总闸：关掉后所有模型绕过插件（默认关）
 chain:                        # 唯一的降级链
-  candidates:                 # 降级候选；第一跳永远是你当前选中的模型（只打一次），不在这里配置
-    - { provider: pi-ai-gpt,        model: gpt-5,           maxAttempts: 1, needs: { images: true } }
-    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxAttempts: 1, needs: { minContextTokens: 120000 } }
-    - { provider: deepseek-official, model: deepseek-chat,  maxAttempts: 1 }
+  candidates:                 # 降级候选；第一跳是你当前选中的模型，不在这里配置
+    - { provider: pi-ai-gpt,        model: gpt-5,           maxRetries: 0, needs: { images: true } }
+    - { provider: pi-ai-claude,     model: claude-sonnet-5, maxRetries: 0, needs: { minContextTokens: 120000 } }
+    - { provider: deepseek-official, model: deepseek-chat,  maxRetries: 0 }
   switchOn: [RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, EMPTY_RESPONSE]
-  maxTotalAttempts: 6
+  firstHopMaxRetries: 0       # 第一跳失败后重试几次；由 DSH 原生重试在该额度内执行
   stickyTurns: 0              # 带图轮之后粘几个无图轮；0 = 无图轮立即切回
+  strategy: order             # 降级起点策略：第一跳永远先试；它失败后按 order / weight / round-robin 从降级候选开始
 
 health:
   timelineBucketSeconds: 600  # 健康时间轴一格代表多少秒；格数固定 24，窗口 = 24 × 它
@@ -169,9 +174,9 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 细节与证据见[DSH 能力边界](dsh-capability-boundary.md)，此处只列结论：
 
 - **选路**：`agent/request` waterfall，`prepend: true` 注册以位于 `installModelSelection` 外层。已实测：外层返回的 provider/model 成为最终 route，durable `request/header` 与 `assistant/message` 都记真实 route。
-- **恢复**：`agent/request-error`，**注册在 `llm-retry` 内层**（推迟到 `agent/created` 时注册到 `agent.ctx`），**不用 prepend**。这样 llm-retry 先管同 route 重试（含退避与 `llm/retry` durable 记录），它放弃时 `next()` 正好交给 Router 做跨候选 failover。已实测，见[能力边界](dsh-capability-boundary.md) 7.4。若错用 prepend 位于最外层，llm-retry 放弃时 `next()` 直达终态，Router 永远等不到放弃信号。
+- **恢复**：`agent/request-error`，在 root ctx 用 `prepend: true` 注册，因此位于 `llm-retry` 外层：`await next()` 拿到它的决定再处置（放行 / 换候选 / 终态）。候选额度用尽且该切换时，插件在 `await next()` 之前直接决定，llm-retry 的退避与 durable 记录都不会发生。见[能力边界](dsh-capability-boundary.md)。
 - **候选索引**：进程内 `WeakMap<Agent, …>`，按 (agent, turn, step) 键控。**必须自持**——已实测 `agent/request` 在重试时再次触发且解析回用户选择，无法从 waterfall 推断当前候选。
-- **两层 attempt 边界**：同 route 重试归 `llm-retry`（不复制退避）；跨候选 failover 与硬总上限归 Router。总 worst case = `候选数 × (1 + maxRetries)`。声明 `always` policy 的候选 provider 在配置加载时拒绝（它无上限且先 await 下游，行为与 normal 相反）。
+- **两层 attempt 边界**：同 route 重试归 `llm-retry`（不复制退避、不复制 durable 记录）；跨候选 failover 归 Router。每条候选的次数由配置决定，没有整请求上限：一个 step 的花费上界 = Σ(`maxRetries + 1`)。声明 `always` policy 的候选 provider 在配置加载时拒绝（无上限重试会让没勾切换的码永不收尾）。
 - **条件路由取数**：`agent/pre-step` 取本步用户消息，`system-prompt/assemble` 取本步工具，`ctx.sessionProjections.stateOf(session, 'contextPressure')` 取上下文占用；与候选索引放进同一个 per-(agent, turn, step) 状态桶。
 - **durable lineage**：插件自有 `ctx.sessionProjections.register()` 折叠 `request/header` + `assistant/attempt` + `assistant/message`，零新增事件类型、零 plugin record。
 - **包形态**：函数插件，命名导出 `name`/`inject`/`Config`/`apply`；可选服务用 `ctx.get()`；产品可见插件必须有真实 Loader 组合测试。
@@ -180,10 +185,10 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 
 | 期 | 内容 | 准入 |
 |---|---|---|
-| **Phase 1** | 有序备份链 + `switchOn` + 每候选次数 + 硬总上限 + 退避；只接管配了的模型；一条中文通知说明为什么换 | 产品边界已定（已定，见第八节） |
+| **Phase 1** | 有序备份链 + `switchOn` + 每候选重试次数 + 退避；只接管配了的模型；一条中文通知说明为什么换 | 产品边界已定（已定，见第八节） |
 | **Phase 2** | 条件路由（图片 / 工具 / 上下文）；durable lineage 投影；诊断日志 | Phase 1 真实组合测试绿 |
 | **Phase 3** | 候选游标跨重启（显式开启，经 KV 存储） | 有真实用户需求触发 |
-| **不做** | 逻辑模型进选择器；路由压缩/标题（DSH 已自带）；全局健康度 / 熔断 / 权重 / 延迟路由 | 需改核心、重复既有能力或另一子系统 |
+| **不做** | 逻辑模型进选择器；路由压缩/标题（DSH 已自带）；按延迟/价格自动调度 | 需改核心、重复既有能力或另一子系统（全局健康度、熔断、权重/轮询已在插件内实现） |
 
 ## 八、已定的产品决定
 
@@ -197,8 +202,9 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 | 6 | ~~开启接管时自动改新会话默认模型~~ | **已作废**（2026-10-19）：没有主模型就没有要同步的目标；插件因此完全不写 DSH 的全局配置 |
 | 7 | ~~主模型怎么定~~ | **已作废**（2026-10-19），见第 9 条 |
 | 8 | 健康时间轴口径 | **固定 24 格 × 可配时长桶**（默认 10 分钟）。一格是一段时间，柱高是该桶成功率，空桶是无数据；观测点按时间戳保留 24 小时，改桶长不丢历史 |
-| 9 | 产品结构 | **一条全局降级链**。第一跳永远是用户当前选中的模型（只打一次、不在配置里），失败后按配置的降级候选走；不按模型分规则、不分主次。旧配置加载时迁移（`src/chain.ts`） |
+| 9 | 产品结构 | **一条全局降级链**。第一跳永远是用户当前选中的模型（重试次数由 `firstHopMaxRetries` 配置，不在候选列表里），失败后按起点策略从降级候选开始（第一跳永远先试、不参与抽签）；不按模型分规则、不分主次。旧配置加载时迁移（`src/chain.ts`） |
 | 10 | 空链 | **是一种配置**：`chain` 键存在就赢，哪怕没有降级候选；此时插件整个不接管，UI 用空状态说明 |
+| 11 | 重试次数的单位 | 用户配置的是**失败后重试几次**（`maxRetries` / `firstHopMaxRetries`，0..99，不含首发；0 = 首发失败即切）。不设整请求总上限：一个 step 的花费上界 = Σ(`maxRetries + 1`)。旧配置的“调用次数”按 `-1` 迁移 |
 
 ## 九、Schema 与界面设计的三个硬约束
 
@@ -231,14 +237,17 @@ DSH 在自己的 `agent/pre-step` listener 里比较 `selection.assembled` 与 `
 
 配置页要有的东西（中文标签来自本插件字典）——**已实测渲染成功**，见[能力边界](dsh-capability-boundary.md) 7.9.1：
 
+页面按 DSH 原生面板页排版（页面自己滚动，页头与页签吸顶、保存条吸底，四条行共享一条 960 列；契约见 [工作台布局重构](ui-layout-redesign.md)）：
+
 | 区块 | 字段 |
 |---|---|
-| 接管总闸 | 「接管路由」开关，链路页头一行设置（左标签右开关，默认关）。关闭时插件不进入请求路径 |
-| 第一跳 | 只读卡片：「你当前选中的模型」，说明它只打一次、不在配置里 |
-| 降级链 | 有序候选列表：provider / 模型 ID，可增删与排序（整卡可拖，交互控件除外）；没有钉死节点 |
-| 候选高级条件 | 图片 / 最小上下文门槛；推理档位徽标为自动维度 |
+| 接管总闸 | 「接管路由」开关，页面头右侧（默认关）。关闭时插件不进入请求路径 |
+| 起点策略 | order / weight / round-robin 分段控件 + 当前策略说明；weight/round-robin 下第一跳可能不是起点（如实说明） |
+| 第一跳 | 一行：「你当前选中的模型」+ 「失败后重试」步进器（`firstHopMaxRetries`，默认 0）+ 该额度内由 DSH 原生重试执行的说明 |
+| 降级链 | 分区标题右侧 primary「添加候选渠道」；有序扁平行：provider / 模型 ID、健康 Tag、失败后重试、权重（weight 策略）、高级条件、上下移与删除 |
+| 候选高级条件 | 图片三态（不限 / 仅带图 / 仅无图）+ 最小上下文门槛 |
 | 切换条件 | 限流 / 服务端错误 / 超时 / 网络传输 / 空回复（复选框，默认对齐 DSH 自己的 normal policy）+ 请求被拒绝（默认不勾） |
-| 硬上限 | 单请求最多尝试次数 |
+| 尝试预算 | 整条请求最多调用次数 + 识图粘滞（0/1/2/3/5）+「最多 N 次真实调用」计算式 + DSH 原生重试的层次说明 |
 | 渠道健康 | 时间轴 24 格 × 每格时长（1/5/10/30/60 分钟，默认 10 分钟）；柱高=该桶成功率，空槽=无数据 |
 
 Chat 侧零自建成本：一条 `form:'notice'` 的中文通知 + 复用 DSH Trajectory 视图（已实测通知可发、Trajectory 本就渲染 attempt 链）。

@@ -60,7 +60,10 @@ function notice(text: string): UserMessage {
  * The wording says "降级 N/M", not "候选 N/M", and never "主模型": there is one
  * global chain and its first hop is whatever the user selected, so a failing
  * hop may itself be a fallback. `position` is the user-visible fallback number
- * (1-based, the order they configured), not the rotated index.
+ * (1-based, the order they configured), not the rotated index. `position === 0`
+ * means the chain moved BACK to the user's own model (possible under the
+ * weight/round-robin start strategies), which is not a fallback at all — saying
+ * "降级 0/N" there would be a number that cannot exist.
  */
 export function failoverNotice(
   from: { provider: string; model: string },
@@ -70,9 +73,12 @@ export function failoverNotice(
   code: string | undefined,
 ): UserMessage {
   const reason = code === undefined ? '连续失败' : `失败（${codeLabel(code)}）`
+  const target = routeLabel(to.provider, to.model, from.provider)
+  const move = position <= 0
+    ? `已切回你选择的模型 ${target}`
+    : `已切换至 ${target}（降级 ${position}/${total}）`
   return notice(
-    `[路由切换] ${routeLabel(from.provider, from.model, to.provider)} ${reason}，`
-    + `已切换至 ${routeLabel(to.provider, to.model, from.provider)}（降级 ${position}/${total}）`,
+    `[路由切换] ${routeLabel(from.provider, from.model, to.provider)} ${reason}，${move}`,
   )
 }
 

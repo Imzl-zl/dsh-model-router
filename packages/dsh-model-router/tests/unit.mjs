@@ -81,7 +81,7 @@ test('no image block means no images', () => {
 
 // ---- unmetCondition ----
 
-const candidate = (needs) => ({ provider: 'p', model: 'm', maxAttempts: 1, ...(needs === undefined ? {} : { needs }) })
+const candidate = (needs) => ({ provider: 'p', model: 'm', ...(needs === undefined ? {} : { needs }) })
 const conditions = (hasImages, projectedTokens) => ({ hasImages, projectedTokens })
 
 test('no needs means always eligible', () => {
@@ -110,7 +110,6 @@ const chainOf = (maxAttempts, count = 3, strategy = 'order') => ({
   candidates: Array.from({ length: count }, (_, index) => ({ provider: 'p', model: `m${index}`, maxAttempts, weight: 0 })),
   order: Array.from({ length: count }, (_, index) => index),
   switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
-  maxTotalAttempts: 10,
   strategy,
 })
 
@@ -152,16 +151,18 @@ test('planFire without mayAdvance stays on the capped candidate', () => {
 
 // ---- decideRecovery ----
 
-test('recovery terminates on an unchecked code even when the cap allows more', () => {
+test('recovery terminates on an unchecked code even when the candidate has retries left', () => {
   const state = { ...startStep(1, 1, chainOf(1, 2), emptyConditions()), totalAttempts: 1 }
   assert.equal(decideRecovery(state, 'AUTH', false), 'terminal')
   assert.equal(decideRecovery(state, 'ABORTED', false), 'terminal')
 })
 
-test('recovery retries an eligible code within budget, terminates at the cap', () => {
+test('recovery advances an eligible code while another candidate exists, terminates at the chain end', () => {
   const base = { ...startStep(1, 1, chainOf(1, 2), emptyConditions()), totalAttempts: 1 }
-  assert.equal(decideRecovery(base, 'TIMEOUT', false), 'retry')
-  assert.equal(decideRecovery({ ...base, totalAttempts: 10 }, 'TIMEOUT', false), 'terminal')
+  assert.equal(decideRecovery(base, 'TIMEOUT', false), 'advance')
+  // 链走完（末位候选）即终态：没有整请求总上限，边界就是候选本身。
+  const last = { ...startStep(1, 1, chainOf(1, 2), emptyConditions()), index: 1, totalAttempts: 2 }
+  assert.equal(decideRecovery(last, 'TIMEOUT', false), 'terminal')
   assert.equal(decideRecovery(base, 'TIMEOUT', true), 'terminal')
 })
 
@@ -172,37 +173,50 @@ test('recovery retries an eligible code within budget, terminates at the cap', (
 // 拿出轮换（换走 / 凉住 / 终态）就记熔断；失败尚未定论（放行内层继续重试同一条路由）
 // 就不记。index.ts 只剩解释器——调决策、按声明应用副作用、返回决策。
 
-const recoveryChain = (maxAttempts, count, maxTotalAttempts) => ({
-  ...chainOf(maxAttempts, count),
-  maxTotalAttempts,
-})
+const recoveryChain = (maxAttempts, count) => chainOf(maxAttempts, count)
 const at = (chain, over) => ({ ...startStep(1, 1, chain, emptyConditions(), 0), ...over })
 
-test('before inner: the cap-spent candidate that should switch decides without llm-retry', () => {
-  const ruling = decideBeforeInner(at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }), 'RATE_LIMIT', false)
-  assert.equal(ruling.kind, 'retry')
-  assert.equal(ruling.record, true)
-  assert.match(ruling.log, /this candidate's budget is spent, switching without llm-retry/)
-})
-
-test('before inner: nothing left to switch to, or no budget left, terminates and still records', () => {
-  const lastCandidate = at(recoveryChain(1, 1, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
-  const noBudget = at(recoveryChain(1, 2, 2), { attemptsOnCandidate: 1, totalAttempts: 2 })
-  for (const state of [lastCandidate, noBudget]) {
-    const ruling = decideBeforeInner(state, 'RATE_LIMIT', false)
-    assert.equal(ruling.kind, 'terminate')
-    assert.equal(ruling.record, true)
-    assert.match(ruling.log, /terminating without llm-retry/)
+test('before inner: a candidate with attempts left retries itself, with a real backoff', () => {
+  // 2026-10-21：勾选的码由路由器自己重试，次数就是配置的次数。等待复刻该
+  // provider 的策略曲线（这里 jitterRatio 0 + random 0.5 ⇒ 恰好 initialDelay）。
+  const policy = { mode: 'normal', maxRetries: 5, retryableCodes: [], initialDelayMs: 500, maxDelayMs: 10000, jitterRatio: 0 }
+  const underCapHop = at(recoveryChain(2, 2), { index: 0, attemptsOnCandidate: 1, totalAttempts: 1 })
+  const underCapFallback = at(recoveryChain(2, 2), { index: 1, attemptsOnCandidate: 1, totalAttempts: 2 })
+  for (const state of [underCapHop, underCapFallback]) {
+    const ruling = decideBeforeInner(state, 'RATE_LIMIT', false, { policy, random: () => 0.5 })
+    assert.equal(ruling.kind, 'retry-self')
+    assert.equal(ruling.record, false, 'nothing left rotation: the route is still being retried')
+    assert.equal(ruling.log, '')
+    assert.equal(ruling.delayMs, 500, 'the first retry waits the policy initial delay')
   }
+  // 第二次重试翻倍（指数），仍受 maxDelayMs 截断。
+  const second = decideBeforeInner(at(recoveryChain(3, 2), { attemptsOnCandidate: 2, totalAttempts: 2 }), 'RATE_LIMIT', false, { policy, random: () => 0.5 })
+  assert.equal(second.delayMs, 1000)
 })
 
-test('before inner: an under-cap candidate, an unchecked code or an abort defers to llm-retry', () => {
-  const underCap = at(recoveryChain(2, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
-  const capSpent = at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
+test('before inner: the spent candidate that should switch decides without llm-retry', () => {
+  const ruling = decideBeforeInner(at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 }), 'RATE_LIMIT', false)
+  assert.equal(ruling.kind, 'advance')
+  assert.equal(ruling.record, true)
+  assert.match(ruling.log, /this candidate's retry budget is spent, switching/)
+})
+
+test('before inner: the last candidate ends the step once its budget is spent', () => {
+  const ruling = decideBeforeInner(at(recoveryChain(1, 1), { attemptsOnCandidate: 1, totalAttempts: 1 }), 'RATE_LIMIT', false)
+  assert.equal(ruling.kind, 'terminate')
+  assert.equal(ruling.record, true)
+  assert.match(ruling.log, /and the chain has nothing left, terminating/)
+})
+
+test('before inner: an unchecked code or an abort still defers to llm-retry', () => {
+  // 路由器只接管 switchOn 勾选的失败。没勾的码与取消都不是它的事：
+  // 前者仍由 DSH 按自己的策略重试，后者是一次没人等的调用。
+  const underCap = at(recoveryChain(2, 2), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  const spent = at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 })
   const rows = [
-    [underCap, 'RATE_LIMIT', false],
-    [capSpent, 'EMPTY_RESPONSE', false],
-    [capSpent, 'RATE_LIMIT', true],
+    [underCap, 'EMPTY_RESPONSE', false],
+    [spent, 'EMPTY_RESPONSE', false],
+    [spent, 'RATE_LIMIT', true],
   ]
   for (const [state, code, aborted] of rows) {
     const ruling = decideBeforeInner(state, code, aborted)
@@ -212,54 +226,61 @@ test('before inner: an under-cap candidate, an unchecked code or an abort defers
   }
 })
 
-test('after inner: a retry the budget still covers is honored untouched, unrecorded', () => {
-  const ruling = decideAfterInner(at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }), 'RATE_LIMIT', false, 'retry')
-  assert.equal(ruling.kind, 'honor')
-  assert.equal(ruling.record, false)
-  assert.equal(ruling.log, '')
-})
-
-test('after inner: the budget is spent, so the inner retry is vetoed — and the failure is recorded', () => {
-  // 待办 4：否决分支的终态也要记熔断（此前只 warn 不记）。规则说"把候选拿出轮换就
-  // 记"，终态是比换走更彻底的拿出——不记，这一形状下为该码配的熔断规则就永不落库。
-  const spent = at(recoveryChain(1, 2, 5), { attemptsOnCandidate: 1, totalAttempts: 5 })
-  const exhausted = at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1, exhausted: true })
-  for (const state of [spent, exhausted]) {
+test('after inner: an inner retry is always honored — there is no cap left to veto it', () => {
+  // 2026-10-20 删除整请求总上限之后，"否决内层重试"这条分支没有剩余理由：
+  // 额度耗尽的那一条在 decideBeforeInner 就被提前接管，轮不到这里；没勾的码本来就归 DSH。
+  const cases = [
+    at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 }),
+    at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 99 }),
+    at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1, exhausted: true }),
+  ]
+  for (const state of cases) {
     const ruling = decideAfterInner(state, 'RATE_LIMIT', false, 'retry')
-    assert.equal(ruling.kind, 'terminate')
-    assert.equal(ruling.record, true)
-    assert.match(ruling.log, /terminating instead of retrying/)
+    assert.equal(ruling.kind, 'honor')
+    assert.equal(ruling.record, false)
+    assert.equal(ruling.log, '')
   }
 })
 
 test('after inner: llm-retry gave up, so the chain continues or ends — recorded either way', () => {
-  const continuing = at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 })
-  const retry = decideAfterInner(continuing, 'TIMEOUT', false, undefined)
-  assert.equal(retry.kind, 'retry')
-  assert.equal(retry.record, true)
-  assert.match(retry.log, /continuing the chain/)
+  const continuing = at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  const advance = decideAfterInner(continuing, 'TIMEOUT', false, undefined)
+  assert.equal(advance.kind, 'advance')
+  assert.equal(advance.record, true)
+  assert.match(advance.log, /continuing the chain/)
   const terminal = decideAfterInner(continuing, 'ABORTED', false, undefined)
   assert.equal(terminal.kind, 'terminate')
   assert.equal(terminal.record, true)
   assert.equal(terminal.log, '')
 })
 
-test('the record rule holds across the whole ruling table: only delegate and honor stay unrecorded', () => {
+test('after inner: the last candidate ends the step instead of retrying itself without backoff', () => {
+  // llm-retry 已经放弃同路由重试；此时"本候选还有额度"不是再打一次的理由——
+  // 那正是没有退避的盲重试，还会把 exhausted 置在一个没到上限的候选上。
+  const last = at(recoveryChain(3, 2), { index: 1, attemptsOnCandidate: 1, totalAttempts: 3 })
+  assert.equal(decideRecovery(last, 'TIMEOUT', false), 'terminal')
+  const ruling = decideAfterInner(last, 'TIMEOUT', false, undefined)
+  assert.equal(ruling.kind, 'terminate')
+  assert.equal(ruling.record, true)
+})
+
+test('the record rule holds across the whole ruling table: only delegate, retry-self and honor stay unrecorded', () => {
   // 不变量本身：record === 这个裁决把候选拿出了轮换。穷举状态 × 码 × aborted × 内层
   // 决定，任一分支漏记都会在这里红——待办 4 就是这个测试当时会抓到的形状。
   const states = [
-    at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 0, totalAttempts: 0 }),
-    at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }),
-    at(recoveryChain(2, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }),
-    at(recoveryChain(1, 2, 2), { attemptsOnCandidate: 1, totalAttempts: 2 }),
-    at(recoveryChain(1, 1, 6), { attemptsOnCandidate: 1, totalAttempts: 1 }),
-    at(recoveryChain(1, 2, 6), { attemptsOnCandidate: 1, totalAttempts: 1, exhausted: true }),
+    at(recoveryChain(1, 2), { attemptsOnCandidate: 0, totalAttempts: 0 }),
+    at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 }),
+    at(recoveryChain(2, 2), { attemptsOnCandidate: 1, totalAttempts: 1 }),
+    at(recoveryChain(1, 1), { attemptsOnCandidate: 1, totalAttempts: 1 }),
+    at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1, exhausted: true }),
   ]
   for (const state of states) {
     for (const code of ['RATE_LIMIT', 'TIMEOUT', 'EMPTY_RESPONSE', 'ABORTED']) {
       for (const aborted of [false, true]) {
         const before = decideBeforeInner(state, code, aborted)
-        assert.equal(before.record, before.kind !== 'delegate', `before ${code}/${String(aborted)}`)
+        // 记录 ⟺ 这次失败把当前候选拿出了轮换（换走 / 终态）。放行内层与
+        // "自己重试同一条路由"都不是定论，都不记。
+        assert.equal(before.record, before.kind === 'advance' || before.kind === 'terminate', `before ${code}/${String(aborted)}`)
         for (const inner of [undefined, 'retry']) {
           const after = decideAfterInner(state, code, aborted, inner)
           assert.equal(after.record, after.kind !== 'honor', `after ${code}/${String(aborted)}/${String(inner)}`)
@@ -314,13 +335,22 @@ test('rotate wraps so the start is the head and the rest follow in order', () =>
   assert.deepEqual(rotate([], 2), [])
 })
 
-test('startStep rotates the chain but keeps the user-visible order', () => {
+test('startStep keeps the first hop at the head and rotates only the fallbacks', () => {
   const chain = chainOf(1, 3)
   const state = startStep(1, 1, chain, emptyConditions(), 1)
-  assert.deepEqual(state.chain.candidates.map(c => c.model), ['m1', 'm2', 'm0'])
-  // 界面和通知说的"第几条"仍是用户自己排的那一套。
-  assert.deepEqual(state.chain.order, [1, 2, 0])
+  // 第一跳（m0）永远是链首；起点只作用于它后面的降级候选。
+  assert.deepEqual(state.chain.candidates.map(c => c.model), ['m0', 'm2', 'm1'])
+  // 界面和通知说的"第几条"仍是用户自己排的那一套（第一跳固定是 0）。
+  assert.deepEqual(state.chain.order, [0, 2, 1])
   assert.equal(state.index, 0)
+})
+
+test('the first hop never leaves the head under any start index', () => {
+  for (const start of [0, 1, 2, 5, -1]) {
+    const state = startStep(1, 1, chainOf(1, 3), emptyConditions(), start)
+    assert.equal(state.chain.candidates[0].model, 'm0', `start=${start}`)
+    assert.equal(state.chain.order[0], 0, `start=${start}`)
+  }
 })
 
 test('startStep at the head leaves the chain untouched', () => {
@@ -514,7 +544,7 @@ test('the client save shape lands where the host reads it', () => {
   // 默认值，整个功能静默失效。这条用例守住那个错误。
   const raw = {
     enabled: true,
-    chain: { candidates: [], switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
+    chain: { candidates: [], switchOn: {}, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
     health: {
       passive: true,
       discover: { enabled: true, intervalSeconds: 5 },
@@ -534,7 +564,7 @@ test('the client save shape lands where the host reads it', () => {
 test('a legacy flat health config keeps its schedule by converting minutes to seconds', () => {
   const seen = hostConfig({
     enabled: true,
-    chain: { candidates: [], switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
+    chain: { candidates: [], switchOn: {}, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
     health: { enabled: true, prompt: 'hi', intervalMinutes: 5, timeoutSeconds: 8 },
   })
   // normalizeHealth 负责迁移；这里断言的是 Host 不会因为旧形状而丢字段或报错。
@@ -544,16 +574,16 @@ test('a legacy flat health config keeps its schedule by converting minutes to se
 
 test('assertStructural rejects a weight strategy with no positive weight', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  const base = { chain: { candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 0 }], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'weight' } }
+  const base = { chain: { candidates: [{ provider: 'a', model: 'm', maxRetries: 0, weight: 0 }], switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'weight' } }
   assert.throws(() => assertStructural(base), /weight strategy but no candidate has a positive weight/)
   assert.doesNotThrow(() => assertStructural({
-    chain: { ...base.chain, candidates: [{ provider: 'a', model: 'm', maxAttempts: 1, weight: 5 }] },
+    chain: { ...base.chain, candidates: [{ provider: 'a', model: 'm', maxRetries: 0, weight: 5 }] },
   }))
 })
 
 test('assertStructural rejects a breaker rule that matches nothing', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-  const emptyChain = { chain: { candidates: [], switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' } }
+  const emptyChain = { chain: { candidates: [], switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' } }
   const health = (breaker) => ({ passive: true, discover: { enabled: false, intervalSeconds: 0 }, probe: { enabled: false, intervalSeconds: 0, prompt: '1', prompts: [], timeoutSeconds: 8 }, breaker })
   assert.throws(() => assertStructural({
     ...emptyChain,
@@ -575,13 +605,13 @@ test('assertStructural rejects a breaker rule that matches nothing', () => {
 test('assertStructural rejects a chain that names the same route twice', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
   const twice = [
-    { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-    { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+    { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
+    { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
   ]
   // 同链重复的渠道会被各打一遍（各含一次退避等待），白吃 attempt 预算，结构校验就挡住。
   // 目录多选与多行手录都可能录出重复。
   assert.throws(() => assertStructural({
-    chain: { candidates: twice, switchOn: so, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' },
+    chain: { candidates: twice, switchOn: so, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order' },
   }), /names stub-primary\/stub-model more than once/)
 })
 
@@ -593,19 +623,19 @@ test('assertStructural rejects a chain that names the same route twice', () => {
 // 一个加载即被拒的配置，吃的还是一句英文错误。
 
 const crossSo = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-const crossChain = (over = {}) => ({ candidates: [], switchOn: crossSo, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
+const crossChain = (over = {}) => ({ candidates: [], switchOn: crossSo, firstHopMaxRetries: 0, stickyTurns: 0, strategy: 'order', ...over })
 const crossHealth = (rules) => ({ breaker: { enabled: true, rules } })
 
 // 每条跨字段规则一个形状；keys 是规则模块必须产出的违规键序列（顺序即 host 先抛哪条）。
 const crossCases = [
   ['one route named twice in the chain', {
     chain: crossChain({ candidates: [
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
+      { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
+      { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
     ] }),
   }, ['problemDuplicateRouteInChain']],
   ['a weight strategy with nothing to draw', {
-    chain: crossChain({ strategy: 'weight', candidates: [{ provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 }] }),
+    chain: crossChain({ strategy: 'weight', candidates: [{ provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 }] }),
   }, ['problemWeightNoPositive']],
   ['a breaker rule that matches nothing', {
     chain: crossChain(),
@@ -649,14 +679,15 @@ test('single-field bounds belong to the schema: it refuses each value the delete
   // （index.ts 读 Cordis 已校验值、Config(raw) 自己跑一遍），那些 guard 全是死
   // 分支——只在 schema 收紧时变成"接不住"的谎言。删掉之后这条用例钉住 schema
   // 真的拥有它们：任何一个条件被 schema 放行就红。
-  const candidate = (over = {}) => ({ provider: 'p', model: 'm', maxAttempts: 1, weight: 0, ...over })
+  const candidate = (over = {}) => ({ provider: 'p', model: 'm', maxRetries: 0, weight: 0, ...over })
   const chain = (over = {}, candidates = [candidate()]) => ({
-    candidates, switchOn: {}, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over,
+    candidates, switchOn: {}, stickyTurns: 0, strategy: 'order', firstHopMaxRetries: 0, ...over,
   })
   const base = (over = {}) => ({ enabled: true, chain: chain(), ...over })
   const cases = [
-    ['candidate.maxAttempts < 1', base({ chain: chain({}, [candidate({ maxAttempts: 0 })]) })],
-    ['chain.maxTotalAttempts < 1', base({ chain: chain({ maxTotalAttempts: 0 }) })],
+    ['candidate.maxRetries < 0', base({ chain: chain({}, [candidate({ maxRetries: -1 })]) })],
+    ['candidate.maxRetries > 99', base({ chain: chain({}, [candidate({ maxRetries: 100 })]) })],
+    ['chain.firstHopMaxRetries > 99', base({ chain: chain({ firstHopMaxRetries: 100 }) })],
     ['chain.stickyTurns < 0', base({ chain: chain({ stickyTurns: -1 }) })],
     ['health.discover.intervalSeconds < 0', base({ health: { discover: { intervalSeconds: -1 } } })],
     ['health.probe.intervalSeconds < 0', base({ health: { probe: { intervalSeconds: -1 } } })],
@@ -1276,9 +1307,9 @@ test('a negative stickyTurns is refused by the schema, not by a structural guard
   // 单字段边界归 schema：这里钉住它真的归 schema。
   assert.throws(() => Config({
     chain: {
-      candidates: [{ provider: 'p', model: 'm', maxAttempts: 1, weight: 0 }],
+      candidates: [{ provider: 'p', model: 'm', maxRetries: 0, weight: 0 }],
       switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
-      maxTotalAttempts: 6,
+      firstHopMaxRetries: 0,
       stickyTurns: -1,
     },
   }), /stickyTurns/)
@@ -1287,9 +1318,9 @@ test('a negative stickyTurns is refused by the schema, not by a structural guard
 test('assertStructural accepts stickyTurns 0 and a positive value', () => {
   const so = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
   const chain = (stickyTurns) => ({
-    candidates: [{ provider: 'p', model: 'm', maxAttempts: 1, weight: 0 }],
+    candidates: [{ provider: 'p', model: 'm', maxRetries: 0, weight: 0 }],
     switchOn: so,
-    maxTotalAttempts: 6,
+    firstHopMaxRetries: 0,
     stickyTurns,
   })
   assertStructural({ chain: chain(0) })
@@ -1514,41 +1545,54 @@ test('the last candidate is not fired once past its cap, and neither is a lone o
   // C2：`planFire` 在末位候选被 cap 时置 exhausted、attemptsOnCandidate 仍 +1，
   // 而第一个能阻止这次发火的决策点（decideRecovery）在下一次失败后才跑——多打的
   // 那一次已经打完，且 advanced===false 连 notice 都不发，用户完全看不见。
-  // 修法把"还能不能发"提成 canFireAgain 谓词，由 decideRecovery 在授权下一次
-  // 发火之前判。这里复现 index.ts 的发射循环，判据全部取自生产函数本身
+  // 修法把"还能不能发"提成 hasNextCandidate 谓词，由 decideRecovery 在授权下一次
+  // 发火之前判（且只授权落在另一条候选上的发火）。这里复现 index.ts 的发射循环，
+  // 判据全部取自生产函数本身
   // （planFire / isSwitchOnEligible / decideRecovery），不另写一套停止条件。
-  const chainOf = (n, maxAttempts, maxTotalAttempts) => ({
+  // 2026-10-20 删掉整请求总上限后，边界只剩"候选 × 各自次数"。
+  const chainOf = (n, maxAttempts) => ({
     candidates: Array.from({ length: n }, (_, i) => ({ provider: `c${i}`, model: 'm', maxAttempts })),
     order: Array.from({ length: n }, (_, i) => i),
     switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true },
-    maxTotalAttempts,
     stickyTurns: 0,
     strategy: 'order',
   })
-  const replay = (n, maxAttempts, maxTotalAttempts, code) => {
-    let state = startStep(1, 1, chainOf(n, maxAttempts, maxTotalAttempts), { hasImages: false, projectedTokens: undefined }, 0)
+  // 复现真实的发射循环：planFire → 失败 → decideBeforeInner（额度未尽就 delegate，
+  // 否则自己裁决）→ 被 delegate 时由 llm-retry 回答（inner='retry' 或放弃）。
+  // 判据全部取自生产函数，不另写一套停止条件。
+  const replay = (n, maxAttempts, code, inner) => {
+    let state = startStep(1, 1, chainOf(n, maxAttempts), { hasImages: false, projectedTokens: undefined }, 0)
     const calls = []
     for (let guard = 0; guard < 30; guard += 1) {
       const plan = planFire(state, isSwitchOnEligible(state.chain, code))
       state = plan.state
       calls.push(plan.state.index)
-      if (decideRecovery(state, code, false) !== 'retry') break
+      const before = decideBeforeInner(state, code, false)
+      const ruling = before.kind === 'delegate'
+        ? decideAfterInner(state, code, false, inner)
+        : before
+      // 自己重试与放行内层一样，都是"下一发仍在这条候选上"。
+      if (ruling.kind === 'honor' || ruling.kind === 'retry-self') { state.pendingAdvance = false; continue }
+      if (ruling.kind === 'advance') { state.pendingAdvance = true; continue }
+      break
     }
     return { calls, finalState: state }
   }
   // 每候选恰好一次：总数 = 各候选上限之和，一次不多。
-  const three = replay(3, 1, 6, 'AUTH')
+  const three = replay(3, 1, 'AUTH', 'retry')
   assert.deepEqual(three.calls, [0, 1, 2])
   assert.equal(three.finalState.totalAttempts, 3)
   // 单候选链（合法形态）同样不再打第二次。
-  assert.deepEqual(replay(1, 1, 6, 'AUTH').calls, [0])
-  // 总上限先绷紧的形状不变：cap 2 × 3 候选、总上限 6，六次打完由总上限终态。
-  assert.deepEqual(replay(3, 2, 6, 'AUTH').calls, [0, 0, 1, 1, 2, 2])
-  // 总上限有余额时，末位候选也不许多打：修复前这里是 [0,0,1,1,2,2,2]。
-  assert.deepEqual(replay(3, 2, 8, 'AUTH').calls, [0, 0, 1, 1, 2, 2])
+  assert.deepEqual(replay(1, 1, 'AUTH', 'retry').calls, [0])
+  // cap 2 × 3 候选：每候选两次，总共六次真实调用。
+  assert.deepEqual(replay(3, 2, 'AUTH', 'retry').calls, [0, 0, 1, 1, 2, 2])
+  // 2026-10-21 起内层是否愿意重试与该码无关：勾选的码由路由器自己重试，
+  // 次数就是配置的次数。同一个 AUTH 在 llm-retry 放弃时也必须打满两次——
+  // 这正是"填 2 就是 2"与旧的 1+min(2,0) 的分界。
+  assert.deepEqual(replay(3, 2, 'AUTH', undefined).calls, [0, 0, 1, 1, 2, 2])
   // 不该切换的码：llm-retry 继续打同一条路由（既有意图），恢复监听终态——
-  // 这条路径不产出 C2 形状，钉住它没被 canFireAgain 顺手改掉。
-  const capped = { ...startStep(1, 1, chainOf(1, 1, 6), { hasImages: false, projectedTokens: undefined }, 0), attemptsOnCandidate: 1, totalAttempts: 1 }
+  // 这条路径不产出 C2 形状，钉住它没被 hasNextCandidate 顺手改掉。
+  const capped = { ...startStep(1, 1, chainOf(1, 1), { hasImages: false, projectedTokens: undefined }, 0), attemptsOnCandidate: 1, totalAttempts: 1 }
   const plan = planFire(capped, false)
   assert.equal(plan.state.exhausted, false, 'a non-eligible failure leaves the cursor alone for llm-retry')
   assert.equal(plan.state.attemptsOnCandidate, 2)
@@ -1578,8 +1622,10 @@ function discoveryLlm({ directory = [], answers = {}, settings } = {}) {
         throw Object.assign(new Error(`no model discovery is registered for "${settingsNs}"`), { code: 'NO_DISCOVERY' })
       }
       // A function answer is the discovery itself: calling it is what lets a
-      // case make the refusal happen on the call rather than before it.
-      return typeof answer === 'function' ? answer() : answer
+      // case make the refusal happen on the call rather than before it. It gets
+      // the signal the plugin handed over, which is the fused one (./deadline.ts)
+      // rather than the caller's own.
+      return typeof answer === 'function' ? answer(signal) : answer
     },
   }
 }
@@ -1593,7 +1639,10 @@ test('checkConnectivity reports a route whose endpoint lists the model as reacha
   })
   const verdict = await checkConnectivity(llm, undefined, checkRoute)
   assert.deepEqual(verdict, { provider: 'deepseek-official', model: 'deepseek-chat', kind: 'reachable' })
-  assert.deepEqual(llm.asked, [{ settingsNs: 'ns-a', request: { provider: 'deepseek-official' } }],
+  // The signal is the fused one, so it is asserted by behavior elsewhere rather
+  // than by identity here.
+  assert.deepEqual(llm.asked.map(({ settingsNs, request }) => ({ settingsNs, request })),
+    [{ settingsNs: 'ns-a', request: { provider: 'deepseek-official' } }],
     'the request names the provider; the namespace comes from the directory entry')
 })
 
@@ -1698,19 +1747,63 @@ test('checkConnectivity threads the caller signal to the discovery, and an abort
   // M4：发现调用是真实网络请求，取消缝必须通到 discoverModels（Typert 的
   // cancellation 通道把浏览器的 abort 送进宿主方法末参）。取消不是"端点没
   // 应答"——中止时原样抛回，让远程调用以拒绝结束，客户端本就跑在拒绝路径上。
+  //
+  // 适配器拿到的是融合信号而不是调用方那一个：deadline 与取消共用一个
+  // AbortController，否则适配器只看得见两件事里的一件。断言因此落在行为上
+  // ——调用方 abort 后，适配器收到的那个信号必须跟着 abort。
   const controller = new AbortController()
   const llm = discoveryLlm({
     directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
     answers: {
-      'ns-a': () => new Promise((_resolve, reject) => {
-        controller.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { code: 'ABORTED' })), { once: true })
+      'ns-a': (signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { code: 'ABORTED' })), { once: true })
       }),
     },
   })
   const running = checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' }, controller.signal)
-  assert.equal(llm.asked[0].signal, controller.signal, 'the caller signal reaches the discovery call')
+  const handed = llm.asked[0].signal
+  assert.equal(handed.aborted, false, 'the discovery starts with a live signal')
   controller.abort()
+  assert.equal(handed.aborted, true, 'the caller abort reaches the discovery through the fused signal')
   await assert.rejects(running, /aborted/, 'an aborted check rethrows instead of answering')
+})
+
+test('checkConnectivity reports a discovery that never answers as unreachable TIMEOUT, never as a hang', async () => {
+  // 用户实测的形状：端点接受 TCP 但永不应答。没有 deadline 时这一轮永不结算，
+  // 浏览器的 `ui.checking` 就永久锁死，之后手动与周期检查全部 no-op（只能刷新）。
+  const llm = discoveryLlm({
+    directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: { 'ns-a': () => new Promise(() => {}) },
+  })
+  const started = Date.now()
+  const verdict = await checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' }, undefined, 0.05)
+  assert.equal(verdict.kind, 'unreachable')
+  assert.equal(verdict.error, 'TIMEOUT')
+  assert.equal(verdict.reason, undefined, 'a timeout is a fact about the channel, not "could not check"')
+  assert.ok(Date.now() - started < 1000, 'the check settles at its own deadline')
+  assert.equal(llm.asked[0].signal.aborted, true, 'the discovery is asked to stop at the deadline')
+})
+
+test('checkConnectivity keeps its deadline even when the discovery answers afterwards', async () => {
+  // 竞速而不是"只 abort 一下就等"：忽略信号的适配器也必须让这一轮结算，否则
+  // 锁死以另一种形态回来（适配器不理 signal，调用方照样等到天荒地老）。
+  const llm = discoveryLlm({
+    directory: [{ provider: 'gw', displayName: 'Gateway', settingsNs: 'ns-a', settingsPath: [] }],
+    answers: { 'ns-a': () => new Promise(resolve => setTimeout(() => resolve([{ id: 'm' }]), 300)) },
+  })
+  const verdict = await checkConnectivity(llm, undefined, { provider: 'gw', model: 'm' }, undefined, 0.05)
+  assert.equal(verdict.kind, 'unreachable')
+  assert.equal(verdict.error, 'TIMEOUT', 'the late answer does not retroactively make the check reachable')
+})
+
+test('the history-failure lines carry the placeholders their callers fill', () => {
+  // 少一个占位符，原因就永远不出现在屏幕上——而这条提示的全部价值就是那个原因。
+  for (const [name, dict] of [['zh', zh], ['en', en]]) {
+    assert.ok(dict.healthHistoryUnreadable.includes('{error}'), `${name} names the reason`)
+    for (const token of ['{failed}', '{total}', '{error}']) {
+      assert.ok(dict.healthHistoryPartial.includes(token), `${name} partial line has ${token}`)
+    }
+  }
 })
 
 // ---- client-side pure helpers ----
@@ -1737,18 +1830,25 @@ test('the save shortcut label follows the platform, and both keys exist in both 
   }
 })
 
-// 接管开关、时间轴桶化与单链结构新增的字典键：缺键时 DSH 的 locale 会把键名本身
+// 页面壳、五分区、预算层次与时间轴的字典键：缺键时 DSH 的 locale 会把键名本身
 // 渲染给用户（"defaultModelSynced"），而英文用户看到的是空——两份字典各写各的已经
 // 漂移过（en 从来没有 problemDuplicateRoute 键，字典覆盖测试当场抓到）。
-test('every takeover, chain and timeline key exists in both locales', () => {
+test('every page, chain, budget and timeline key exists in both locales', () => {
   const keys = [
-    'takeoverSwitchLabel', 'takeoverOffTitle', 'takeoverOffDesc',
-    'chainNavTitle', 'firstHopTitle', 'firstHopBadge',
+    'pageTitle', 'viewChainTab', 'viewHealthTab', 'viewTabsLabel',
+    'takeoverSwitchLabel', 'allSavedText',
+    'strategySectionTitle', 'strategySectionHint', 'strategyLabel',
+    'firstHopSectionTitle', 'firstHopSectionHint', 'firstHopTitle', 'firstHopBadge',
+    'firstHopRetriesNote',
+    'fallbackChainSection', 'addCandidateBtn', 'toggleNeedsBtn',
+    'switchOnTitle', 'triggerSummaryLine', 'retrySectionTitle', 'retrySectionHint',
+    'retryFormula', 'retryFormulaFirstOnly',
+    'retryHierarchyNote', 'stickyTurns', 'stickyTurnsHint', 'stickyTurnsOff',
+    'jumpToHealth', 'healthModalTitle', 'applyChanges',
     'timelineWindowLabel', 'timelineNoData', 'timelineBucketEmpty', 'timelineBucketTip',
     'timelineLegend', 'timelineScopeLine', 'timelineBucketLabel', 'timelineBucketHint',
     'timelineBucketMinutes', 'timelineBucketWindow',
     'healthMetricLatencyHint', 'healthMetricThroughputHint', 'healthMetricThroughputNone',
-    'probeFirstToken', 'probeFirstTokenShort',
   ]
   for (const key of keys) {
     assert.ok(typeof zh[key] === 'string' && zh[key].length > 0, `zh has ${key}`)
@@ -2004,8 +2104,8 @@ import { effectiveChain, emptyChain } from '../src/chain.ts'
 import { failoverNotice } from '../src/notice.ts'
 
 const switchOnAll = { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true }
-const chainValue = (over = {}) => ({ candidates: [], switchOn: switchOnAll, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order', ...over })
-const cand = (provider, model = 'm', over = {}) => ({ provider, model, maxAttempts: 1, weight: 0, ...over })
+const chainValue = (over = {}) => ({ candidates: [], switchOn: switchOnAll, stickyTurns: 0, strategy: 'order', firstHopMaxRetries: 0, ...over })
+const cand = (provider, model = 'm', over = {}) => ({ provider, model, maxRetries: 0, weight: 0, ...over })
 
 test('effectiveChain uses the configured chain when it has fallbacks', () => {
   const chain = chainValue({ candidates: [cand('a'), cand('b')] })
@@ -2015,11 +2115,30 @@ test('effectiveChain uses the configured chain when it has fallbacks', () => {
   assert.equal(result.ignoredProfiles, 0)
 })
 
+test('a schema-applied legacy chain still migrates: calls to retries, the total cap dropped', () => {
+  // 生产路径不是直接调 effectiveChain：Cordis 先用 Config 校验，schemastery 会给每个
+  // 候选补上 maxRetries: 0 的默认值，同时原样留下旧的 maxAttempts。迁移按旧键是否
+  // 存在判断（见 chain.ts 的 normalizeCandidate），这条用例钉住它能穿过真实 schema，
+  // 否则一个配了 3 次调用的候选会被静默降成"不重试"。
+  const applied = Config({
+    enabled: true,
+    chain: { candidates: [{ provider: 'a', model: 'm', maxAttempts: 3 }], firstHopMaxAttempts: 2, maxTotalAttempts: 6 },
+  }).chain.get()
+  const result = effectiveChain({ chain: applied })
+  assert.equal(result.chain.candidates[0].maxRetries, 2)
+  assert.equal(result.chain.firstHopMaxRetries, 1)
+  assert.equal('maxTotalAttempts' in result.chain, false)
+})
+
 test('effectiveChain adopts a legacy default pool when there is no chain key at all', () => {
-  const legacy = { enabled: true, candidates: [cand('a'), cand('b')], switchOn: switchOnAll, maxTotalAttempts: 5, stickyTurns: 2, strategy: 'round-robin' }
+  // 旧形状的两个字段都在这里：candidates[].maxAttempts 是"调用次数"（3 → 重试 2），
+  // maxTotalAttempts 已删除，迁移后不再出现在链上。
+  const legacy = { enabled: true, candidates: [cand('a', 'm', { maxAttempts: 3 }), cand('b')], switchOn: switchOnAll, maxTotalAttempts: 5, stickyTurns: 2, strategy: 'round-robin' }
   const result = effectiveChain({ enabled: true, default: legacy })
   assert.deepEqual(result.chain.candidates.map(c => c.provider), ['a', 'b'])
-  assert.equal(result.chain.maxTotalAttempts, 5)
+  assert.equal(result.chain.candidates[0].maxRetries, 2)
+  assert.equal(result.chain.candidates[1].maxRetries, 0)
+  assert.equal('maxTotalAttempts' in result.chain, false)
   assert.equal(result.chain.stickyTurns, 2)
   assert.equal(result.chain.strategy, 'round-robin')
   assert.equal(result.source, 'default')
@@ -2029,22 +2148,23 @@ test('effectiveChain turns a single legacy profile into the global chain, droppi
   const profile = {
     id: 'p1',
     when: { provider: 'selected', model: 'm' },
-    candidates: [cand('selected'), cand('backup-1'), cand('backup-2')],
+    candidates: [cand('selected', 'm', { maxAttempts: 3 }), cand('backup-1'), cand('backup-2')],
     switchOn: switchOnAll,
     maxTotalAttempts: 6,
     stickyTurns: 1,
     strategy: 'weight',
   }
   const result = effectiveChain({ enabled: true, profiles: [profile] })
-  // 被钉死的 candidates[0] 就是"用户选中的模型"，它成为隐式第一跳，不再占一条降级。
+  // 被钉死的 candidates[0] 就是"用户选中的模型"，它成为隐式第一跳，不再占一条降级；
+  // 它的调用次数（3）迁成第一跳的重试次数（2）。
   assert.deepEqual(result.chain.candidates.map(c => c.provider), ['backup-1', 'backup-2'])
-  assert.equal(result.chain.maxTotalAttempts, 6)
+  assert.equal(result.chain.firstHopMaxRetries, 2)
   assert.equal(result.chain.strategy, 'weight')
   assert.equal(result.source, 'profile')
 })
 
 test('effectiveChain reports the legacy profiles it had to ignore', () => {
-  const one = { id: 'p1', when: { provider: 'a', model: 'm' }, candidates: [cand('a'), cand('b')], switchOn: switchOnAll, maxTotalAttempts: 3, stickyTurns: 0, strategy: 'order' }
+  const one = { id: 'p1', when: { provider: 'a', model: 'm' }, candidates: [cand('a'), cand('b')], switchOn: switchOnAll, stickyTurns: 0, strategy: 'order' }
   const two = { ...one, id: 'p2', when: { provider: 'c', model: 'm' }, candidates: [cand('c'), cand('d')] }
   const result = effectiveChain({ enabled: true, profiles: [one, two] })
   assert.equal(result.source, 'profile')
@@ -2060,20 +2180,30 @@ test('effectiveChain is empty when nothing is configured', () => {
 
 test('an empty chain is a configuration, not a missing one', () => {
   // "没有降级可走"是用户配出来的状态：插件因此不接管。把它当成"没配"会回头去过
-  // 旧形状，把用户清空的链又填回旧规则，还会用旧默认值覆盖他改过的预算。
-  const result = effectiveChain({ enabled: true, chain: { candidates: [], switchOn: switchOnAll, maxTotalAttempts: 9, stickyTurns: 0, strategy: 'order' }, default: { candidates: [cand('legacy')] } })
+  // 旧形状，把用户清空的链又填回旧规则，还会用旧默认值覆盖他改过的重试次数。
+  const result = effectiveChain({ enabled: true, chain: { candidates: [], switchOn: switchOnAll, firstHopMaxRetries: 4, stickyTurns: 0, strategy: 'order' }, default: { candidates: [cand('legacy')] } })
   assert.deepEqual(result.chain.candidates, [])
-  assert.equal(result.chain.maxTotalAttempts, 9, 'the chain\'s own settings survive')
+  assert.equal(result.chain.firstHopMaxRetries, 4, 'the chain\'s own settings survive')
   assert.equal(result.source, 'chain')
 })
 
 test('resolveChain puts the selected model first and the configured fallbacks after it', () => {
   const chain = resolveChain({ provider: 'selected', model: 'm' }, chainValue({ candidates: [cand('a'), cand('b')] }))
   assert.deepEqual(chain.candidates.map(c => `${c.provider}/${c.model}`), ['selected/m', 'a/m', 'b/m'])
-  // 第一跳是用户自己的选择，只打一次；降级候选各按自己的 maxAttempts。
+  // 第一跳是用户自己的选择，默认不重试（1 次调用）；降级候选各按自己的 maxRetries。
   assert.equal(chain.candidates[0].maxAttempts, 1)
   // order 是用户可见编号：0 = 第一跳，1..N = 降级第几条。
   assert.deepEqual(chain.order, [0, 1, 2])
+})
+
+test('resolveChain converts retries to call counts, first hop included', () => {
+  const chain = resolveChain(
+    { provider: 'selected', model: 'm' },
+    chainValue({ candidates: [cand('a', 'm', { maxRetries: 2 })], firstHopMaxRetries: 3 }),
+  )
+  // 唯一一处 +1：配置说重试 3 次，决策层说最多打 4 次。
+  assert.equal(chain.candidates[0].maxAttempts, 4)
+  assert.equal(chain.candidates[1].maxAttempts, 3)
 })
 
 test('resolveChain drops a fallback that names the selected route', () => {
@@ -2104,6 +2234,15 @@ test('the failover notice names the failing route and the fallback position', ()
   assert.match(text, /stepfun\/step/)
   assert.match(text, /降级 1\/3/)
   assert.doesNotMatch(text, /主模型/, 'a global chain has no primary model to name')
+})
+
+test('a switch back to the user model is not called "降级 0"', () => {
+  // 权重/轮询策略会把链旋转，切换目标可能是用户自己选中的模型（order 0）。
+  // 那不是"降级"，也不能印出一个不存在的编号。
+  const message = failoverNotice({ provider: 'a', model: 'x' }, { provider: 'b', model: 'y' }, 0, 2, 'RATE_LIMIT')
+  const text = message.content[0].text
+  assert.match(text, /切回你选择的模型/)
+  assert.doesNotMatch(text, /降级 0/)
 })
 
 await Promise.all(pending)

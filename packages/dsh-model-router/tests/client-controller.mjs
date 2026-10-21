@@ -100,7 +100,7 @@ function loadClient() {
       return {
         SettingsForm: SettingsFormStub, Switch: 'Switch', Button: 'Button', Tag: 'Tag',
         SegmentedTabs: 'SegmentedTabs', Modal: 'Modal', RiskConfirmation: 'RiskConfirmation',
-        SegmentedControl: 'SegmentedControl',
+        SegmentedControl: 'SegmentedControl', Checkbox: 'Checkbox', Input: 'Input',
       }
     }
     if (name === '@deepseek-ai/dsh-client-store') return { createSnapshotStore }
@@ -367,13 +367,13 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
 // ---- fixtures ----
 
 const switchOn = () => ({ rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false })
-const cand = (provider = 'deepseek', model = 'm', over = {}) => ({ provider, model, maxAttempts: 1, weight: 0, ...over })
+const cand = (provider = 'deepseek', model = 'm', over = {}) => ({ provider, model, maxRetries: 0, weight: 0, ...over })
 // 一条全局降级链：候选就是降级候选，第一跳是用户选中的模型（不在配置里）。
 // 默认给一条候选——大部分用例要有个第 0 个候选可编辑。
 const chainValue = (candidates = [cand()], over = {}) => ({
   candidates,
   switchOn: switchOn(),
-  maxTotalAttempts: 3,
+  firstHopMaxRetries: 0,
   stickyTurns: 0,
   strategy: 'order',
   ...over,
@@ -385,7 +385,7 @@ const routeOf = (candidate) => `${candidate.provider}/${candidate.model}`
 
 test('a rejected save surfaces the failure and clears saving', async () => {
   const h = await mount({ value: config(), mutate: () => Promise.reject(new Error('wire down')) })
-  h.actions.onMaxAttempts(0, '3')
+  h.actions.onMaxRetries(0, '3')
   h.actions.onSave()
   assert.equal(h.state().saving, true, 'saving is set while the write crosses the wire')
   await flush()
@@ -396,13 +396,13 @@ test('a rejected save surfaces the failure and clears saving', async () => {
 
 test('an accepted save settles clean once the Host republishes', async () => {
   const h = await mount({ value: config() })
-  h.actions.onMaxAttempts(0, '3')
+  h.actions.onMaxRetries(0, '3')
   h.actions.onSave()
   await flush()
   assert.equal(h.state().saving, false)
   assert.equal(h.state().failed, false)
   assert.equal(h.state().dirty, false, 'the republished value re-seeds the draft')
-  assert.equal(h.state().draft.chain.candidates[0].maxAttempts, 3)
+  assert.equal(h.state().draft.chain.candidates[0].maxRetries, 3)
 })
 
 // ---- validate() renders the shared cross-field rules (../rules.ts) ----
@@ -425,9 +425,9 @@ test('the drag guard is scoped to the card, not the whole document', () => {
   // 浏览器实测抓到的真 bug：卡外还有一层 role="tabpanel"（选路策略面板），
   // `closest` 拿整篇文档当边界时每张卡都被判成"在面板里"，拖拽一次也发不起来。
   const source = sourceOf('pipeline.ts')
-  assert.ok(/card\.contains\(hit\)/.test(source),
-    'the interactive-element check must confirm the hit is inside THIS card')
-  assert.ok(!/target\.closest\('button, input[^)]*\)\)\s*\{/.test(source.replace(/\s+/g, ' ')),
+  assert.ok(/event\.currentTarget\.contains\(interactive\)/.test(source),
+    'the interactive-element check must confirm the hit is inside THIS row')
+  assert.ok(!/document\.querySelector|target\.closest\('button, input/.test(source.replace(/\s+/g, ' ')),
     'a bare closest() over the document is the bug — the outer tabpanel would swallow every drag')
 })
 
@@ -462,20 +462,20 @@ test('the candidates reorder within bounds', async () => {
 test('a republication with the same value keeps the unsaved draft', async () => {
   const value = config()
   const h = await mount({ value })
-  h.actions.onMaxAttempts(0, '3')
+  h.actions.onMaxRetries(0, '3')
   assert.equal(h.state().dirty, true)
   h.republish({ value, revision: 2 })
   assert.equal(h.state().dirty, true, 'an unrelated republish must not wipe the draft')
-  assert.equal(h.state().draft.chain.candidates[0].maxAttempts, 3)
+  assert.equal(h.state().draft.chain.candidates[0].maxRetries, 3)
 })
 
 test('a genuinely changed Host value re-seeds the draft', async () => {
   const h = await mount({ value: config() })
-  h.actions.onMaxAttempts(0, '3')
+  h.actions.onMaxRetries(0, '3')
   assert.equal(h.state().dirty, true)
-  h.republish({ value: config({ chain: chainValue([], { maxTotalAttempts: 9 }) }), revision: 2 })
+  h.republish({ value: config({ chain: chainValue([], { firstHopMaxRetries: 4 }) }), revision: 2 })
   assert.equal(h.state().dirty, false, 'the Host is the authority once its value moves')
-  assert.equal(h.state().draft.chain.maxTotalAttempts, 9)
+  assert.equal(h.state().draft.chain.firstHopMaxRetries, 4)
 })
 
 test('an edit after a value-changing republish keeps the draft dirty', async () => {
@@ -484,7 +484,7 @@ test('an edit after a value-changing republish keeps the draft dirty', async () 
   // re-seed runs on every real start, and edits come after it.
   const h = await mount({ value: undefined })
   h.republish({ value: config(), revision: 1 })
-  h.actions.onMaxAttempts(0, '3')
+  h.actions.onMaxRetries(0, '3')
   assert.equal(h.state().dirty, true, 'the draft and the Host baseline must stay independent objects')
 })
 
@@ -640,6 +640,7 @@ test('passive health merges the recent sessions into one global record per route
   assert.deepEqual(passive['a/b']?.timeline.map((p) => p.time), [1, 2],
     'the timeline is the union across sessions, ordered by time — the availability is a global fact')
   assert.ok(passive['a/only-old'], 'a route only the older session saw is still listed')
+  assert.equal(h.state().ui.passiveError, null, 'a whole read raises no warning')
 })
 
 test('opening the health workspace re-reads the passive snapshot, so a failover during the session shows up', async () => {
@@ -704,6 +705,40 @@ test('re-reading the same passive record does not grow the timeline', async () =
   assert.equal(second.length, 2, 'the same record read again adds nothing')
   assert.deepEqual(second.map((p) => p.time), [1, 2])
   assert.equal(h.state().ui.passive['a/b']?.latencyMs, 12, 'scalars still come from the newest record')
+})
+
+// 回归：读失败曾被 `.catch(() => null)` 与最外层 `.catch(() => {})` 一起吞掉，页面照常
+// 渲染成"未调用 / 无记录"——与"这条渠道真的没跑过"长得一模一样。一个健康视图最不能
+// 犯的就是这个错：它的全部工作就是报告渠道做过什么。
+test('a refused history read says so instead of rendering an empty history', async () => {
+  const h = await mount({
+    value: config(),
+    remote: {
+      session: {
+        list: () => Promise.resolve({ ok: true, value: { items: [{ sessionId: 's', updatedAt: 1 }] } }),
+        projections: () => Promise.resolve({ ok: false, error: { message: 'projection registry is not ready' } }),
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  const state = h.state()
+  assert.deepEqual(state.ui.passive, {}, 'nothing was read, so nothing is claimed')
+  // harness 的 locale 桩绑定的是恒等函数（`bind: () => (key) => key`），所以这里
+  // 断言的是字典键：真宿主上它会翻成整句「渠道历史读不到：<原因>」。
+  assert.match(state.ui.passiveError ?? '', /healthHistoryUnreadable/,
+    'the refusal reaches the screen instead of folding into an empty history')
+})
+
+test('a history list that cannot be read says so too', async () => {
+  const h = await mount({
+    value: config(),
+    remote: {
+      session: { list: () => Promise.resolve({ ok: false, error: { message: 'the session directory refused' } }) },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.match(h.state().ui.passiveError ?? '', /healthHistoryUnreadable/,
+    'a list nobody can read is reported, not rendered as an empty history')
 })
 
 // 回归（显示层，走真实构建产物）：窗口可用率曾在两个界面里各写一遍且都多乘了一个
@@ -787,30 +822,36 @@ test('a configured but never-used candidate still appears in the health dashboar
   assert.ok(!text.includes('noChannelsConfigured'), 'the empty state must not fire while the chain has candidates')
 })
 
-// 回归：addCandidates 曾把用户在手录面板填的 maxAttempts 写死成 1（目录选择没有这个
-// 字段，1 是它的默认值；手录带了就必须按用户填的走）。
-test('a manually added candidate keeps the attempt count the user typed', async () => {
+// 目录多选一次加多条：每条都要拿到 schema 允许范围内的尝试次数，否则用户点完
+// "添加"立刻被保存校验挡住，还得逐条手改。
+test('a catalog multi-select adds every picked route with a save-valid attempt count', async () => {
   const h = await mount({ value: config() })
-  h.actions.onAddCandidates([{ provider: 'stub-backup', model: 'stub-model', maxAttempts: 3 }])
+  h.actions.onAddCandidates([
+    { provider: 'stub-backup', model: 'stub-model' },
+    { provider: 'stub-third', model: 'other-model' },
+  ])
   const chain = h.state().draft.chain.candidates
-  assert.equal(chain.length, 2)
-  assert.equal(chain[1].maxAttempts, 3, 'the typed attempt count survives')
-  // 目录选择路径不带 maxAttempts：默认 1 仍然生效。
-  h.actions.onAddCandidates([{ provider: 'stub-third', model: 'stub-model' }])
-  assert.equal(h.state().draft.chain.candidates[2].maxAttempts, 1)
+  assert.deepEqual(chain.slice(1).map(c => c.provider + '/' + c.model),
+    ['stub-backup/stub-model', 'stub-third/other-model'],
+    'every picked route lands once, in selection order')
+  for (const candidate of chain.slice(1)) {
+    assert.ok(candidate.maxRetries >= 0 && candidate.maxRetries <= 99,
+      'a candidate added from the catalog must satisfy the schema range without an extra edit')
+  }
+  assert.equal(h.state().ui.modal, null, 'adding closes the dialog')
 })
 
 // 回归：侧栏弹窗与插件页共用同一个 controller，而 DSH 的 SettingsForm 卸载即 discard。
 // 关弹窗曾把另一面未保存的编辑静默丢掉。现在弹窗那一侧传的是 no-op。
 test('closing the quick modal does not discard the other surface\'s unsaved edits', async () => {
   const h = await mount({ value: config() })
-  h.actions.onMaxAttempts(0, '3')
+  h.actions.onMaxRetries(0, '3')
   assert.equal(h.state().dirty, true, 'the edit is unsaved')
   // 弹窗挂一次、再卸一次（等价于打开又关掉侧栏快捷弹窗）。
   h.actions.retainSurface()
   h.actions.releaseSurface()
   assert.equal(h.state().dirty, true, 'the draft survives the modal mount/unmount cycle')
-  assert.equal(h.state().draft.chain.candidates[0].maxAttempts, 3)
+  assert.equal(h.state().draft.chain.candidates[0].maxRetries, 3)
 })
 
 // 原生快捷键：保存命令注册进 DSH 的 shortcuts 服务（可重绑定、进快捷键设置页、按模态
@@ -828,7 +869,7 @@ test('the save command is registered with DSH\'s shortcuts service and gated by 
   h.actions.retainSurface()
   const resolution = command.resolve({ modal: null })
   assert.equal(resolution.status, 'handled')
-  h.actions.onMaxAttempts(0, '3')
+  h.actions.onMaxRetries(0, '3')
   resolution.run()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(h.mutateCalls.length, 1, 'running the command saves the staged edit')
@@ -856,7 +897,7 @@ const twoCandidates = () => config({
 // 因此不在树里。把这种帧当成"seam 移动"抛错，等于把"配置未就绪"当成"结构坏了"——
 // 侧栏按钮常驻可点，用户在这个窗口点开弹窗就崩，且 effect 的 deps 是 []，抛了
 // 本次挂载永不恢复，只能关闭重开。
-test('a dialog opened while the config scope is still loading does not throw, and the footer is still suppressed once served', async () => {
+test('a page opened while the config scope is still loading shows the unavailable line instead of the controls', async () => {
   const { RouterPage } = loadClient()
   const loading = await mount({
     value: twoCandidates(),
@@ -864,23 +905,38 @@ test('a dialog opened while the config scope is still loading does not throw, an
   })
   assert.equal(loading.state().available, false, 'fixture: the namespace is unavailable in the loading frame')
   pendingEffects.length = 0
-  // Render the page the way panel.ts does when the panel is open, then run its
-  // mount effects. A throw here is the bug: the tripwire must only fire for a
-  // wrapper that EXISTS while its footer sibling moved.
-  render(createEl(RouterPage, propsFor(loading)))
+  const loadingTree = render(createEl(RouterPage, propsFor(loading)))
   for (const effect of pendingEffects) effect()
+  const loadingText = collectText(loadingTree).join(' ')
+  assert.ok(loadingText.includes('formUnavailable'), 'the loading frame says the configuration is unavailable')
+  assert.ok(!find(loadingTree, (node) => node.props?.className === 'dsh-router-tabs'), 'no view tabs without a served config')
+  assert.ok(!find(loadingTree, (node) => node.props?.className === 'dsh-router-footer'), 'no save bar without a served config')
 
-  // 对照：namespace 就绪后底栏照旧被压掉，且压制的两个属性都真的落上去了——
-  // tripwire 仍然守着"seam 真移动"那一种条件。
+  // 就绪后：保存条常驻（用户不必先改一下才找得到保存）；干净时保存禁用，
+  // 有改动时启用，且页面里只有一个保存动作。
   const ready = await mount({ value: twoCandidates() })
   assert.equal(ready.state().available, true, 'fixture: the namespace is served')
   pendingEffects.length = 0
-  const tree = render(createEl(RouterPage, propsFor(ready)))
+  const cleanTree = render(createEl(RouterPage, propsFor(ready)))
   for (const effect of pendingEffects) effect()
-  const footer = find(tree, (node) => node.props?.className === 'footer')
-  assert.ok(footer, 'fixture: the SettingsForm footer reached the tree')
-  assert.equal(footer.attributes.hidden, '', 'the suppressed footer must carry hidden so DSH\'s Tab trap ignores it')
-  assert.equal(footer.attributes.inert, '', 'and inert, for the same reason')
+  assert.ok(find(cleanTree, (node) => node.props?.className === 'dsh-router-footer'),
+    'the save bar is always present once the config is served')
+  const cleanSave = find(cleanTree, (node) => node.props?.onClick === ready.actions.onSave)
+  assert.ok(cleanSave, 'the clean bar still carries the save control')
+  assert.equal(cleanSave.props.disabled, true, 'a clean draft cannot be saved again')
+
+  ready.actions.onStickyTurns(3)
+  pendingEffects.length = 0
+  const dirtyTree = render(createEl(RouterPage, propsFor(ready)))
+  for (const effect of pendingEffects) effect()
+  const footer = find(dirtyTree, (node) => node.props?.className === 'dsh-router-footer')
+  assert.ok(footer, 'a dirty draft shows the same save bar')
+  const dirtySave = find(dirtyTree, (node) => node.props?.onClick === ready.actions.onSave)
+  assert.equal(dirtySave.props.disabled, false, 'a dirty draft enables the save control')
+  assert.ok(find(dirtyTree, (node) => node.props?.onClick === ready.actions.onSave),
+    'the save bar carries the save action')
+  assert.ok(find(dirtyTree, (node) => node.props?.onClick === ready.actions.onDiscard),
+    'and the discard action beside it')
 })
 
 // I4：注册本身不能 retain——否则 Ctrl+S 被全局认领（regions 覆盖输入框与终端），
@@ -955,40 +1011,41 @@ test('a run the Host cannot answer still counts every route as 没能检查', as
   assert.equal(summary.total, 2)
   assert.equal(summary.counts.unknown, 2, 'both routes are counted as 没能检查')
   assert.equal(summary.counts.bad, undefined, 'nothing is counted as 不可达')
-  assert.match(summary.text, /没能检查 2/)
+  // The stub dictionary returns keys, so the assertion is on the key and count;
+  // the Chinese/English text itself lives in locales.ts and is covered there.
+  assert.match(summary.text, /checkSummaryUnknown 2/)
 })
 
-test('the workbench keeps the sidebar and the workspace pane as siblings', async () => {
-  // A missing paren in the deep h() nesting does not break `node --check`:
-  // the closes just migrate to the end of the return, and the workspace pane
-  // silently becomes the sidebar's third child (squeezed into its 260px
-  // column). Balance is not structure — assert the shape on the source.
-  const source = sourceOf('page.ts')
-  const lines = source.split('\n')
-  const asideLine = lines.findIndex((l) => l.includes("className: 'dsh-router-master-sidebar'"))
-  const ternaryLine = lines.findIndex((l, i) => i > asideLine && /^\s+isHealthMode\s*$/.test(l))
-  assert.ok(asideLine >= 0 && ternaryLine > asideLine, 'fixture: sidebar and workspace switch both exist')
-  // Depth at the aside's own opening line, after that line is consumed.
-  const depthAfter = (upto) => {
-    let depth = 0
-    for (let i = asideLine; i <= upto; i++) {
-      for (const ch of lines[i]) {
-        if (ch === '(') depth += 1
-        else if (ch === ')') depth -= 1
-      }
-    }
-    return depth
-  }
-  const asideOpenDepth = depthAfter(asideLine)
-  // Walk forward until the aside's call closes; it must happen before the
-  // workspace ternary, or the pane lands inside the sidebar.
-  let closeLine = -1
-  for (let i = asideLine + 1; i < lines.length; i++) {
-    if (depthAfter(i) < asideOpenDepth) { closeLine = i; break }
-  }
-  assert.ok(closeLine >= 0, 'the sidebar call closes somewhere')
-  assert.ok(closeLine < ternaryLine,
-    `the sidebar must close (L${closeLine + 1}) before the workspace switch (L${ternaryLine + 1})`)
+test('the workbench is one page with top view tabs, not an internal sidebar', async () => {
+  // 旧版为两个一级视图塞了一个 260px 侧栏：只有两行内容，下方 80% 是空地，
+  // 右侧工作区被无谓挤窄。新结构照 DSH 自己的面板页：一个滚动列、顶部页签。
+  const { RouterPage } = loadClient()
+  const h = await mount({ value: twoCandidates() })
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+
+  assert.ok(find(tree, (node) => node.props?.className === 'dsh-router-page'), 'the page root exists')
+  assert.ok(find(tree, (node) => node.props?.className === 'dsh-router-top'), 'the head and the switch travel in one sticky row')
+  assert.ok(find(tree, (node) => node.props?.className === 'dsh-router-content'), 'the 960px content column exists')
+  assert.ok(!find(tree, (node) => node.props?.className === 'dsh-router-scroll'),
+    'the split scroller is gone — the page itself scrolls, so no row owns its own geometry')
+  assert.ok(!find(tree, (node) => String(node.props?.className ?? '').includes('master-sidebar')),
+    'the internal sidebar is gone')
+
+  const tabs = find(tree, (node) => node.type === 'SegmentedTabs')
+  assert.ok(tabs, 'the two views are switched by top tabs')
+  assert.deepEqual(tabs.props.items.map((item) => item.value), ['chain', 'health'])
+  assert.equal(tabs.props.value, 'chain', 'the chain is the default view')
+
+  h.actions.onActive('__health__')
+  pendingEffects.length = 0
+  const healthTree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  const healthTabs = find(healthTree, (node) => node.type === 'SegmentedTabs')
+  assert.equal(healthTabs.props.value, 'health')
+  assert.ok(find(healthTree, (node) => node.props?.id === 'model-router-panel-health'),
+    'the selected tab names the panel that is rendered')
 })
 
 // ---- modal bounds (a settings dialog must never escape the viewport) ----
@@ -1008,17 +1065,20 @@ test('every plugin dialog is capped to the viewport and scrolls inside itself', 
     sourceOf('styles.ts').indexOf('function ensureStyles'),
   )
 
-  for (const cls of ['dsh-router-settings-modal', 'dsh-router-candidate-modal']) {
-    assert.ok(components.includes(`className: '${cls}'`),
-      `${cls} must be handed to Modal so the bound has something to bind to`)
-    assert.ok(css.includes(`.${cls}`),
-      `ROUTER_CSS must carry a rule for .${cls}`)
-  }
+  // One carrier class for both dialogs, handed to every Modal instance.
+  assert.ok(components.includes("const MODAL_CLASS = 'dsh-router-modal'"),
+    'the shared dialog class must be named once')
+  const handed = components.match(/className: MODAL_CLASS/g) ?? []
+  assert.equal(handed.length, 2, `both dialogs must hand the class to Modal, found ${handed.length}`)
+  assert.ok(css.includes('.dsh-router-modal {'),
+    'ROUTER_CSS must carry the dialog rule')
   // One shared rule block bounds both: assert it once, on the block itself.
   const dialogBlock = css.slice(
-    css.indexOf('.dsh-router-settings-modal,'),
+    css.indexOf('.dsh-router-modal {'),
     css.indexOf('.dsh-router-modal-content {'),
   )
+  assert.match(dialogBlock, /height:\s*min\(560px,\s*84vh\)\s*!important/,
+    'the dialog must have a fixed height so switching sections cannot resize it')
   assert.match(dialogBlock, /max-height:\s*84vh\s*!important/,
     'the dialog block must cap height against the viewport, not its content')
   assert.match(dialogBlock, /overflow:\s*hidden\s*!important/,
@@ -1027,7 +1087,7 @@ test('every plugin dialog is capped to the viewport and scrolls inside itself', 
   // from the contentClassName hook — no hashed class name is guessed anywhere.
   assert.match(css, /\.dsh-router-modal-content > div:last-child\s*\{[^}]*overflow-y:\s*auto\s*!important/,
     'the scroll region must scroll, which is what keeps the header and footer on screen')
-  assert.ok(components.includes("contentClassName: 'dsh-router-modal-content'"),
+  assert.ok(components.includes('contentClassName: MODAL_CONTENT'),
     'the modal must hand DSH its own content hook, or the height chain has no first link')
 })
 
@@ -1071,43 +1131,24 @@ test('the configured-route list has one expression, shared by both halves', asyn
   }
 })
 
-test('configuration-state badges keep their text in label-primary, not the accent', async () => {
+test('the accent is never used as text colour', async () => {
   // 浏览器实测（2026-10-19）：accent 当文字色 —— 深色 2.61:1、浅色 4.28:1，
-  // 均低于 AA 的 4.5:1，深色主题下几乎读不出来。这不是审美取舍，是同一份
-  // 语义色纪律（文字永远不是色调色）漏到 accent 上。相关徽标（接管中 / 识图
-  // 路由 / 条件已启用）已改回 label-primary + accent 淡染底与描边。
+  // 均低于 AA 的 4.5:1。新 UI 用 Tag 的 tone 表达状态，accent 只做底/边/图标；
+  // 确实需要 accent 文字的地方走按主题混到 AA 的 --dsh-router-accent-text。
   const format = sourceOf('format.ts')
-  const badge = format.slice(format.indexOf('export function accentBadge'))
-  assert.ok(badge.includes("color: 'var(--dsw-alias-label-primary)'"),
-    'accentBadge must put the text in label-primary')
-  assert.ok(!/color:\s*'var\(--dsh-router-accent\)'/.test(badge.slice(0, badge.indexOf('}'))),
-    'accentBadge must not colour the text with the accent')
-
-  // 徽标类样式同样不得把 accent 放进 color（图标/头像包在外层，不在此列）。
-  const styles = sourceOf('styles.ts')
-  for (const name of ['workspaceStatePill', 'imageRouteBadge', 'needStatusBadgeActive', 'firstHopBadge']) {
-    const at = styles.indexOf(name + ':')
-    assert.ok(at !== -1, `fixture: ${name} exists in styles.ts`)
-    const block = styles.slice(at, styles.indexOf('},', at) === -1 ? at + 600 : styles.indexOf('},', at))
-    assert.ok(!/color:\s*'var\(--dsh-router-accent\)'/.test(block),
-      `${name} must not use the accent as its text colour`)
-  }
-
-  // 非徽标的 accent 文字（卡片小标题、行内链接按钮）走 accent-text：按主题
-  // 混合到 AA。实测深色 5.37~5.78:1、浅色 6.19~6.85:1；原始 accent 只有
-  // 2.6:1 / 4.28:1。
-  for (const name of ['policySummaryBtn', 'guideToggleBtn', 'needsBtnActive']) {
-    const at = styles.indexOf(name + ':')
-    assert.ok(at !== -1, `fixture: ${name} exists in styles.ts`)
-    const block = styles.slice(at, styles.indexOf('},', at) === -1 ? at + 600 : styles.indexOf('},', at))
-    assert.ok(block.includes('var(--dsh-router-accent-text)'),
-      `${name} must colour its text with --dsh-router-accent-text, not the raw accent`)
+  assert.ok(!format.includes('export function accentBadge'),
+    'the unused accent-badge helper is gone')
+  for (const name of ['styles.ts', 'page.ts', 'chain.ts', 'pipeline.ts', 'workspace.ts', 'modals.ts', 'health-ui.ts']) {
+    const text = sourceOf(name).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    const hits = text.match(/color:\s*'var\(--dsh-router-accent\)'/g) ?? []
+    assert.deepEqual(hits, [], `${name} must colour accent text with --dsh-router-accent-text, not the raw accent`)
   }
   // 该 token 必须在两个主题里都有解析值，否则深色会退回一个不达标的中调。
-  const lightDef = styles.indexOf('--dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 80%, black)')
-  const darkDef = styles.indexOf('--dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 60%, white)')
-  assert.ok(lightDef !== -1 && darkDef !== -1,
-    'accent-text must be resolved per theme (light mixes towards black, dark towards white)')
+  const styles = sourceOf('styles.ts')
+  assert.ok(styles.includes('--dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 80%, black)'),
+    'light theme resolves accent text towards black')
+  assert.ok(styles.includes('--dsh-router-accent-text: color-mix(in srgb, var(--dsh-router-accent) 60%, white)'),
+    'dark theme resolves accent text towards white')
 })
 
 test('no injected hover rule repaints an accent-surface glyph with the accent', async () => {
@@ -1231,12 +1272,14 @@ test('weight edits address the one chain', async () => {
 
 test('chain-level edits land on the chain, and none of them throw', async () => {
   const h = await mount({ value: config() })
-  h.actions.onMaxTotal('9')
   h.actions.onStickyTurns('2')
   h.actions.onToggleSwitchOn('rateLimit')
-  assert.equal(h.state().draft.chain.maxTotalAttempts, 9)
+  h.actions.onFirstHopMaxRetries('2')
+  h.actions.onMaxRetries(0, '3')
   assert.equal(h.state().draft.chain.stickyTurns, 2)
   assert.equal(h.state().draft.chain.switchOn.rateLimit, false)
+  assert.equal(h.state().draft.chain.firstHopMaxRetries, 2)
+  assert.equal(h.state().draft.chain.candidates[0].maxRetries, 3)
 })
 
 test('unloading stops the discover timer, aborts the checks in flight, and survives late publishes', async () => {
@@ -1294,11 +1337,13 @@ test('a legacy default pool is adopted as the chain', async () => {
   const h = await mount({
     value: {
       enabled: true,
-      default: { enabled: true, candidates: [cand('a', 'x'), cand('b', 'y')], switchOn: switchOn(), maxTotalAttempts: 5, stickyTurns: 1, strategy: 'round-robin' },
+      default: { enabled: true, candidates: [cand('a', 'x', { maxAttempts: 3 }), cand('b', 'y')], switchOn: switchOn(), maxTotalAttempts: 5, stickyTurns: 1, strategy: 'round-robin' },
     },
   })
   assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['a/x', 'b/y'])
-  assert.equal(h.state().draft.chain.maxTotalAttempts, 5)
+  // 旧字段是"调用次数"：3 次调用 = 2 次重试。maxTotalAttempts 已被删除，不再出现。
+  assert.equal(h.state().draft.chain.candidates[0].maxRetries, 2)
+  assert.equal('maxTotalAttempts' in h.state().draft.chain, false)
   assert.equal(h.state().draft.chain.stickyTurns, 1)
   assert.equal(h.state().draft.chain.strategy, 'round-robin')
 })
@@ -1354,21 +1399,20 @@ test('the browser half registers exactly one surface: the main panel', async () 
   const page = sourceOf('page.ts')
   assert.ok(!page.includes('isModalView'),
     'the page/modal branch is dead now that the dialog is the only surface')
-  assert.ok(page.includes("className: 'dsh-router-page', style: S.modalRoot"),
-    'the workbench root is the dialog\'s flex column')
-  // 两个视图的外包装必须是 flex 列且 alignSelf: stretch：行向容器里 flex:1 管宽，
-  // 高度归 align-self 管；少任何一样，该列就按内容高度算并把弹窗体顶滚。
-  for (const id of ['panel-global-health', 'panel-chain']) {
-    const at = page.indexOf(id)
-    assert.ok(at > 0, `fixture: ${id} wrapper exists`)
-    const block = page.slice(page.lastIndexOf('style: {', at), at)
-    assert.ok(/display: 'flex'/.test(block) && /flexDirection: 'column'/.test(block),
-      `${id} wrapper must be a flex column`)
-    assert.ok(/alignSelf: 'stretch'/.test(block),
-      `${id} wrapper must stretch to the row height, or its column is content-height`)
-    assert.ok(/minHeight: 0/.test(block),
-      `${id} wrapper must be shrinkable`)
-  }
+  assert.ok(page.includes("className: 'dsh-router-page'"),
+    'the workbench root is the page column')
+  assert.ok(!/h\(SettingsForm/.test(page),
+    'the page no longer borrows the SettingsForm frame — it owns its own chrome')
+  // 唯一保存入口：底部保存条。页面头、视图里都不许再出现第二个保存动作。
+  const saves = page.match(/onClick: props\.onSave/g) ?? []
+  assert.equal(saves.length, 1, `exactly one save affordance on the page, found ${saves.length}`)
+  assert.ok(/var footer = state\.available/.test(page),
+    'the save bar is mounted whenever the config is served, so it never has to be discovered')
+  assert.ok(/disabled: !state\.dirty \|\| !state\.writable \|\| state\.saving/.test(page),
+    'a clean draft keeps the save control visible but disabled')
+  // 两个视图共用一个 tabpanel 容器，id/aria 跟着选中项走。
+  assert.ok(page.includes("role: 'tabpanel'") && page.includes("'aria-labelledby'"),
+    'the rendered view is the selected tab\'s panel')
 })
 
 // 高度只能来自容器链，且不许猜 DSH 的类名。两条硬不变量：
@@ -1394,7 +1438,7 @@ test('the modal height chain derives from the dialog root, and no DSH class name
   const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   for (const [, selector, body] of rules) {
     if (!/\d+vh/.test(body)) continue
-    assert.ok(/\.dsh-router-(settings|candidate)-modal\b|\.dsh-router-modal-dialog\b/.test(selector),
+    assert.ok(/\.dsh-router-modal\b/.test(selector),
       `a vh constant may only size the dialog root itself, found in: ${selector.trim()}`)
   }
   // ② 类名猜测：注入 CSS 一条也不许有。
@@ -1407,81 +1451,62 @@ test('the modal height chain derives from the dialog root, and no DSH class name
   assert.ok(/\.dsh-router-modal-content > div:last-child\s*\{[\s\S]*?flex:\s*1\s*!important;[\s\S]*?min-height:\s*0\s*!important;[\s\S]*?overflow-y:\s*auto\s*!important;/.test(css),
     'DSH\'s scroll region (the content wrapper\'s last child) must be reached structurally, with min-height:0 + overflow')
   const modals = sourceOf('modals.ts')
-  for (const carrier of ['dsh-router-settings-modal', 'dsh-router-candidate-modal']) {
-    assert.ok(modals.includes(`contentClassName: 'dsh-router-modal-content'`),
-      `every styled modal must pass contentClassName (${carrier})`)
-  }
-  // 健康弹窗的滚动容器是插件自己的元素，effect 读自己的 id——不再 closest 猜类名。
-  assert.ok(modals.includes("getElementById('dsh-router-health-modal-body')"),
-    'the scroll-to-bottom effect must target this plugin\'s own element')
+  const contentHooks = modals.match(/contentClassName: MODAL_CONTENT/g) ?? []
+  assert.equal(contentHooks.length, 2,
+    `every dialog must pass the content hook so the chain has its first link, found ${contentHooks.length}`)
+  // 新增覆盖行要滚进视野：用 scrollIntoView 找最近的可滚动祖先，而不是猜 DSH 类名
+  // 或给某个内部 div 挂 id 自己滚（那会变成第二个滚动容器）。
+  assert.ok(modals.includes('scrollIntoView'),
+    'a newly added row must scroll into view through its nearest scrollable ancestor')
   assert.ok(!modals.includes("closest('[class*="),
     'the effect must not hunt for a DSH class — a rename used to silence it')
-  assert.ok(/flex: 1, minHeight: 0, overflowY: 'auto'/.test(modals),
-    'the health modal\'s own div must be the scroll container (flex:1 + min-height:0 + overflow-y:auto)')
-  // 取出 S 对象里某个键的整块（按缩进配平到块尾），别用固定字数窗口——注释一长就漏。
-  const blockOf = (key) => {
-    const at = styles.indexOf(`  ${key}: {`)
-    assert.ok(at > 0, `fixture: S.${key} exists`)
-    const end = styles.indexOf('\n  },', at)
-    return styles.slice(at, end === -1 ? undefined : end)
-  }
-  for (const key of ['workbench', 'masterList', 'detailWorkspace', 'modalContentArea', 'modalRoot']) {
-    const block = blockOf(key)
-    assert.ok(/minHeight:\s*0/.test(block), `${key} must be shrinkable (minHeight: 0) so the chain can hand it a height`)
-  }
-  // 断链的两处也必须都在：DSH 的 SettingsForm 外框（结构性提升）与两个视图包装。
-  assert.ok(/\.dsh-router-page div:has\(> \.dsh-router-form-body\)\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;/.test(styles),
-    'the SettingsForm frame must be promoted to a shrinkable flex column, or the chain breaks there')
-  assert.ok(/\.dsh-router-form-body\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;/.test(styles),
-    'the children wrapper must be a shrinkable flex column')
-  // 侧栏按内容高度走（健康入口紧跟内容），但必须能收缩+自滚（长列表不撑破弹窗）。
-  const sidebar = blockOf('masterSidebar')
-  assert.ok(/minHeight:\s*0/.test(sidebar), 'masterSidebar must be shrinkable')
-  assert.ok(/maxHeight:\s*'100%'/.test(sidebar), 'masterSidebar must cap at the row so a long list scrolls inside it')
-  const list = blockOf('masterList')
-  assert.ok(/flex:\s*'0 1 auto'/.test(list), 'masterList must be content-height — flex:1 here pushed the health entry 468px down')
-  // M20：自建浮层的 z-index 提成命名常量，且注释点名 DSH 的先例（Modal 1000 之上那层
-  // 是 1100，DSH 自己有 9 处同值先例；dockkit 明写没有 z-index token 量表可抄）。
-  assert.ok(/const Z_OVERLAY = 1100/.test(styles) && /const Z_PANEL = 1101/.test(styles),
-    'the drawer\'s z-index pair must be named constants, not bare numbers')
-  assert.ok(/zIndex: Z_OVERLAY/.test(styles) && /zIndex: Z_PANEL/.test(styles),
-    'both layers must read the constants')
-  assert.ok(/Modal\.module\.css:10/.test(styles),
-    'the constants must cite DSH\'s Modal z-index anchor, so the value is traceable rather than magic')
+  // 页面壳的容器链：页面自己滚动并拥有水平留白，四行共享一条 960 居中列。
+  // 旧壳把滚动区拆出页面、每行各写一份 padding，而滚动条只压窄滚动区（9px），
+  // 结果页头/页签比正文缩进 52px、页脚又差 4px（2026-10-20 隔离实例实测）。
+  assert.ok(/\.dsh-router-page\s*\{[\s\S]*?height:\s*100%;[\s\S]*?overflow-y:\s*auto;[\s\S]*?scrollbar-gutter:\s*stable;/.test(css),
+    'the page must own the height and the scrollport, gutter included')
+  assert.ok(!css.includes('.dsh-router-scroll'),
+    'the split scroller must stay deleted — it is what let the rows drift')
+  assert.ok(/\.dsh-router-top, \.dsh-router-content, \.dsh-router-footer\s*\{[\s\S]*?max-width:\s*960px;[\s\S]*?margin:\s*0 auto;/.test(css),
+    'one column rule must cap every direct row of the page')
+  assert.ok(/\.dsh-router-top\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?top:\s*0;/.test(css),
+    'the head and the switch travel in one sticky wrapper, so no head height is hard-coded')
+  assert.ok(/\.dsh-router-footer\s*\{\s*position:\s*sticky;[\s\S]*?bottom:\s*0;/.test(css),
+    'the save bar must stay reachable at the bottom of the same scrollport')
+  assert.ok(/\.dsh-router-head\s*\{[\s\S]*?padding:\s*28px\s+0\s+16px;/.test(css),
+    'the head carries the 28px top inset and no horizontal padding of its own')
+  // 旧版的两处结构债必须真的消失：SettingsForm 外框与内部侧栏。
+  assert.ok(!styles.includes('dsh-router-form-body'), 'the SettingsForm frame hack is gone')
+  assert.ok(!styles.includes('master-sidebar') && !styles.includes('masterSidebar'),
+    'the internal sidebar styles are gone')
 })
 
-// 语义色只有一个来源：`healthToneBadge`/`healthToneStyle` 读同一批
-// `--dsh-router-tone-*` 变量，文字永远是 label-primary。曾有四套徽标配色各写一份，
-// 其中 Bad 用 error-secondary 做底 + error-primary 做字——DSH 暗色下这两个令牌同值，
-// 实测对比度 1.00:1（徽标是一条没有字的红条）。
+// 语义色只有一个来源：`healthToneStyle` 读 `--dsh-router-tone-*` 变量；状态文字
+// 一律走 DSH 的 `Tag` tone，不再自绘徽标。曾有四套徽标配色各写一份，其中 Bad 用
+// error-secondary 做底 + error-primary 做字——DSH 暗色下这两个令牌同值，实测
+// 对比度 1.00:1（徽标是一条没有字的红条）。
 test('semantic tone colour has one source and never paints badge text', async () => {
   const format = sourceOf('format.ts')
-  assert.ok(format.includes('export function healthToneBadge'),
-    'the badge treatment must be exported from format.ts')
+  assert.ok(!format.includes('healthToneBadge'),
+    'the hand-rolled badge helper is gone; status tags use the Tag primitive')
   assert.ok(/healthToneColor\('healthy'\)[^}]*--dsh-router-tone-ok/.test(format.replace(/\s+/g, ' ')) || format.includes("'var(--dsh-router-tone-ok)'"),
     'healthy must read the shared tone variable')
-  assert.ok(format.includes("color: 'var(--dsw-alias-label-primary)'"),
-    'badge text stays label-primary — never the tone colour')
   // 样式对象里不允许再出现"语义令牌当文字色"的写法。
   const styles = sourceOf('styles.ts')
   const toneAsText = styles.match(/color:\s*'var\(--dsw-alias-state-(success|error|warn)-primary[^)]*\)'/g) ?? []
   assert.deepEqual(toneAsText, [],
     `state-*-primary must not be used as text colour (mid-tone in one theme or the other): ${toneAsText.join(', ')}`)
-  // 被压掉的 DSH SettingsForm 底栏必须对 DSH 的焦点圈禁过滤器可见（[hidden]/[inert]），
-  // 只靠 display:none 会让它成为弹窗"最后一个可聚焦元素"，Tab 从真正的最后一个控件
-  // 走出去（实测 focus 落到 <body>）。
+  // 页面不再借用 SettingsForm，也就没有"被压掉的底栏"这个焦点圈禁陷阱：
+  // 唯一的底栏是本插件自己的保存条。
   const page = sourceOf('page.ts')
-  assert.ok(page.includes("footer.setAttribute('hidden', '')"),
-    'the suppressed footer must carry hidden so DSH\'s Tab trap ignores it')
-  assert.ok(page.includes("footer.setAttribute('inert', '')"),
-    'the suppressed footer must carry inert for the same reason')
-  // 色点必须真的上色：徽标的颜色只剩点和边，点忘了给 background 就是一条
-  // 只有边和文字的徽标（实测第一版就漏了，色点是透明的）。
+  assert.ok(!page.includes('dsh-router-form-body'),
+    'no SettingsForm children wrapper is left to suppress')
+  // 色点必须真的上色：颜色只进点和边，点忘了给 background 就是透明的。
   const workspace = sourceOf('workspace.ts')
-  const dots = workspace.match(/S\.toneDot/g) ?? []
-  const colored = workspace.match(/Object\.assign\(\{\}, S\.toneDot, healthToneStyle\(/g) ?? []
-  assert.equal(dots.length, colored.length,
-    `every toneDot must be handed its colour by healthToneStyle: ${dots.length} dot(s), ${colored.length} coloured`)
+  assert.equal((workspace.match(/className: 'dsh-router-dot'/g) ?? []).length, 1,
+    'the channel status dot exists once per row')
+  assert.ok(workspace.includes('style: healthToneStyle(status)'),
+    'the dot takes its colour from healthToneStyle')
   // 色点/色边的背景同理：DSH 的 state-* 是中间调（某个主题下看不见或刺眼），
   // 未保存点曾直接借 --dsw-alias-state-warn-primary 当背景（M18）。
   for (const name of ['panel.ts', 'chain.ts', 'workspace.ts', 'modals.ts', 'pipeline.ts', 'page.ts', 'health-ui.ts']) {
@@ -1567,7 +1592,7 @@ test('a legacy per-model config is read as the one chain the Host executes', asy
     profiles: [{
       id: 'p1',
       when: { provider: 'deepseek', model: 'm' },
-      candidates: [cand('deepseek', 'm'), cand('backup', 'b')],
+      candidates: [cand('deepseek', 'm', { maxAttempts: 3 }), cand('backup', 'b')],
       switchOn: switchOn(),
       maxTotalAttempts: 6,
       stickyTurns: 0,
@@ -1577,9 +1602,11 @@ test('a legacy per-model config is read as the one chain the Host executes', asy
   }
   const h = await mount({ value: legacy })
   assert.deepEqual(h.state().draft.chain.candidates.map(routeOf), ['backup/b'])
-  assert.equal(h.state().draft.chain.maxTotalAttempts, 6)
+  // 被钉死的第一跳把它的调用次数（3）迁成重试次数（2），总上限字段消失。
+  assert.equal(h.state().draft.chain.firstHopMaxRetries, 2)
+  assert.equal('maxTotalAttempts' in h.state().draft.chain, false)
   // 保存一次之后，配置就是新形状：旧的 profiles/default 不再被写回。
-  h.actions.onMaxAttempts(0, '2')
+  h.actions.onMaxRetries(0, '2')
   h.actions.onSave()
   await flush()
   const saved = h.mutateCalls.at(-1).ops
@@ -1589,3 +1616,4 @@ test('a legacy per-model config is read as the one chain the Host executes', asy
 
 await Promise.all(pending)
 console.log(`${passed} client-controller test(s) passed`)
+

@@ -100,8 +100,7 @@ last_updated: "2026-10-18"
   - **备用节点（Fallback Nodes）**：展示模型全路径、能力匹配需求标签（`🖼️ 优先满足视觉输入`、`📄 优先满足大上下文`）与推理档位徽标；
   - **行内快捷操作**：右侧集成轻量工具按钮组：上移（提权）、下移（降权）、移除；**Primary 节点的上移与移除禁用**。
 - **模型添加链路**：
-  - 主入口：`从已配置的模型目录中添加候选`（打开 `Modal` 弹窗，读取 `modelCatalog()`，支持按 provider 分组多选，一键导入）；
-  - 辅助入口：`+ 手动输入渠道信息`（打开模态弹窗，输入 `provider/model`，为离线或自定义扩展渠道兜底）。
+  - 唯一入口：`添加候选渠道`（打开 `Modal` 弹窗，读取 `modelCatalog()`，按 provider 分组多选 + 搜索，一键导入）。目录就是 DSH 能寻址的全部模型；手填模型 ID 只在 `llm-deepseek` 系 adapter 上透传，在 `llm-pi-ai` 上于 `resolveModel` 处抛 `UNKNOWN_MODEL`，因此不提供第二个入口——要加目录外的模型，先在 Settings → Models 登记。
 
 #### (2) 多 Profile 规则管理（Profile Bar）
 - 采用 DSH `SegmentedTabs` 范式置顶展示已配置的 profile 规则胶囊列表：
@@ -146,15 +145,7 @@ last_updated: "2026-10-18"
 - **推理档位是自动维度，不占条件位**：候选节点常驻展示 catalog 的 `reasoning.efforts` 徽标；运行时若当前请求的 reasoning effort 不被候选支持，Router 经 `resolveCallConfig` 预校验自动跳过该候选，无需用户配置。
 - **条件全部不满足时**：链上无人可接 → 落回用户自己的路由（让真实失败暴露在那里），中文 notice 说明每个候选为什么被跳过；条件跳过 notice 按 (turn, 跳过组) 去重——工具循环每步重决同一批跳过，发一次就够。不忽略条件强留 Primary（那会把带图请求发给不支持图片的模型）。
 
-#### (4) 手动录入候选渠道模态框 (Manual Channel Modal)
-- **触发路径**：点击降级链底部的 `+ 手动输入渠道信息` 按钮。
-- **界面包含**：
-  - `Provider 标识`（`SettingsValueField`，如 `openai`、`pi-ai-siliconflow`）——对照 `modelCatalog().routableProviders` **实时校验**，不在册即时红字（catalog 是该清单的权威投影）；
-  - `模型 ID`（`SettingsValueField`，如 `gpt-4o`、`deepseek-ai/DeepSeek-V3`）——**不校验**目录成员：catalog membership 是 advisory，核心路由接受未列出的 model id；
-  - `单渠道尝试上限`（数字输入框，默认 1 次，范围 1~5），hint 注明“切换前会先等待一次退避（约 0.5~10 秒）”；
-  - 具有非空校验与格式检查。
-
-#### (5) 故障转移历史抽屉 (Failover History Drawer)
+#### (4) 故障转移历史抽屉 (Failover History Drawer)
 - **触发路径**：点击页面右上角 `故障转移历史` 按钮。
 - **右侧滑出抽屉（Drawer 非官方原语，须自建 `createPortal` 到 body，不用裸 `fixed` 定位），只含一个区块**：
   - **最近故障转移历史**：时间戳、所属会话、原始失败模型、触发的错误码（`RATE_LIMIT` / `TIMEOUT` / …）、最终接管的候选序号；
@@ -163,7 +154,7 @@ last_updated: "2026-10-18"
 - **投影硬约束**（违反即设计缺陷）：wire view 只输出“最近 N 条 + 聚合计数”（每个 tail 页携带全部 client-visible key，无按 key 裁剪，UI-scale 是纪律）；state 必须 plain JSON；view 返回对象必须复用引用；key 带插件命名空间，`stateVersion` 从 1 起只增；卸载即 key 消失、客户端读成能力缺失。
 - **健康状态/延迟/成功率/冷却倒计时不做**：无数据来源（Router 不包 stream、全局健康度明确不做），列入 README Known Limitations，与全局熔断同批“不做”。
 
-#### (6) 删除 Profile 的二次风险确认弹窗 (Risk Confirmation Modal)
+#### (5) 删除 Profile 的二次风险确认弹窗 (Risk Confirmation Modal)
 - **触发路径**：在专属 Profile 页面点击 `删除此规则` 按钮。
 - **复用官方 `RiskConfirmation` 原语**：
   - 显示红色危险标题与风险告知说明；
@@ -183,19 +174,20 @@ export interface CandidateDraft {
   provider: string
   model: string
   displayName?: string
-  maxAttempts: number
+  maxRetries: number              // 失败后重试几次，0..99（不含首发）
+  weight: number
   needs?: {
     images?: boolean
     minContextTokens?: number
   }
 }
 
-export interface ProfileDraft {
-  id: string
-  when: { provider: string; model: string }
-  candidates: CandidateDraft[]   // [0] 钉死为 when 模型：不可删、不可换序；显式 needs 条件对它同样生效
+export interface ChainDraft {
+  candidates: CandidateDraft[]    // 降级候选；第一跳是用户当前选中的模型，不在这里
   switchOn: string[]
-  maxTotalAttempts: number
+  firstHopMaxRetries: number      // 第一跳失败后重试几次
+  stickyTurns: number
+  strategy: 'order' | 'weight' | 'round-robin'
 }
 
 export interface ModelRouterCardState {
@@ -206,14 +198,7 @@ export interface ModelRouterCardState {
   failed: boolean
   revision: number
   enabled: boolean
-  activeProfileId: string
-  profiles: ProfileDraft[]        // 数组；按 when 精确匹配，无序关系
-  defaultProfile: {
-    enabled: boolean
-    candidates: CandidateDraft[]  // 纯备用池，无钉死节点（Primary 永远是运行时用户所选）
-    switchOn: string[]
-    maxTotalAttempts: number
-  }
+  chain: ChainDraft
 }
 ```
 
@@ -310,10 +295,10 @@ export const zh = {
   safetyNoticeText: '用户主动中断 (ABORTED)、凭证失效 (AUTH_FAILED) 及不可达的模型配置 (NO_ADAPTER) 属于永久性错误，将绝不进行盲目转移，立即向用户提示。',
 
   // 预算与操作
-  budgetTitle: '重试预算与退避 (Execution Budget)',
-  budgetSubtitle: '防止坏请求陷入无限重试死循环，限制单个 Agent 轮次的总调用成本。',
-  maxTotalAttempts: '单请求最多总尝试次数',
-  maxTotalAttemptsHint: '含同渠道重试及所有跨渠道降级次数硬顶',
+  retrySectionTitle: '重试与轮次',
+  retrySectionHint: '重试由 DSH 执行，本插件只管数次数、用完切下一条',
+  retryFormula: '按当前配置，一次模型调用最多 {calls} 次真实调用',
+  retryHierarchyNote: '每条候选的重试次数用完就切下一条，链走完即失败；实际次数还受 provider 重试策略限制。',
   backoffTitle: '退避抖动基准 (Backoff)',
   backoffHint: '遵循 DSH 标准指数退避 (500ms ~ 10000ms)',
   backoffBadge: '标准自动退避',
@@ -413,11 +398,11 @@ export const en = {
   safetyNoticeTitle: 'Zero-Waste Circuit Breaker:',
   safetyNoticeText: 'Permanent failures such as User Abort (ABORTED), Bad Credentials (AUTH_FAILED), or Missing Adapter (NO_ADAPTER) will NEVER failover blindly.',
 
-  // Budget
-  budgetTitle: 'Execution Budget & Backoff',
-  budgetSubtitle: 'Prevents infinite retry loops and bounds total token invocation costs.',
-  maxTotalAttempts: 'Max total attempts per request',
-  maxTotalAttemptsHint: 'Hard limit across all intra-channel retries and cross-channel failovers',
+  // Retries
+  retrySectionTitle: 'Retries and turns',
+  retrySectionHint: 'DSH runs the retries; this plugin counts them and switches when they are spent',
+  retryFormula: 'With this configuration one model call makes at most {calls} real calls',
+  retryHierarchyNote: 'Each candidate switches away once its retries are spent; the chain failing ends the step. The provider retry policy can cap the count.',
   backoffTitle: 'Exponential Backoff',
   backoffHint: 'Follows DSH standard exponential backoff (500ms ~ 10000ms)',
   backoffBadge: 'Standard Auto Backoff',

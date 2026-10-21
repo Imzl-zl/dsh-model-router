@@ -112,15 +112,13 @@ ${scenario === 'transport' ? `      real-dead:
           - id: real-failover
             when: { provider: '${BROKEN.provider}', model: '${BROKEN.model}' }
             candidates:
-              - { provider: '${BROKEN.provider}', model: '${BROKEN.model}', maxAttempts: 2 }
-              - { provider: '${BACKUP.provider}', model: '${BACKUP.model}', maxAttempts: 1 }
+              - { provider: '${BROKEN.provider}', model: '${BROKEN.model}', maxRetries: 1 }
+              - { provider: '${BACKUP.provider}', model: '${BACKUP.model}', maxRetries: 0 }
             switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-            maxTotalAttempts: 5
         default:
           enabled: false
           candidates: []
           switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false }
-          maxTotalAttempts: 3
 `
 
 mkdirSync(here, { recursive: true })
@@ -196,3 +194,4 @@ check('the turn completed with an assistant message', hasAssistant)
 console.log(`\n${failures === 0 ? 'PASS' : 'FAIL'}: ${failures} failure(s)`)
 console.log(`failure code observed: ${attempts[0]?.code ?? 'none'} — ${attempts[0]?.message ?? ''}`)
 process.exit(failures === 0 ? 0 : 1)
+

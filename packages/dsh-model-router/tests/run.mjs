@@ -42,12 +42,13 @@ function profile(candidates, overrides = {}) {
     when: WHEN,
     candidates,
     switchOn: { ...SWITCH_ON },
-    maxTotalAttempts: 6,
     ...overrides,
   }
 }
 
-const C = (provider, maxAttempts = 1, over = {}) => ({ provider, model: 'stub-model', maxAttempts, ...over })
+// The second argument is CALLS (what every assertion below counts); the config
+// stores retries, so the fixture converts once — exactly like `resolveChain`.
+const C = (provider, calls = 1, over = {}) => ({ provider, model: 'stub-model', maxRetries: calls - 1, ...over })
 
 // The health projection folds the real durable log, so the fold is asserted
 // against events a real boot produced rather than a hand-made fixture. This is
@@ -59,8 +60,11 @@ import { failoverHistoryProjection } from '../src/lineage.ts'
 const SCENARIOS = [
   {
     name: 'primary-success',
-    note: '配了规则的模型，首选直接成功：不切换、不通知',
-    router: { enabled: true, profiles: [profile([C('stub-primary', 2)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    note: '第一跳直接成功：链真的接管了请求，但不切换、不通知',
+    // A chain with a real fallback, so the router engages and the assertion is
+    // about the first hop succeeding — not about a config the plugin ignores
+    // (one candidate only would migrate to an empty chain and stay out).
+    router: { enabled: true, profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: { 'stub-primary': { outcomes: ['ok'] } },
     check(events) {
       eq('headers', headers(events), ['stub-primary/stub-model'])
@@ -71,30 +75,33 @@ const SCENARIOS = [
     },
   },
   {
-    name: 'weight-strategy-starts-at-the-weighted-candidate',
-    note: '权重策略：首个请求直接落在唯一有权重的候选上，不等首选失败',
+    name: 'weight-strategy-picks-the-fallback-start-after-the-first-hop',
+    note: '权重策略只作用于降级候选：第一跳仍然先试，失败后才按权重从降级候选开始',
     router: { enabled: true, profiles: [profile([
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, weight: 0 },
-      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, weight: 1 },
-    ], { strategy: 'weight' })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+      { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, weight: 0 },
+      { provider: 'stub-backup', model: 'stub-model', maxRetries: 0, weight: 1 },
+      { provider: 'stub-spare', model: 'stub-model', maxRetries: 0, weight: 0 },
+    ], { strategy: 'weight' })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: {
-      // The zero-weight candidate must not be reached at all: if the draw ever
-      // lands on it the turn still succeeds, so assert the headers instead.
-      'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
+      // The first hop is always tried, even under weight. After it fails the draw
+      // can only land on stub-backup (the only positive weight), never on the
+      // zero-weight spare — so the answering header proves both halves.
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT'] },
       'stub-backup': { outcomes: ['ok'] },
+      'stub-spare': { outcomes: ['ok'] },
     },
     check(events) {
-      eq('headers', headers(events), ['stub-backup/stub-model'])
-      eq('failed attempts', failedAttempts(events), [])
-      eq('notices', notices(events), [], 'a weighted start is not a failover, so no notice')
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT'])
+      eq('notice count', notices(events).length, 1)
       eq('final route', finalRoute(events), 'stub-backup/stub-model')
       eq('turn end', turnEnd(events), 'completed')
     },
   },
   {
     name: 'failover-rate-limit',
-    note: '主渠道限流到达单渠道上限，切换到备用并留一条中文通知',
-    router: { enabled: true, profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    note: '主渠道限流到达单渠道上限（2 次，含 DSH 重试），切换到备用并留一条中文通知',
+    router: { enabled: true, profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: {
       'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
       'stub-backup': { outcomes: ['ok'] },
@@ -104,7 +111,8 @@ const SCENARIOS = [
       // The fold's failover marker, asserted straight from the durable log: the
       // second header records the route change the lineage unit folds.
       eq('header reasons', headerReasons(events), ['initial', 'change'])
-      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT'])
+      // 第一跳配了 2 次额度：首发 + llm-retry 一次，然后才跨候选。
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT', 'RATE_LIMIT'])
       eq('notice count', notices(events).length, 1)
       ok('notice mentions 限流', notices(events)[0]?.text.includes('限流'))
       ok('notice names the first fallback', notices(events)[0]?.text.includes('降级 1/1'))
@@ -120,7 +128,7 @@ const SCENARIOS = [
       eq('health: answering route clears the error', health['stub-backup/stub-model']?.lastError, undefined)
       ok('health: answering route measures a turn cost', typeof health['stub-backup/stub-model']?.latencyMs === 'number')
       ok('health: answering route measures throughput', typeof health['stub-backup/stub-model']?.throughputTps === 'number')
-      eq('health: timeline is bounded', health['stub-primary/stub-model']?.timeline.length, 1)
+      eq('health: timeline is bounded', health['stub-primary/stub-model']?.timeline.length, 2)
       // The failover-history drawer's data, folded by the production lineage
       // projection from the same log: one entry, the throttled route handing
       // over to the route that answered, settled once that route succeeded.
@@ -135,7 +143,7 @@ const SCENARIOS = [
   {
     name: 'switch-off-terminal',
     note: '未勾选的异常不切换；同渠道内 llm-retry 仍按策略重试后才终态',
-    router: { enabled: true, profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)], { switchOn: { ...SWITCH_ON, rateLimit: false } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { enabled: true, profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)], { switchOn: { ...SWITCH_ON, rateLimit: false } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] } },
     check(events) {
       eq('headers', headers(events), ['stub-primary/stub-model'])
@@ -146,30 +154,58 @@ const SCENARIOS = [
     },
   },
   {
-    name: 'total-cap',
-    note: '总尝试上限硬顶：llm-retry 不重试该码时，上限精确生效',
-    router: { enabled: true, profiles: [profile([C('stub-primary', 3), C('stub-backup', 3)], { maxTotalAttempts: 3 })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    name: 'retries-come-from-the-candidate-not-the-policy',
+    note: '每条候选的重试次数由插件自己执行；provider 策略里的 2 不再截断它，打满就切下一条',
+    // 2026-10-21：重试执行权归插件。这条场景的 provider 策略写着 maxRetries: 2，
+    // 而候选写 3 次调用——旧行为会被策略截到 3 次，新行为按候选的 3 次打满，
+    // 而且一条 llm/retry 记录都不会有（那些重试不是 llm-retry 做的）。
+    // 6 次真实调用全部来自"候选自己的次数 × 候选数"，没有第三个数字参与。
+    router: { enabled: true, profiles: [profile([C('stub-primary', 3), C('stub-backup', 3)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: {
-      // retryableCodes must be non-empty (retry-policy.ts); leaving only
-      // RATE_LIMIT retryable makes llm-retry delegate every TIMEOUT straight
-      // to the router, so the total cap binds exactly.
-      policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
-      'stub-primary': { outcomes: ['fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT'] },
-      'stub-backup': { outcomes: ['fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT'] },
+      policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 2 },
+      'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
+      'stub-backup': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] },
     },
     check(events) {
-      // 第一跳只打一次，所以 TIMEOUT 之后直接降级；备份候选各有 3 次额度，总上限 3
-      // 精确顶住：1（第一跳）+ 2（备份）= 3。
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
-      eq('failed attempt count', failedAttempts(events).length, 3)
+      eq('failed attempt count', failedAttempts(events).length, 6)
       eq('notice count', notices(events).length, 1)
+      // 重试由插件执行：durable 的 llm/retry 一条都没有，但失败尝试一条不少。
+      eq('no llm/retry records: the router performed them', events.filter(e => e.type === 'llm/retry').length, 0)
       eq('turn end', turnEnd(events), 'error')
+    },
+  },
+  {
+    name: 'retries-beyond-the-provider-policy',
+    note: '候选配的次数大于 provider 策略：旧行为被截到 1+2 次，新行为按候选打满 6 次',
+    // 这条才是本决定的判据：第一跳配 5 次重试（= 6 次调用）> provider 策略的 2。
+    // 旧实现 1+min(5,2)=3 次就放弃并换渠道；新实现打满 6 次才换。
+    // 第一跳的次数在 `firstHopMaxRetries`（第一跳永远是用户选中的模型，不在候选里）。
+    router: {
+      enabled: true,
+      chain: {
+        candidates: [{ provider: 'stub-backup', model: 'stub-model', maxRetries: 0 }],
+        firstHopMaxRetries: 5,
+        switchOn: { ...SWITCH_ON },
+      },
+    },
+    script: {
+      policy: { maxRetries: 2 },
+      'stub-primary': { outcomes: Array.from({ length: 8 }, () => 'fail:RATE_LIMIT') },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('the candidate really used its own budget', failedAttempts(events).length, 6)
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('no llm/retry records: the router performed them', events.filter(e => e.type === 'llm/retry').length, 0)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
     },
   },
   {
     name: 'default-pool',
     note: '未配规则的模型走全局兜底池：用户所选永远是第一跳',
-    router: { enabled: true, profiles: [], default: { enabled: true, candidates: [C('stub-backup', 1)], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { enabled: true, profiles: [], default: { enabled: true, candidates: [C('stub-backup', 1)], switchOn: { ...SWITCH_ON } } },
     script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] }, 'stub-backup': { outcomes: ['ok'] } },
     check(events) {
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
@@ -181,7 +217,7 @@ const SCENARIOS = [
   {
     name: 'prevalidation-skip',
     note: '候选不支持当前推理档位：调用前预校验跳过，不猝死 step',
-    router: { enabled: true, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1), C('stub-third', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 } },
+    router: { enabled: true, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1), C('stub-third', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     selection: { reasoningEffort: 'high' },
     script: {
       'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'], model: { reasoning: { efforts: [{ id: 'high', name: '高' }] } } },
@@ -207,7 +243,7 @@ const SCENARIOS = [
       C('stub-unregistered', 1),
       C('stub-backup', 1),
       C('stub-third', 1),
-    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 } },
+    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     selection: { reasoningEffort: 'high' },
     script: {
       // maxRetries 0：RATE_LIMIT 直接委派，链的行进是确定性的。
@@ -251,9 +287,9 @@ const SCENARIOS = [
     note: '候选条件不满足（预估上下文未达门槛）被跳过，链条继续且留痕',
     router: { enabled: true, profiles: [profile([
       C('stub-primary', 1),
-      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, needs: { minContextTokens: 999999 } },
+      { provider: 'stub-backup', model: 'stub-model', maxRetries: 0, needs: { minContextTokens: 999999 } },
       C('stub-third', 1),
-    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: {
       // TIMEOUT is not retried by llm-retry here, so every failure is delegated
       // and the chain walk is deterministic.
@@ -277,9 +313,9 @@ const SCENARIOS = [
     router: { enabled: true, profiles: [profile([
       C('stub-primary', 1),
       // 第一个降级候选配了条件——显式条件是用户意图，不满足就跳过它，不静默改路。
-      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, needs: { minContextTokens: 999999 } },
+      { provider: 'stub-backup', model: 'stub-model', maxRetries: 0, needs: { minContextTokens: 999999 } },
       C('stub-third', 1),
-    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    ])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: {
       policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
       'stub-primary': { outcomes: ['fail:TIMEOUT'] },
@@ -298,9 +334,9 @@ const SCENARIOS = [
     name: 'image-gate-skips-vision-on-text-turn',
     note: '无图轮：主模型失败后，只配了「仅带图」的识图候选被条件跳过（留痕且只发一次），文本请求不会打给识图模型',
     router: { enabled: true, profiles: [profile([
-      { provider: 'stub-primary', model: 'stub-model', maxAttempts: 1, needs: { images: false } },
-      { provider: 'stub-backup', model: 'stub-model', maxAttempts: 1, needs: { images: true } },
-    ], { stickyTurns: 2 })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 } },
+      { provider: 'stub-primary', model: 'stub-model', maxRetries: 0, needs: { images: false } },
+      { provider: 'stub-backup', model: 'stub-model', maxRetries: 0, needs: { images: true } },
+    ], { stickyTurns: 2 })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: {
       policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
       'stub-primary': { outcomes: ['fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT', 'fail:TIMEOUT'] },
@@ -323,7 +359,7 @@ const SCENARIOS = [
   {
     name: 'master-off',
     note: '总闸关闭：配了规则也不接管',
-    router: { enabled: false, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { enabled: false, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] } },
     check(events) {
       eq('headers', headers(events), ['stub-primary/stub-model'])
@@ -340,7 +376,7 @@ const SCENARIOS = [
     router: {
       enabled: true,
       profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } },
       breaker: { enabled: true, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 3600 }] },
     },
     script: {
@@ -349,7 +385,7 @@ const SCENARIOS = [
     },
     check(events) {
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
-      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT'])
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['RATE_LIMIT', 'RATE_LIMIT'])
       eq('notice count', notices(events).length, 1)
       ok('notice mentions 限流', notices(events)[0]?.text.includes('限流'))
       // 用户自己选的那一条永远不跳过——禁用名单不该能覆盖人的显式选择。
@@ -367,7 +403,7 @@ const SCENARIOS = [
     router: {
       enabled: true,
       profiles: [profile([C('stub-primary', 1), C('stub-primary', 1, { model: 'stub-model-2' }), C('stub-backup', 1)])],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } },
       breaker: { enabled: true, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 3600, scope: 'channel' }] },
     },
     script: {
@@ -397,7 +433,7 @@ const SCENARIOS = [
     router: {
       enabled: true,
       profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } },
       breaker: { enabled: false, rules: [{ code: 'RATE_LIMIT', message: '', cooldownSeconds: 3600 }] },
     },
     script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT'] }, 'stub-backup': { outcomes: ['ok'] } },
@@ -410,37 +446,33 @@ const SCENARIOS = [
   },
   {
     name: 'always-retry-policy-rejected',
-    note: '候选渠道声明 always 重试策略：加载即拒绝（无上限重试会让总上限失效）',
+    note: '候选渠道声明 always 重试策略：加载即拒绝（无上限重试会让没勾的码永不收尾）',
     // 已记录决策：docs/design/dsh-capability-boundary.md §三 G2 与 open-questions 一.3。
     // 策略是用户在每个渠道的 Models 设置里自己选的，所以必须在加载时挡住。
-    router: { enabled: true, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { enabled: true, profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: { policy: { mode: 'always' }, 'stub-primary': { outcomes: ['ok'] } },
     expectBootFailure: 'retry policy is "always"',
     check() {},
   },
   {
-    name: 'budget-cap-when-the-whole-chain-dies',
-    note: '整条链都失败：总真实调用数等于用户配的上限；候选配额已尽时提前决定，llm-retry 不参与',
-    // 两个候选各 1 枪、总上限 2，两条都一直 429（既在 switchOn 里、也是 llm-retry
-    // 默认可重试码）。这一场景钉住 I1 的提前决定：候选配额已尽 && 该切换时，插件在
-    // await next() 之前直接决定（换得动返回 retry、换不动终态），llm-retry 根本
-    // 不参与——所以下面断言 llm/retry 与 llm/retry-started 记录为 0。
-    // 「内层决定重试而预算已尽 → 否决」是同一道硬上限的另一个决策点，由
-    // veto-rejects-llm-retry-when-the-total-cap-is-spent 钉住（那里关掉 rateLimit，
-    // llm-retry 才会真的被咨询）。
-    // prepend 的实测依据：注册在 llm-retry 内层时，它自己的同路由重试发生在插件
-    // 看不见的地方，同一形状实测打 7 次（上限 2）。
+    name: 'chain-exhausted-two-candidates',
+    note: '整条链都失败：每候选恰好一枪（默认不重试），两次真实调用后终态，llm-retry 不参与',
+    // 两个候选各 1 次调用、两条都一直 429（既在 switchOn 里、也是 llm-retry 默认可
+    // 重试码）。这一场景钉住提前决定：候选额度已尽 && 该切换时，插件在 await next()
+    // 之前直接决定（换得动返回 retry、换不动终态），llm-retry 根本不参与——所以下面
+    // 断言 llm/retry 与 llm/retry-started 记录为 0。
+    // 2026-10-20 之后这里不再有第三个数字：两次调用就是"两个候选 × 各 1 次"。
     router: {
       enabled: true,
-      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)], { maxTotalAttempts: 2 })],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
+      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } },
     },
     script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT'] }, 'stub-backup': { outcomes: ['fail:RATE_LIMIT'] } },
     check(events) {
       // 每候选一枪，一枪不多：两条各打一次就终态。
-      eq('real calls equal the configured cap', failedAttempts(events).length, 2)
+      eq('real calls', failedAttempts(events).length, 2)
       eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
-      // I1：预算已尽的处置发生在 `await next()` 之前，llm-retry 根本不参与——
+      // 额度已尽的处置发生在 `await next()` 之前，llm-retry 根本不参与——
       // durable log 里因此一条 llm/retry 都不该有。修复前这里各有 2 条（各带一次
       // 退避；换 3000ms 退避的 stub 实测 boot 墙钟 8547ms→2227ms），且记录里的
       // provider 可能不是真正被打的那一条。
@@ -450,45 +482,15 @@ const SCENARIOS = [
     },
   },
   {
-    name: 'veto-rejects-llm-retry-when-the-total-cap-is-spent',
-    note: '未勾选该码 + 总上限已尽：llm-retry 的重试也要被否决，硬上限不许越过',
-    // 与 budget-cap 是同一道硬上限的两个决策点。那条场景里失败码在 switchOn 里，
-    // 候选配额已尽时插件在 await next() 之前直接决定，llm-retry 根本不参与
-    // （llm/retry 记录为 0）。这条把 rateLimit 关掉、总上限压到 5：提前决定不再
-    // 成立，llm-retry 的同路由重试被逐一放行，直到总上限已尽之后那一次决定被
-    // 否决——交付代码恰好 5 次真实调用；删掉 index.ts 的否决分支实测打 6 次，
-    // 越过用户配的硬上限。位置依据：`agent/request-error` 用 prepend 注册在
-    // 最外层，先 await next() 拿到内层决定再处置。
-    router: {
-      enabled: true,
-      profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)],
-        { switchOn: { ...SWITCH_ON, rateLimit: false }, maxTotalAttempts: 5 })],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
-    },
-    script: { 'stub-primary': { outcomes: ['fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT', 'fail:RATE_LIMIT'] } },
-    check(events) {
-      // 首发 1 次 + llm-retry 放行的 4 次 = 5；它第 6 次决定重试时预算已尽，被否决。
-      eq('real calls equal the configured cap', failedAttempts(events).length, 5)
-      // llm-retry 重试的是同一条路由：全程只有用户自己那一条的 header，备用一次未打。
-      eq('headers', headers(events), ['stub-primary/stub-model'])
-      eq('turn end', turnEnd(events), 'error')
-      // 与 budget-cap 的分界：这里 llm-retry 真的被咨询了（同路由重试归它），
-      // 否决发生在它下一次决定之后——否则这条场景会悄悄退化成提前决定的形状。
-      ok('llm-retry was consulted', events.filter(e => e.type === 'llm/retry').length > 0)
-      // 背景与取舍（含被否的「改 switch-off-terminal 上限」方案）：
-      // .agents/notes/implemented/2026-10-17-close-the-review-todos.md
-    },
-  },
-  {
     name: 'last-candidate-cap-fires-no-extra-call',
-    note: '末位候选被 cap 之后不多打：每候选恰好一次，总数等于各候选上限之和',
-    // C2：三个候选各 1 枪、总上限 6，全链 AUTH（switchOn 默认开、llm-retry 立即
+    note: '末位候选打满自己的次数后不多打：每候选恰好一次，总数等于各候选次数之和',
+    // C2：三个候选各 1 次调用，全链 AUTH（switchOn 默认开、llm-retry 立即
     // 委派）。修复前末位候选被打第二次（真实调用 4 次、health fold 显示它吸收 2
     // 次），且 advanced===false 连 notice 都不发——用户为一次看不见的调用付了钱。
     router: {
       enabled: true,
-      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1), C('stub-third', 1)], { maxTotalAttempts: 6 })],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 },
+      profiles: [profile([C('stub-primary', 1), C('stub-backup', 1), C('stub-third', 1)])],
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } },
     },
     script: {
       policy: { retryableCodes: ['RATE_LIMIT'], maxRetries: 0 },
@@ -517,7 +519,7 @@ const SCENARIOS = [
     router: {
       enabled: true,
       profiles: [profile([C('stub-primary', 1), C('stub-backup', 1)])],
-      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 6 },
+      default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } },
       breaker: { enabled: true, rules: [{ code: 'AUTH', message: '', cooldownSeconds: 3600, scope: 'channel' }] },
     },
     script: { policy: { maxRetries: 0 }, 'stub-primary': { outcomes: ['fail:AUTH'] }, 'stub-backup': { outcomes: ['ok'] } },
@@ -538,7 +540,7 @@ const SCENARIOS = [
     note: '没写 enabled（默认关）时插件完全不动：请求按默认模型原样发出',
     // 默认值从 true 改成 false 后，"默认关"必须被钉住——否则新装一次就被接管，
     // 而界面上曾经没有任何开关能关掉它（apply.ts 的 onEnabled 是死入口）。
-    router: { profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)])], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
     script: { 'stub-primary': { outcomes: ['fail:SERVER', 'ok'] } },
     check(events) {
       // 同一条路由上的 llm-retry 重试不产生新的 request/header（header 只在路由变化时
@@ -556,7 +558,7 @@ const SCENARIOS = [
     note: '没配降级候选：插件不接管，请求按默认模型原样发出',
     // 空链是"没有降级可走"的真实配置。这时插件整个不进入请求路径——否则它会把自己
     // 的第一跳一枪上限强加给一个它没有任何东西可加的请求上。
-    router: { enabled: true, chain: { candidates: [], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { enabled: true, chain: { candidates: [], switchOn: { ...SWITCH_ON } } },
     script: { 'stub-primary': { outcomes: ['fail:SERVER', 'ok'] } },
     check(events) {
       eq('turn end', turnEnd(events), 'completed')
@@ -570,7 +572,7 @@ const SCENARIOS = [
   {
     name: 'invalid-config-rejected',
     note: '结构错误（同一条链重复配置同一渠道）在加载时响亮失败，不静默跳过',
-    router: { enabled: true, chain: { candidates: [C('stub-primary', 1), C('stub-primary', 1)], switchOn: { ...SWITCH_ON }, maxTotalAttempts: 3 } },
+    router: { enabled: true, chain: { candidates: [C('stub-primary', 1), C('stub-primary', 1)], switchOn: { ...SWITCH_ON } } },
     script: { 'stub-primary': { outcomes: ['ok'] } },
     expectBootFailure: 'names stub-primary/stub-model more than once',
     check() {},
@@ -589,7 +591,7 @@ function candidateYaml(c, indent) {
   // weight must cross the overlay: an unset field reads as 0, which silently
   // turns a weight strategy into an order one.
   const weight = c.weight === undefined ? '' : `, weight: ${c.weight}`
-  return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxAttempts: ${c.maxAttempts}${weight}${extra} }`
+  return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxRetries: ${c.maxRetries}${weight}${extra} }`
 }
 
 function overlayYaml(router, selection) {
@@ -623,8 +625,8 @@ ${selection?.reasoningEffort === undefined ? '' : `    reasoningEffort: ${select
         chain:
           candidates:
 ${chain.candidates.map(c => candidateYaml(c, '            ')).join('\n')}
-          switchOn: { rateLimit: ${chain.switchOn.rateLimit}, server: ${chain.switchOn.server}, timeout: ${chain.switchOn.timeout}, transport: ${chain.switchOn.transport}, emptyResponse: ${chain.switchOn.emptyResponse}, invalidRequest: ${chain.switchOn.invalidRequest} }
-          maxTotalAttempts: ${chain.maxTotalAttempts}${chain.stickyTurns === undefined ? '' : `
+          switchOn: { rateLimit: ${chain.switchOn.rateLimit}, server: ${chain.switchOn.server}, timeout: ${chain.switchOn.timeout}, transport: ${chain.switchOn.transport}, emptyResponse: ${chain.switchOn.emptyResponse}, invalidRequest: ${chain.switchOn.invalidRequest} }${chain.firstHopMaxRetries === undefined ? '' : `
+          firstHopMaxRetries: ${chain.firstHopMaxRetries}`}${chain.stickyTurns === undefined ? '' : `
           stickyTurns: ${chain.stickyTurns}`}${chain.strategy === undefined ? '' : `
           strategy: ${chain.strategy}`}
 ${router.breaker === undefined ? '' : `        health:
@@ -641,19 +643,21 @@ function chainOf(router) {
   // Legacy authoring shape: one profile whose candidates[0] is the selected model.
   const adopted = router.profiles?.[0]
   if (adopted !== undefined) {
+    // Mirror effectiveChain: the pinned candidates[0] becomes the implicit first
+    // hop, and its retry budget is the first hop's.
+    const pinned = adopted.candidates?.[0]
     return {
       candidates: adopted.candidates.slice(1),
       switchOn: adopted.switchOn ?? { ...SWITCH_ON },
-      maxTotalAttempts: adopted.maxTotalAttempts ?? 6,
       stickyTurns: adopted.stickyTurns,
       strategy: adopted.strategy,
+      ...(pinned?.maxRetries === undefined ? {} : { firstHopMaxRetries: pinned.maxRetries }),
     }
   }
   // Legacy authoring shape: the pure fallback pool (no pinned head).
   return {
     candidates: router.default?.candidates ?? [],
     switchOn: router.default?.switchOn ?? { ...SWITCH_ON },
-    maxTotalAttempts: router.default?.maxTotalAttempts ?? 3,
     stickyTurns: router.default?.stickyTurns,
     strategy: router.default?.strategy,
   }
@@ -837,3 +841,5 @@ if (failures.length > 0) {
   console.log(failures.map(f => `  - ${f}`).join('\n'))
   process.exitCode = 1
 }
+
+
