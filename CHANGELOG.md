@@ -129,4 +129,4 @@ browser session.
 - **Not on npm.** The name `dsh-model-router` on the public registry belongs to
   an unrelated package; this plugin is installed from this repository.
 
-[0.1.0]: https://github.com/Imzl-zl/dsh-model-router/releases/tag/v0.1.0
+[0.1.0]: https://github.com/Imzl-zl/dsh-models-router/releases/tag/v0.1.0

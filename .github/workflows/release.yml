@@ -1,0 +1,65 @@
+name: release
+
+# A release is a tag push, not a button: `npm version` writes the version and the
+# CHANGELOG entry, the tag carries it to CI, and CI publishes exactly that
+# commit. The tag must equal `packages/dsh-models-router/package.json`'s version.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  # Create the GitHub Release; id-token is what enables npm provenance.
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    name: publish to npm and open the GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Require the tag to match the package version
+        run: |
+          node -e '
+            const pkg = require("./packages/dsh-models-router/package.json");
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            if (pkg.version !== tag) {
+              console.error(`tag ${tag} does not match package.json version ${pkg.version}`);
+              process.exit(1);
+            }
+            console.log(`releasing ${pkg.name}@${pkg.version}`);
+          '
+
+      - run: npm ci
+      - run: npm ci --prefix packages/dsh-models-router --legacy-peer-deps
+      - run: npm run bundle --prefix packages/dsh-models-router
+
+      - name: Publish (provenance, public)
+        working-directory: packages/dsh-models-router
+        # NPM_TOKEN is a granular access token with "Read and write" for this
+        # package and 2FA bypass enabled. Provenance is signed by GitHub OIDC.
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: GitHub release notes from CHANGELOG
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Create the GitHub release
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          --title "$GITHUB_REF_NAME"
+          --notes-file "$RUNNER_TEMP/release-notes.md"
+          --verify-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

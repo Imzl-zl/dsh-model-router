@@ -1,5 +1,11 @@
 # dsh-models-router
 
+<p>
+  <a href="https://www.npmjs.com/package/dsh-models-router"><img src="https://img.shields.io/npm/v/dsh-models-router?color=4A65E8" alt="npm"></a>
+  <a href="https://github.com/Imzl-zl/dsh-models-router/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-4A65E8.svg" alt="License: MIT"></a>
+  <a href="https://github.com/Imzl-zl/dsh-models-router/actions/workflows/ci.yml"><img src="https://github.com/Imzl-zl/dsh-models-router/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+</p>
+
 Transparent cross-provider failover for DSH Agent main requests, with per-session
 fallback chains.
 

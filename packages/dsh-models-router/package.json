@@ -1,15 +1,39 @@
 {
   "name": "dsh-models-router",
   "version": "0.2.0",
-  "type": "module",
-  "description": "Transparent cross-provider failover for DSH Agent main requests.",
+  "description": "Transparent cross-provider failover for DSH Agent main requests: named fallback chains, per-session chain choice, per-route retry overrides.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "llm",
+    "failover",
+    "fallback",
+    "router",
+    "retry",
+    "model-routing"
+  ],
+  "homepage": "https://github.com/Imzl-zl/dsh-models-router#readme",
+  "bugs": {
+    "url": "https://github.com/Imzl-zl/dsh-models-router/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Imzl-zl/dsh-models-router.git",
+    "directory": "packages/dsh-models-router"
+  },
+  "author": "Imzl-zl",
+  "license": "MIT",
   "icon": "./icon.svg",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
     "bundle": "tsc -p tsconfig.json && tsdown",
     "watch": "tsdown --watch",
     "prepublishOnly": "npm run bundle"
   },
-  "license": "MIT",
   "main": "lib/index.js",
   "files": [
     "icon.svg",
@@ -73,11 +97,6 @@
     "@deepseek-ai/dsh-typert-generator": "0.2.0-rc.2",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Imzl-zl/dsh-model-router.git",
-    "directory": "packages/dsh-models-router"
   },
   "publishConfig": {
     "access": "public"

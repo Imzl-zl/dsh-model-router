@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build, type-check and the four suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The host half targets es2024 and uses `using` with a Symbol.dispose
+          # deadline, and the tests run TypeScript sources through Node's
+          # strip-only type removal: both need a modern Node.
+          node-version: 24
+          cache: npm
+
+      - name: Install the workspace (DSH CLI + peers)
+        run: npm ci
+
+      - name: Install the package's build dependencies
+        # The package's peer dependencies (@deepseek-ai/*, zod, schemastery) must
+        # resolve from the workspace tree above it, so they are installed with
+        # the legacy peer resolution the package's own lockfile was built with.
+        run: npm ci --prefix packages/dsh-models-router --legacy-peer-deps
+
+      - name: Build lib/ (host, client, typert)
+        run: npm run bundle --prefix packages/dsh-models-router
+
+      - name: Type-check the host entry
+        run: >
+          npx tsc --noEmit --skipLibCheck --strict
+          --module nodenext --moduleResolution nodenext
+          --target es2022 --allowImportingTsExtensions
+          packages/dsh-models-router/src/index.ts
+
+      - name: unit
+        run: node packages/dsh-models-router/tests/unit.mjs
+
+      - name: client-controller
+        run: node packages/dsh-models-router/tests/client-controller.mjs
+
+      - name: remote
+        run: node packages/dsh-models-router/tests/remote.mjs
+
+      - name: Loader composition
+        run: node packages/dsh-models-router/tests/run.mjs

@@ -3,8 +3,9 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Imzl-zl/dsh-models-router/actions/workflows/ci.yml"><img src="https://github.com/Imzl-zl/dsh-models-router/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
   <a href="https://www.npmjs.com/package/dsh-models-router"><img src="https://img.shields.io/npm/v/dsh-models-router?color=4A65E8" alt="npm"></a>
-  <a href="https://github.com/Imzl-zl/dsh-model-router/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-4A65E8.svg" alt="License: MIT"></a>
+  <a href="https://github.com/Imzl-zl/dsh-models-router/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-4A65E8.svg" alt="License: MIT"></a>
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DSH-0.2.0--rc.2-4A65E8.svg" alt="DSH 0.2.0-rc.2"></a>
 </p>
 
@@ -35,7 +36,7 @@ dsh plugin add dsh-models-router
 From a checkout instead (the package name is `dsh-models-router`; the public registry's `dsh-model-router` is an unrelated package):
 
 ```sh
-git clone https://github.com/Imzl-zl/dsh-model-router.git
+git clone https://github.com/Imzl-zl/dsh-models-router.git
 cd dsh-model-router
 npm install
 npm run bundle --prefix packages/dsh-models-router
@@ -75,7 +76,65 @@ The plugin owns two seams of the Agent loop:
 
 Every switch is folded from the durable session log into a `router/failover-history` projection and surfaced in the failover-history drawer.
 
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `packages/dsh-models-router/src/` | The plugin: Host half (`index.ts`, `router.ts`, `bindings.ts`, `chain.ts`, …) and browser half (`src/client/`). |
+| `packages/dsh-models-router/tests/` | Four suites: `unit`, `client-controller`, `remote` (in-process production profile) and `run` (real headless Loader composition per scenario). |
+| `docs/design/` | Current design: routing proposal, source map, capability boundary, per-session chains, release notes policy. |
+| `.agents/notes/` | Decision notes (why, what was rejected, what it cost). Status is the directory. |
+| `spike/` | Phase 1 evidence kept as-is; not part of the package. |
+
 ## Development
+
+```sh
+npm install                                                  # root: the DSH CLI + peers
+npm ci --prefix packages/dsh-models-router --legacy-peer-deps # package: tsc, tsdown, typert generator
+npm run bundle --prefix packages/dsh-models-router           # build lib/ (host + client + typert)
+npm test                                                     # the four suites
+```
+
+Individual suites (each takes its own file, the composition suite a scenario name):
+
+```sh
+node packages/dsh-models-router/tests/unit.mjs
+node packages/dsh-models-router/tests/client-controller.mjs
+node packages/dsh-models-router/tests/remote.mjs
+node packages/dsh-models-router/tests/run.mjs [scenario]
+```
+
+The package keeps the built `lib/` out of git (it is in `files`, so npm ships
+it); `npm run bundle` must run before a browser or a Loader sees a source
+change, and the composition tests load that artifact on purpose.
+
+## Releasing
+
+```sh
+npm version minor --prefix packages/dsh-models-router   # 0.2.0 → 0.3.0, no tag yet
+# move the CHANGELOG's "Unreleased" content under the new version heading
+git add -A && git commit -m "chore(release): 0.3.0"
+git tag -a v0.3.0 -m "dsh-models-router 0.3.0" && git push origin master v0.3.0
+```
+
+Pushing the tag is the whole release:
+
+- `.github/workflows/release.yml` refuses the tag unless it equals the package
+  version, builds `lib/`, publishes to npm with provenance (`--provenance`,
+  public access) and opens the GitHub release with the matching CHANGELOG
+  section (`scripts/release-notes.mjs`).
+- It needs one repository secret, `NPM_TOKEN`: a granular npm token with
+  "Read and write" on `dsh-models-router` and 2FA bypass. Nothing else is
+  configured in the repository.
+- `.github/workflows/ci.yml` runs on every push to `master` and every pull
+  request: the build, the host type-check and the four suites.
+
+The version policy is the CHANGELOG's: below `1.0.0` the minor digit marks a
+delivery milestone, and the plugin's DSH peer range moves with it.
+
+The package is `dsh-models-router`: the public registry's `dsh-model-router`
+belongs to another publisher, so install commands, badges and the bundle patch
+use the plural name.
 
 ```sh
 node packages/dsh-models-router/tests/unit.mjs              # pure decision logic
