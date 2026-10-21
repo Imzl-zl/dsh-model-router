@@ -59,8 +59,15 @@ export function ChainsSection(props) {
       title: chains.length <= 1 ? t('chainRemoveLastHint') : t('chainRemove'),
       onClick: function () { props.onRemoveChain(chain.id) },
     }, t('chainRemove'))
+    // 「复制」是对某条链的显式动作：同一条链只换一条候选时不用重配。「添加链」仍是空链。
+    var copy = h(Button, {
+      size: 'sm',
+      disabled: props.disabled,
+      title: t('chainCopyHint'),
+      onClick: function () { props.onCopyChain(chain.id) },
+    }, t('chainCopy'))
     return h('div', { key: chain.id, className: 'dsh-router-chain-row' + (editing ? ' is-editing' : '') },
-      pick, name, defaultMark, remove)
+      pick, name, defaultMark, copy, remove)
   })
   var add = h(Button, { size: 'sm', disabled: props.disabled, onClick: props.onAddChain }, t('chainAdd'))
   return h('section', { className: 'dsh-router-section' },
@@ -86,6 +93,7 @@ export function ChainView(props) {
       onRenameChain: props.onRenameChain,
       onSetDefaultChain: props.onSetDefaultChain,
       onRemoveChain: props.onRemoveChain,
+      onCopyChain: props.onCopyChain,
       onAddChain: props.onAddChain,
     }),
     h(StrategySection, {

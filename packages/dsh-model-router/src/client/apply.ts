@@ -157,6 +157,7 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onEnabled: function (value) { controller.setEnabled(value) },
     onSelectChain: function (id) { controller.selectChain(id) },
     onAddChain: function () { controller.addChain() },
+    onCopyChain: function (id) { controller.copyChain(id) },
     onRenameChain: function (id, value) { controller.renameChain(id, value) },
     onSetDefaultChain: function (id) { controller.setDefaultChain(id) },
     onRemoveChain: function (id) { controller.removeChain(id) },

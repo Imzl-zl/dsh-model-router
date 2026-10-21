@@ -221,6 +221,7 @@ export function RouterPage(props) {
                   onRenameChain: props.onRenameChain,
                   onSetDefaultChain: props.onSetDefaultChain,
                   onRemoveChain: props.onRemoveChain,
+                  onCopyChain: props.onCopyChain,
                   onAddChain: props.onAddChain,
                 }))
         : null),

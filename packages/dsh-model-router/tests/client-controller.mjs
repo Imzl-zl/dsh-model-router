@@ -1787,6 +1787,28 @@ test('adding a chain selects it for editing, and saving carries the whole list',
   assert.deepEqual(op.value.map((c) => c.id), ['default', 'coding', 'chain-2'])
 })
 
+test('copying a chain brings its candidates and budgets along under a new id', async () => {
+  const h = await mount({ value: chipConfig() })
+  h.actions.onCopyChain('coding')
+  const draft = h.state().draft
+  const copy = draft.chains[draft.chains.length - 1]
+  assert.deepEqual(draft.chains.map((c) => c.id), ['default', 'coding', 'chain-2'])
+  // 夹具的字典返回 key 本身（与其它用例同一约定），所以这里断言的是用了哪个键。
+  assert.equal(copy.name, 'chainCopyName')
+  assert.deepEqual(copy.candidates, draft.chains[1].candidates, 'the candidates come along')
+  assert.equal(copy.firstHopMaxRetries, draft.chains[1].firstHopMaxRetries)
+  assert.deepEqual(copy.switchOn, draft.chains[1].switchOn)
+  assert.equal(draft.chain.id, copy.id, 'the copy becomes the edit target')
+  // 副本与原链互不影响：改副本的候选不动原件。
+  h.actions.onRemove(0)
+  assert.equal(h.state().draft.chains[2].candidates.length, 0)
+  assert.equal(h.state().draft.chains[1].candidates.length, 1, 'the source chain is untouched')
+  h.actions.onSave()
+  await flush()
+  const op = h.mutateCalls.at(-1).ops.find((entry) => entry.op === 'set' && entry.path[0] === 'chains')
+  assert.deepEqual(op.value.map((c) => c.id), ['default', 'coding', 'chain-2'])
+})
+
 test('renaming a chain changes its display name, never its id', async () => {
   const h = await mount({ value: chipConfig() })
   h.actions.onRenameChain('coding', '写文档')

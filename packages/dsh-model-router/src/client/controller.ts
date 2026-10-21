@@ -525,6 +525,23 @@ export function createController(ctx, scope, t) {
       ui.chainId = id
       publish()
     },
+    /**
+     * 复制一条链：候选 / switchOn / 预算 / 粘滞 / 策略整份带走，只换 id 与显示名。
+     *
+     * 用户要的是"同一条链只换一条候选"时不重配。副本是**显式动作**（对某条链点「复制」），
+     * 不是"添加链"的默认行为——新链默认仍是空链，否则"两条完全一样"会成为默认状态。
+     * 名字在这里落成当前语言的一份快照：它是显示名、可改，不值得为它建一套跨语言引用。
+     */
+    copyChain: function (id) {
+      var source = draft.chains.filter(function (entry) { return entry.id === id })[0]
+      if (source === undefined) return
+      var copy = clone(source)
+      copy.id = nextChainId(draft.chains)
+      copy.name = fill(t('chainCopyName'), { name: source.name !== '' ? source.name : t('chainDefaultName') }).slice(0, CHAIN_NAME_MAX)
+      draft.chains.push(copy)
+      ui.chainId = copy.id
+      publish()
+    },
     renameChain: function (id, value) {
       var chain = draft.chains.filter(function (entry) { return entry.id === id })[0]
       if (chain === undefined) return
