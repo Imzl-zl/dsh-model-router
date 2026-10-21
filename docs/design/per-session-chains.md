@@ -23,16 +23,17 @@ DSH 原生提供哪些会话级能力、哪些没有，以及"命名链 + 会话
 |---|---|---|
 | 会话身份 | `agent/request` 的 payload 带 `agent`，`agent.session.id` 是稳定的 `SessionId`，跨重启不变 | `packages/core/agent/src/runtime-types.ts:337`；`packages/core/session/src/index.ts:546` |
 | 会话列表 + 名字 | 宿主 `session.list` 给 `{ sessionId, updatedAt }`；名字是 `title` 投影（`values.title`），浏览器半包本来就在逐会话读投影 | `packages/api/session-controller/src/types.ts:183`；`packages/session/session-title/src/index.ts:269` |
-| 会话侧车存储 | `ctx.storageDomain.open(spec)`：schema 校验的 KV，**写入即持久**、不进会话日志、对模型不可见；DSH 的 `bundle/base` 已挂载 storage 家族 | `packages/storage/storage-domain/README.md:28`；`packages/bundle/base/cordis.patch.yml:180-188` |
+| 会话级 UI 槽位 | `conversation.input.left`/`.right`、`conversation.session.header.utilities` 等都是 `scope: 'session'` 的 list 槽；占位组件**直接收到 `sessionId`**（还有 `useSession`、`useProjection`、`useAccess`），不需要猜当前会话 | `packages/client/ui-conversation/src/client/contract/slots.ts:276-298`；`packages/client/ui-session/src/client/index.ts:166-175` |
+| 会话侧车存储 | `ctx.storageDomain.open(spec)`：schema 校验的 KV，**写入即持久**、不进会话日志、对模型不可见；DSH 的 `bundle/base` 已挂载 storage 家族。名字受 `UNIT_NAME_RE = /^[a-z][a-z0-9_]*$/` 约束（**不能带点和横线**） | `packages/storage/storage-domain/README.md:28`；`packages/storage/storage/src/backend.ts:10`；`packages/bundle/base/cordis.patch.yml:180-188` |
 | 插件自有 Remote | 浏览器半包已有一个 `routerHealth` Remote；新增会话绑定读写不需要新机制 | 本项目 `src/index.ts` 的 `@Remote` |
 | 选路时机可读会话 | `agent/request` 在 `prepareCall` 之前，返回的 `LlmCallConfig` 决定这一跳打到哪 | 本项目 `src/index.ts` 的 `agent/request` handler |
 
 ## 二、DSH 原生没有什么
 
-1. **没有会话级配置的官方 UI 槽位，也没有"当前活动会话"可读。** 插件的配置面是一个全局
-   namespace，DSH 不提供"这个会话的设置"面板，设置页也拿不到"现在前台是哪个会话"。
-   所以入口不能是"给当前会话配"，只能**在插件自己的面板里列会话、按 id 配**——id 稳定、
-   名字可读（`title` 投影），选谁都不会选错。
+1. **没有"会话级配置"这个原生概念，也没有设置页可读的当前会话。** 插件的配置面是一个
+   全局 namespace，DSH 不提供"这个会话的设置"面板，设置页拿不到"现在前台是哪个会话"。
+   **但会话级槽位存在**（见上表），挂进去的组件自带 `sessionId`——所以入口不是"猜前台"，
+   而是"在会话里就地配"。缺的只是**存哪**：DSH 没有会话级 KV，得用 `storageDomain` 侧车。
 2. **不能新增 durable 事件类型。** `plugin:<owner>/<record>` 命名空间存在，但只对
    `@deepseek-ai/dsh-experimental-<owner>` 开放，且不进入已发布的持久化 schema
    （`packages/core/session/src/types.ts:519-533`）。所以"把选择写进会话日志"这条路
@@ -86,27 +87,75 @@ chains:
 
 - **绑定是覆盖，不是合并**：绑定到 `writing` 的会话整条链用 `writing`，不与默认链拼。
   合并两条链会拼出没人排过的顺序——与 2026-10-19 拒绝合并多条规则的同一个理由。
-- **绑定的键是 `sessionId`**，值是 `chainId`；绑定指向不存在的链时按"未绑定"处理并在
-  下一次请求里留一条 notice（不静默回退到别的链）。
+- **绑定的键是 `sessionId`**，值是 `{ chain, retries }`；绑定指向不存在的链时按"未绑定"
+  处理并在下一次请求里留一条 notice（不静默回退到别的链）。
+- **重试次数的取值**：`会话覆盖 ?? 候选的 maxRetries`。覆盖按路由（`provider/model`）键控，
+  只对绑定链里存在的候选有效；0..9 是校验边界，不是第二个"最大值"配置项。
 
-### 会话侧配置：在工作台里按会话选
+### 会话侧配置：挂进 composer 工具行的会话级控件
 
-设置面本来就有一个面板，直接在它里面做，不需要 slash 命令。
+DSH 的会话级槽位就是为这种需求准备的。注册照 `ui-jobs` 的最小先例
+（`packages/client/ui-jobs/src/client/index.ts:35-52`）：
+
+```ts
+ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+  name: 'conversation.input.left',
+  id: 'model-router-session',
+  order: -10,                    // 排在模型选择器之前
+  locale: NS,
+  inject: (sessionId) => ({ /* 读绑定/写绑定的业务面 */ }),
+}, SessionChainChip))
+```
+
+注册时槽位若未声明会抛（`packages/client/ui-slots/src/index.ts:1207-1210`），`inject`
+就是等它声明——跨包注册是标准做法，不需要改 DSH。
+
+**为什么是 `conversation.input.left` 而不是会话头**：模型选择器就在 composer 工具行
+（`conversation.input.model`，已被 `ui-model-selection` 占位），路由设置与它是同一类
+"这一轮打到哪"的决定，放一起用户不用在两个地方找。会话头
+（`conversation.session.header.utilities`）留给只读状态。
+
+**控件形态**：一个 chip + 一个 popover。
+
+```
+[ 默认链 ]        ← 未绑定；或 [ 写代码 · 重试 5 ]
+┌─ 本会话的路由 ─────────────────┐
+│ 链    [ 跟随默认 ▾ ]           │
+│ 重试  deepseek/chat   [ 5 ]    │  ← 空 = 跟随链；填了 = 覆盖
+│       openrouter/x    [ 0 ]    │
+└───────────────────────────────┘
+```
 
 | 层 | 机制 |
 |---|---|
-| 列表 | 浏览器半包沿用健康页已经在做的 `session.list` + 逐会话 `projections({sessionId})`，取 `values.title` 当名字；显示"名字 · 更新时间 · 当前绑定链" |
-| 选择 | 面板里一行一个会话，选择器列出命名链 + "跟随默认"；写操作走插件自己的 `@Remote setSessionChain({sessionId, chainId \| null})` |
-| 持久化 | 宿主侧 `ctx.storageDomain` 的会话侧车，键 = `sessionId`；写成功即持久，不追加会话事件 |
-| 生效时机 | 下一次 `agent/request`：宿主读绑定 → 选链；进行中的 step 不换链（与"选择在下一步生效"的语义一致） |
-| 降级 | composition 里没有 `storageDomain`（可选服务）时退回进程内存，并在面板与下一次请求的 notice 里说明"重启后失效" |
+| 读身份 | 槽位组件自带 `sessionId`，不用 `session.list`、不猜前台 |
+| 读绑定 | 挂载时一次 `routerHealth.sessionBinding(sessionId)`；写入后重读（宿主内存权威、读是同步的） |
+| 读链与候选 | 已有的配置读口；本会话的健康数据走槽位自带的 `useProjection` |
+| 写 | `routerHealth.setSessionBinding({ sessionId, chain, retries })` → 宿主写 `storageDomain`，落盘成功后才刷新 chip |
+| 生效 | 下一次 `agent/request`；进行中的 step 不换链 |
+
+**存储**（宿主侧，`ctx.storageDomain` 可选服务）：
+
+```ts
+const routerBindings = defineDomain({
+  name: 'model_router_sessions',        // UNIT_NAME_RE 只允许小写字母/数字/下划线
+  version: 1,
+  tables: {
+    bindings: domainTable(z.object({
+      chain: z.string().nullable(),                                  // null = 跟随默认
+      retries: z.record(z.string(), z.number().int().min(0).max(9)), // 键 = provider/model
+    })),
+  },
+})
+```
 
 三个必须说清的边界：
 
-- **没有"当前会话"这个概念可用**：面板列出的是全部会话，用户按名字/id 选，不猜前台。
-- **fork 不继承**（存储按 `sessionId` 键控），选中 fork 出来的会话就是"跟随默认"，除非
-  用户再选一次。若用户要求继承，在 fork 命令里复制一次绑定即可，不改变本设计。
-- **`storageDomain` 缺失时必须可见降级**——"重启后悄悄变回默认链"是这插件最不能做的事。
+- **没有 storage 的 composition**：绑定退回进程内存，chip 标"临时（重启失效）"。
+  不因此隐藏入口——隐藏等于假装这个功能不存在。
+- **fork 不继承**（按 `sessionId` 键控）；fork 出来的会话显示"跟随默认"，用户再选一次即可。
+- **会话被删**：侧车留下孤儿记录；打开设置面板时用 `session.list` 对一次并删掉不存在的 id，
+  不为此加后台任务。
 
 ### 熔断与重试的归属
 
@@ -115,6 +164,63 @@ chains:
 - **状态全局，不按会话**：渠道的 429/额度耗尽是渠道自己的事实，不是会话的事实。按会话拆
   熔断状态会让 A 会话刚凉住的渠道被 B 会话继续打，等于把冷却变成摆设。这条与本项目
   "跨请求健康状态"的既有语义一致。
+
+## 三之二、UI 规格：与 DSH composer 控件同一套几何
+
+数值全部取自 DSH 自己的相邻控件，不另起一套：
+
+| 项 | 值 | 出处 |
+|---|---|---|
+| chip 高 | **28px**（与模型/权限/Plan 选择器同高） | `ModelSelect.module.css:18`、`InputBar.module.css:318-324` |
+| chip 内边距 | `0 4px 0 8px`（带 chevron）/ `0 8px`（纯文本） | `ModelSelect.module.css:19` |
+| 圆角 | `--dsw-radius-sm` | `ModelSelect.module.css:22` |
+| 字体 | 13 / 20 / 400，`--dsw-alias-label-secondary` | `ModelSelect.module.css:25-28` |
+| hover / focus | `--dsw-alias-interactive-bg-hover` / `0 0 0 2px var(--dsw-focus-ring-color, …)` | `ModelSelect.module.css:32-38` |
+| 内部间隙 | 4px（图标/文字/chevron），chevron 12px `label-caption` | `ModelSelect.module.css:12,78-82` |
+| 宽度上限 | `min(220px, 40cqw)`（比模型选择器的 360px 窄：它是次要信息） | 参照 `ModelSelect.module.css:16-17` |
+| 工具行间距 | 12px，容器 ≤560px 时 8px | `InputBar.module.css:261,310-316` |
+| 窄容器折叠 | `@container (max-width: 460px)` 只留图标（权限 chip 同一刀口） | `PermissionSelect.module.css:92-96` |
+| 弹层 | `Menu` 原语（`portal`），`z-index 1100`、宽 `min(240px,100vw-32px)`…`min(420px,100vw-32px)`、高 `min(360px,100vh-96px)`、`box-shadow: var(--dsw-elevation-prominent)` | `ModelSelect.module.css:91-117`；`ui-primitives/src/index.ts:26` |
+| 弹层行 | 34px 高、`5px 7px`、`--dsw-radius-md`、hover 同上 | `ModelSelect.module.css:221-237` |
+
+**布局**：左组（`.tools`，gap 12px）的渲染顺序是固定的——`conversation.input.permission`
+→ `.plan` → **`.left`** → `.right`，然后才是右组的模型选择器与发送
+（`InputBar.tsx:464-479`）。所以我们的 chip 落在「只读」「Plan」之后、模型选择器之前：
+路由和模型是同一类"这一轮打到哪"的决定，挨着放；`order` 只在 `.left` 这个 list 内部
+排序（本插件是唯一占用者，取 `order: 0` 即可）。
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ 你好，帮我改一下这个函数                                   │
+│                                                          │
+│ [+] [Plan] [只读] [🔀 写代码 · 5]        [DeepSeek ▾] [↑] │  ← 28px 同高
+└──────────────────────────────────────────────────────────┘
+```
+
+**弹层**（点 chip 打开，锚在 chip 下方左对齐）：
+
+```
+┌─ 本会话的路由 ──────────────────┐
+│ 链                   写代码  ▾  │  ← 34px 行，value 右对齐 tertiary
+│ ─────────────────────────────── │
+│ 重试次数                        │  ← 12/18 tertiary 分组标题
+│ deepseek/deepseek-chat   [ 5 ]  │  ← 输入宽 48px，空 = 跟随链
+│ openrouter/claude-sonnet [ 0 ]  │
+│ ─────────────────────────────── │
+│ 跟随链的默认次数                │  ← 12/18 tertiary 脚注
+└─────────────────────────────────┘
+```
+
+**交互与无障碍**
+
+- chip 是 `<button aria-haspopup="menu" aria-expanded>`，键盘 Enter/Space 打开，Esc 关闭，
+  打开后焦点进弹层（`Menu` 原语已实现焦点与 Esc）。
+- 数字输入 `inputMode="numeric"`、`aria-label` 带路由名；**空值即"跟随链"**，不是 0。
+- 写失败：弹层内一行错误（`--dsw-alias-state-error-primary` + `interactive-bg-hover-danger` 底），
+  **不关闭弹层**，让用户能重试；成功才更新 chip 并关闭。
+- chip 文案：未绑定显示「默认链」；绑定时显示「链名 · 重试 N」（N 取该链里最大值，
+  用户一眼看到"这条会话最坏会打几次"）。
+- 窄容器（≤460px）只留图标，`title` 提供完整文案；`aria-label` 不变。
 
 ## 四、被否方案
 
@@ -135,6 +241,6 @@ chains:
 1. **绑定粒度**：一个会话 → 一条链。层内再按轮次覆盖不做，那与现有 `needs` 条件重叠。
 2. **fork 继承**：默认**不继承**（存储按 `sessionId` 键控，零额外逻辑）。用户要求时再在
    fork 路径上复制。
-3. **无 storage 时**：允许绑定但只在本进程有效，面板与 notice 都要说明"重启后失效"；
+3. **无 storage 时**：允许绑定但只在本进程有效，chip 与 notice 都要说明"重启后失效"；
    不因此禁用入口。
 4. **链数量**：不设硬上限，靠配置校验（id 唯一、至少一条候选、候选路由不得重复）约束。
