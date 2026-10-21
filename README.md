@@ -153,6 +153,11 @@ The composition tests boot the real headless Loader with a deterministic stub ad
 - **Tool capability is not pre-checked.** DSH exposes no machine-readable "supports function calling" metadata; an incompatible candidate fails at runtime and is handled by `switchOn.invalidRequest`.
 - **Notices are trajectory-first.** Failover notices ride the durable log into the trajectory view; this DSH build does not surface context rows in the chat conversation.
 
+## Friends / 友链
+
+- [LINUX DO](https://linux.do) — 中文技术社区（Linux、开发调优、AI 等板块）。
+- [DSH 有哪些必装插件？](https://linux.do/t/topic/3054193) — 同一社区里关于 DSH 插件的讨论帖。
+
 ## Documentation
 
 Design rationale, source-verified capability boundaries, and the decision register live in [`docs/design/`](docs/design/). Release history is in [CHANGELOG.md](CHANGELOG.md).
