@@ -26,7 +26,6 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Require the tag to match the package version
         run: |
@@ -46,11 +45,13 @@ jobs:
 
       - name: Publish (provenance, public)
         working-directory: packages/dsh-models-router
-        # NPM_TOKEN is a granular access token with "Read and write" for this
-        # package and 2FA bypass enabled. Provenance is signed by GitHub OIDC.
+        # No token and no secret: the npm trusted publisher for
+        # Imzl-zl/dsh-models-router + this workflow file exchanges the GitHub
+        # OIDC token (permissions.id-token: write) for a short-lived publish
+        # credential, and attests provenance with the same token. Setting
+        # NODE_AUTH_TOKEN here would make npm authenticate with a static token
+        # instead, which the package's access policy now forbids.
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: GitHub release notes from CHANGELOG
         run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"

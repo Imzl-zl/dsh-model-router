@@ -8,6 +8,31 @@ Versions below `1.0.0` are pre-stable: the minor digit marks a delivery
 milestone, and the plugin's DSH peer range (`0.2.0-rc.2`) moves together with
 it.
 
+## [0.2.1] — 2026-10-21
+
+Packaging and process only; no runtime behaviour changed. The first release
+published by CI through the npm trusted publisher (OIDC) rather than a manual
+`npm publish`.
+
+### Changed
+
+- **Releases are tag-driven.** Pushing `v*.*.*` runs
+  `.github/workflows/release.yml`: it refuses a tag that differs from the package
+  version, builds, publishes with provenance, and opens the GitHub release from
+  this file's matching section.
+- **CI** runs on every push to `master` and every pull request: the build, the
+  host type-check, and each of the four suites as its own step.
+- npm metadata (`keywords`, `homepage`, `bugs`, `author`, `engines`) and the
+  README badges; `dsh-models-router` replaces `dsh-model-router` everywhere,
+  including the repository name.
+
+### Fixed
+
+- The client bundle no longer leaves its own `./remote` artifact as an external
+  `require` on a clean checkout (the host face now builds first).
+- The legacy-config composition scenario generates its overlay at run time
+  instead of shipping Windows absolute paths.
+
 ## [0.2.0] — 2026-10-21
 
 The release that makes routing per-conversation: several named chains, a session

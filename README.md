@@ -123,9 +123,11 @@ Pushing the tag is the whole release:
   version, builds `lib/`, publishes to npm with provenance (`--provenance`,
   public access) and opens the GitHub release with the matching CHANGELOG
   section (`scripts/release-notes.mjs`).
-- It needs one repository secret, `NPM_TOKEN`: a granular npm token with
-  "Read and write" on `dsh-models-router` and 2FA bypass. Nothing else is
-  configured in the repository.
+- Authentication is npm **trusted publishing** (OIDC): the package's npm
+  settings name this repository and this workflow file, so the run exchanges a
+  short-lived GitHub OIDC token for publish access and attests provenance. No
+  secret, no token, nothing to rotate. The npm account's publishing access is
+  set to "two-factor authentication, bypass tokens disallowed".
 - `.github/workflows/ci.yml` runs on every push to `master` and every pull
   request: the build, the host type-check and the four suites.
 

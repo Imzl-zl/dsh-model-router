@@ -22,9 +22,10 @@ Status: implemented
    先断言 tag 与 `packages/dsh-models-router/package.json` 的 `version` 相等（不等就红），
    再 `npm ci` + 包内依赖 + `npm run bundle`，然后 `npm publish --provenance --access public`，
    最后用 `scripts/release-notes.mjs` 从 CHANGELOG 抽出该版本的一节，创建 GitHub Release。
-2. **唯一的凭据是一个 repository secret `NPM_TOKEN`**（granular token，对
-   `dsh-models-router` 有 read/write、开了 2FA bypass）。provenance 用 GitHub OIDC
-   （`id-token: write`），不额外存任何密钥。
+2. **没有 token，也没有 secret：走 npm trusted publishing（OIDC）。** npm 的包设置里
+   登记「仓库 + workflow 文件名」，release 运行时用 GitHub OIDC（`id-token: write`）换一个
+   短命的发布凭据，顺带签 provenance。npm 账号的 publishing access 同时收紧为
+   「必须 2FA、禁止 bypass token」——这样即使有人拿到静态 token 也发不了版。
 3. **CHANGELOG 是发布说明的唯一来源。** 脚本按 `## [<version>]` 切段；段落缺失或为空，
    release 步骤直接失败——不允许"发上去了但没人知道改了什么"。
 4. **CI 在 master 的 push 与所有 PR 上跑**：workspace 安装 → 包内构建依赖 →

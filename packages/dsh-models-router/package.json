@@ -1,6 +1,6 @@
 {
   "name": "dsh-models-router",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Transparent cross-provider failover for DSH Agent main requests: named fallback chains, per-session chain choice, per-route retry overrides.",
   "keywords": [
     "dsh",
