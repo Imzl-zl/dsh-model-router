@@ -27,7 +27,7 @@
  * .agents/notes/implemented/2026-10-21-named-chains-and-the-session-chip.md
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import { h } from './dom.ts'
 import { fill } from './format.ts'
@@ -114,6 +114,56 @@ export function createSessionChip(ctx, t) {
     return result.value
   }
 
+  /**
+   * Write the retry overrides for `routes` in ONE `setSessionBinding`.
+   *
+   * `routes` are draft keys chosen by the caller: a single row for blur/Enter,
+   * every pending row for an outside close. Parsing the whole set before the
+   * write means one invalid box cannot leave half the edits persisted.
+   *
+   * @param sessionId - the session whose binding is written.
+   * @param routes - draft keys to merge into the stored retry map.
+   */
+  function writeRetries(sessionId, routes) {
+    var current = stateOf(sessionId)
+    var retries = Object.assign({}, current.retries)
+    for (var index = 0; index < routes.length; index += 1) {
+      var route = routes[index]
+      var parsed = parseRetryInput(Object.hasOwn(current.retryDraft, route) ? current.retryDraft[route] : '')
+      if (parsed.kind === 'invalid') {
+        set(sessionId, { error: fill(t('sessionRetryInvalid'), { max: MAX_SESSION_RETRIES }) })
+        return Promise.resolve(stateOf(sessionId))
+      }
+      if (parsed.kind === 'follow') delete retries[route]
+      else retries[route] = parsed.value
+    }
+    var remote = health()
+    if (remote === undefined) {
+      set(sessionId, { error: t('sessionChainUnavailable') })
+      return Promise.resolve(stateOf(sessionId))
+    }
+    set(sessionId, { saving: true, error: null })
+    return Promise.resolve(remote.setSessionBinding({
+      sessionId: sessionId,
+      chain: current.chain,
+      retries: retries,
+    })).then(unwrap).then(function (view) {
+      var draft = Object.assign({}, stateOf(sessionId).retryDraft)
+      routes.forEach(function (route) { delete draft[route] })
+      set(sessionId, {
+        saving: false,
+        retries: view.retries !== undefined ? view.retries : {},
+        retryDraft: draft,
+        persistent: view.persistent !== false,
+        error: null,
+      })
+      return stateOf(sessionId)
+    }, function (error) {
+      set(sessionId, { saving: false, error: describeError(error) })
+      return stateOf(sessionId)
+    })
+  }
+
   return {
     /** Subscribe to any chip's state change; returns the unsubscribe function. */
     subscribe: function (fn) {
@@ -194,40 +244,31 @@ export function createSessionChip(ctx, t) {
      * .agents/notes/implemented/2026-10-21-retry-overrides-and-chain-management.md
      */
     commitRetry: function (sessionId, route) {
-      var current = stateOf(sessionId)
-      var parsed = parseRetryInput(Object.hasOwn(current.retryDraft, route) ? current.retryDraft[route] : '')
-      var retries = Object.assign({}, current.retries)
-      if (parsed.kind === 'follow') {
-        delete retries[route]
-      } else if (parsed.kind === 'invalid') {
-        set(sessionId, { error: fill(t('sessionRetryInvalid'), { max: MAX_SESSION_RETRIES }) })
+      return writeRetries(sessionId, [route])
+    },
+
+    /**
+     * Close the popover because the pointer went outside it.
+     *
+     * The primitive closes on `pointerdown`, before the browser moves focus, so
+     * the input's `blur` never runs and the typed value would be lost. An
+     * outside click IS a blur: write the pending drafts first, then close on
+     * success. A rejected write keeps the popover open with its error (the same
+     * contract as choosing a chain) instead of pretending the value landed.
+     *
+     * Escape does not come through here — {@link close} is the cancel path and
+     * must leave storage untouched.
+     */
+    dismiss: function (sessionId) {
+      var routes = Object.keys(stateOf(sessionId).retryDraft)
+      if (routes.length === 0) {
+        set(sessionId, { open: false })
         return Promise.resolve(stateOf(sessionId))
-      } else {
-        retries[route] = parsed.value
       }
-      var remote = health()
-      if (remote === undefined) {
-        set(sessionId, { error: t('sessionChainUnavailable') })
-        return Promise.resolve(stateOf(sessionId))
-      }
-      set(sessionId, { saving: true, error: null })
-      return Promise.resolve(remote.setSessionBinding({
-        sessionId: sessionId,
-        chain: current.chain,
-        retries: retries,
-      })).then(unwrap).then(function (view) {
-        var draft = Object.assign({}, stateOf(sessionId).retryDraft)
-        delete draft[route]
-        set(sessionId, {
-          saving: false,
-          retries: view.retries !== undefined ? view.retries : {},
-          retryDraft: draft,
-          persistent: view.persistent !== false,
-          error: null,
-        })
-        return stateOf(sessionId)
-      }, function (error) {
-        set(sessionId, { saving: false, error: describeError(error) })
+      return writeRetries(sessionId, routes).then(function (view) {
+        // writeRetries clears `error` on success and sets it on every refusal,
+        // so this is "the Host accepted the write", not "an error is absent".
+        if (view.error === null) set(sessionId, { open: false })
         return stateOf(sessionId)
       })
     },
@@ -298,6 +339,21 @@ export function SessionChainChip(props) {
     return chip.subscribe(function () { setBump(function (value) { return value + 1 }) })
   }, [chip])
   useEffect(function () { chip.load(sessionId) }, [chip, sessionId])
+  // The primitive reports Escape and outside pointerdown through one onClose
+  // callback. Remember which one it was: window capture runs before Menu's
+  // document-capture Escape handler, so the flag is set by the time onClose
+  // runs. Every other close (outside click, window blur) is a focus loss and
+  // commits the pending draft.
+  var cancelled = useRef(false)
+  useEffect(function () {
+    function onKeyDown(event) {
+      if (event.key === 'Escape' && event.shiftKey !== true && chip.view(sessionId).open === true) {
+        cancelled.current = true
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return function () { window.removeEventListener('keydown', onKeyDown, true) }
+  }, [chip, sessionId])
 
   var view = chip.view(sessionId)
   // 未绑定时显示"实际会走的那条链"：默认链有名字就写名字，没有才是字典的「默认链」。
@@ -377,9 +433,15 @@ export function SessionChainChip(props) {
     // chip 坐在 composer 工具行（视口底部）：向下没有空间，Menu 只能钳到贴底并压住
     // 输入框。向上开才是它真正的位置（设计稿也是画在 composer 上方）。
     side: 'top',
-    // 关闭只由 Menu 的自身交互触发（Escape / 点外部 / 选中）：写失败时没人调它，
-    // 弹层因此留在原地。
-    onClose: function () { chip.close(sessionId) },
+    // 关闭只由 Menu 的自身交互触发（Escape / 点外部 / 失焦）：写失败时没人调它，
+    // 弹层因此留在原地。Escape 是取消，不写；其余（点外部、窗口失焦）按失焦处理，
+    // 先把待提交的重试草稿落盘——Menu 在 pointerdown 就关闭，输入框的 blur 根本来不及跑。
+    onClose: function () {
+      var cancel = cancelled.current
+      cancelled.current = false
+      if (cancel) chip.close(sessionId)
+      else chip.dismiss(sessionId)
+    },
     onSelect: function (id) { chip.choose(sessionId, id) },
     items: items,
     className: 'dsh-router-session-chip-root',

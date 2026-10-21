@@ -1916,6 +1916,51 @@ test('the popover lists one retry row per candidate of the chain this session us
   assert.equal(input.props.placeholder, 'sessionRetryFollow', 'an empty box means "follow the chain"')
 })
 
+test('an outside close commits the pending retry draft; Escape cancels it', async () => {
+  const h = await mount({ value: chipConfig() })
+  await h.chip.model.open('s1')
+  // Render once with the popover open and run the chip's effects, so the
+  // Escape listener the component installs is live. (The harness runs effects
+  // by hand; the model's own load effect settles before we type.)
+  pendingEffects.length = 0
+  const keydowns = []
+  globalThis.window.addEventListener = (type, fn) => { if (type === 'keydown') keydowns.push(fn) }
+  globalThis.window.removeEventListener = () => {}
+  const menu = renderChip(h)
+  for (const effect of pendingEffects) effect()
+  await flush()
+  assert.equal(keydowns.length, 1, 'the chip listens for Escape while it is open')
+
+  // Escape is cancel: close, and storage keeps whatever it had.
+  h.chip.model.setRetryText('s1', 'a/m', '5')
+  keydowns[0]({ key: 'Escape' })
+  menu.props.onClose()
+  await flush()
+  assert.equal(h.chip.model.view('s1').open, false)
+  assert.equal(h.chip.bindings.get('s1'), undefined, 'Escape must not write the draft')
+
+  // Menu closes on pointerdown, before the input can blur; the close callback
+  // is therefore the seam that has to commit the draft.
+  await h.chip.model.open('s1')
+  h.chip.model.setRetryText('s1', 'a/m', '5')
+  menu.props.onClose()
+  await flush()
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: { 'a/m': 5 } })
+  assert.deepEqual(h.chip.model.view('s1').retries, { 'a/m': 5 })
+  assert.equal(h.chip.model.view('s1').open, false, 'the popover closes after the write landed')
+})
+
+test('an outside close with a rejected write stays open and keeps the error visible', async () => {
+  const h = await mount({ value: chipConfig(), remote: rejectingWrite('disk is full') })
+  await h.chip.model.open('s1')
+  h.chip.model.setRetryText('s1', 'a/m', '5')
+  const view = await h.chip.model.dismiss('s1')
+  assert.equal(view.open, true, 'a rejected write must not pretend the value landed')
+  assert.match(view.error, /disk is full/)
+  assert.equal(h.chip.bindings.get('s1'), undefined)
+  assert.equal(view.retryDraft['a/m'], '5', 'the user can retry or fix what he typed')
+})
+
 
 // ---- 会话路由页签：按会话配置（与 chip 写同一份侧车） ----
 
