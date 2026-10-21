@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="dsh-models-router" width="760">
+  <img src="docs/assets/banner.svg" alt="dsh-models-router" width="640">
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ## Features
 
-- **Named chains, chosen per session** — several fallback chains, each with its own candidates, switch-on rules and budgets; a conversation picks one from the composer chip, or from the session list in the settings panel.
+- **Named chains, chosen per session** — several fallback chains, each with its own candidates, switch-on rules and budgets; a conversation picks one right in the composer chip, with no separate session-management page.
 - **Per-route retry overrides** — a session can override a route's retry count: `0` means "do not retry this route", empty means "follow the chain".
 - **Retries this plugin executes** — for codes in `switchOn`, the configured number is the real number (no provider-policy ceiling); codes outside `switchOn` still go to DSH's `llm-retry`.
 - **Pre-fire validation** — every candidate is resolved through `ctx.llm.resolveCallConfig()` before a real call, so an unservable candidate is skipped rather than burned.
@@ -71,6 +71,15 @@ dsh plugin --profile web add packages/dsh-models-router
 ```
 
 Open **dsh-models-router** from the sidebar's panel list to configure chains.
+
+## Updates
+
+Updates are handled natively by DSH's plugin market (`dshmarket`): its installed list checks the npm version, offers **one-click update**, and shows **What changed** from this repository's GitHub Release notes (the matching `CHANGELOG.md` section). The plugin never spawns a package manager or copies the install algorithm itself.
+
+- **After an update**, the first visit to the workbench opens the new version's notes once; the page head keeps a **What's new** button for later.
+- **Manual CLI update**: `dsh plugin --profile <profile> remove dsh-models-router`, then `dsh plugin --profile <profile> add dsh-models-router@latest`.
+- **Desktop app**: update from its own Settings → Plugins; do not edit the profile the app manages.
+- Release history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Configuration
 
@@ -176,7 +185,7 @@ use the plural name.
 ## Friends
 
 <p align="center">
-  <a href="https://linux.do/" title="LINUX DO"><img src="docs/assets/linux-do-logo.svg" alt="LINUX DO" width="44" height="44"></a><br>
+  <a href="https://linux.do/" title="LINUX DO"><img src="docs/assets/linux-do-logo.svg" alt="LINUX DO" width="32" height="32"></a><br>
   <a href="https://linux.do/">LINUX DO</a>
 </p>
 

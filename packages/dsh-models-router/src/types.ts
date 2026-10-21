@@ -109,15 +109,3 @@ export interface SessionBindingView extends SessionBinding {
 export interface SessionBindingRequest extends SessionBinding {
   sessionId: string
 }
-
-/** One stored binding, with the session it belongs to (the settings panel's list). */
-export interface SessionBindingEntry extends SessionBinding {
-  sessionId: string
-}
-
-/** Every stored binding, plus where they live. */
-export interface SessionBindingList {
-  /** False when the Host has no storage domain: these bindings reset on restart. */
-  persistent: boolean
-  bindings: SessionBindingEntry[]
-}

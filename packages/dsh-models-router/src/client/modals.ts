@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Button, Checkbox, Input, Modal, SegmentedControl, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Checkbox, Input, MarkdownText, Modal, SegmentedControl, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { h } from './dom.ts'
 import { fill, formatWindowHours } from './format.ts'
 import { Icon, ICON_TRASH } from './icons.ts'
@@ -514,4 +514,42 @@ export function AddCandidateModal(props) {
                   h('code', null, m.id))
               }))
           })))
+}
+
+/**
+ * The running release's notes, shown once after an update.
+ *
+ * DSH Market owns the update check and the one-click install; it does not pop a
+ * changelog after the new version comes up. This dialog is the only extra step:
+ * the notes were embedded at build time (scripts/embed-changelog.mjs), so they
+ * describe the artifact actually loaded, not the repository's current HEAD.
+ * The same dialog backs the permanent "What's new" button in the page head.
+ *
+ * @param props.version - the running package version.
+ * @param props.notes - that version's CHANGELOG section, as plain text.
+ * @param props.onClose - dismiss and remember this version.
+ */
+export function WhatsNewModal(props) {
+  var t = props.t
+  return h(Modal, {
+    open: true,
+    className: MODAL_CLASS,
+    contentClassName: MODAL_CONTENT,
+    title: fill(t('whatsNewTitle'), { version: props.version }),
+    closeLabel: t('close'),
+    onClose: props.onClose,
+    footer: h('div', { className: 'dsh-router-footer-actions' },
+      h(Button, { variant: 'primary', onClick: props.onClose }, t('whatsNewClose'))),
+  },
+    h('div', { className: 'dsh-router-modal-body' },
+      h('p', { className: 'dsh-router-modal-section-hint' }, t('whatsNewHint')),
+      h('div', { className: 'dsh-router-release-notes' },
+        h(MarkdownText, {
+          text: props.notes,
+          variant: 'compact',
+          labels: {
+            code: { copyLabel: t('notesCopy'), copiedLabel: t('notesCopied') },
+            footnotes: t('notesFootnotes'),
+          },
+        }))))
 }

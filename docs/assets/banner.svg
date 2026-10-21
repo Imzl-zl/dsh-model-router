@@ -1,17 +1,21 @@
-<svg width="760" height="200" viewBox="0 0 760 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="640" height="170" viewBox="0 0 640 170" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="routerAccent" x1="10" y1="6" x2="38" y2="42" gradientUnits="userSpaceOnUse">
       <stop stop-color="#4A65E8"/>
       <stop offset="1" stop-color="#06B6D4"/>
     </linearGradient>
   </defs>
-  <g transform="translate(40,28) scale(3)">
-    <path d="M24 3.5L42 13.5V34.5L24 44.5L6 34.5V13.5L24 3.5Z" stroke="url(#routerAccent)" stroke-width="3" stroke-linejoin="round" fill="rgba(74,101,232,0.08)"/>
+  <!-- A dark hero card works on both GitHub themes: light text on dark ink, and
+       an accent border that keeps the card visible on a dark page. -->
+  <rect x="1" y="1" width="638" height="168" rx="20" fill="#0B1220" stroke="url(#routerAccent)" stroke-width="1.5"/>
+  <g transform="translate(30,30) scale(2.2)">
+    <path d="M24 3.5L42 13.5V34.5L24 44.5L6 34.5V13.5L24 3.5Z" stroke="url(#routerAccent)" stroke-width="3" stroke-linejoin="round" fill="rgba(74,101,232,0.12)"/>
     <path d="M24 14V24M24 24L15 32M24 24L33 32" stroke="url(#routerAccent)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="24" cy="12.5" r="3" fill="url(#routerAccent)"/>
     <circle cx="13.5" cy="33.5" r="3.2" fill="#4A65E8"/>
     <circle cx="34.5" cy="33.5" r="3.2" fill="#06B6D4"/>
   </g>
-  <text x="200" y="96" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="46" font-weight="600" fill="#111827">dsh-models-router</text>
-  <text x="202" y="132" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="19" fill="#6B7280">Transparent cross-provider failover for DeepSeek Harness</text>
+  <text x="170" y="78" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="38" font-weight="600" fill="#F8FAFC">dsh-models-router</text>
+  <text x="172" y="110" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="16" fill="#94A3B8">Transparent cross-provider failover for DeepSeek Harness</text>
+  <text x="172" y="136" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="12" fill="#64748B">named chains · per-session routing · per-route retries</text>
 </svg>

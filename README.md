@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="dsh-models-router" width="760">
+  <img src="docs/assets/banner.svg" alt="dsh-models-router" width="640">
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ## 功能
 
-- **按会话选命名链** —— 多条降级链，各自有候选、失败切换规则和预算；会话在 composer 的 chip 里选，或在设置面板的会话列表里改。
+- **按会话选命名链** —— 多条降级链，各自有候选、失败切换规则和预算；直接在 composer 的 chip 里选，不另设会话管理页。
 - **每路由重试次数覆盖** —— 会话可以覆盖某条路由的重试次数：`0` = 这条路由不重试，空 = 跟随链。
 - **重试由插件执行** —— `switchOn` 勾选的失败码，填几次就是几次（不受 provider 重试策略封顶）；没勾的仍交给 DSH 的 `llm-retry`。
 - **发起前预校验** —— 每个候选在真实调用前走 `ctx.llm.resolveCallConfig()`，不能服务的候选直接跳过，不白烧一次调用。
@@ -71,6 +71,15 @@ dsh plugin --profile web add packages/dsh-models-router
 ```
 
 打开侧栏面板列表里的 **模型路由** 配置链。
+
+## 更新
+
+更新由 DSH 的插件市场（`dshmarket`）原生处理：在「插件」页打开已安装列表，它会按 npm 上的版本检查并提供 **一键更新**；有更新时每行还带 **更新了什么**，内容来自本仓库 GitHub Release 的 notes（即 `CHANGELOG.md` 的对应小节）。插件不自己启动包管理器，也不复制安装算法。
+
+- **更新后**：新版本第一次打开工作台会弹一次该版本的更新日志；之后可从页头的「更新日志」按钮重看。
+- **手动更新（CLI）**：`dsh plugin --profile <profile> remove dsh-models-router`，再 `dsh plugin --profile <profile> add dsh-models-router@latest`。
+- **桌面版**：在应用自己的「设置 → 插件」里更新，不要直接改它管理的 profile。
+- 版本记录：[CHANGELOG.md](CHANGELOG.md)。
 
 ## 配置
 
@@ -163,7 +172,7 @@ git tag -a v0.3.0 -m "dsh-models-router 0.3.0" && git push origin master v0.3.0
 ## 友情链接
 
 <p align="center">
-  <a href="https://linux.do/" title="LINUX DO"><img src="docs/assets/linux-do-logo.svg" alt="LINUX DO" width="44" height="44"></a><br>
+  <a href="https://linux.do/" title="LINUX DO"><img src="docs/assets/linux-do-logo.svg" alt="LINUX DO" width="32" height="32"></a><br>
   <a href="https://linux.do/">LINUX DO</a>
 </p>
 

@@ -194,11 +194,9 @@ test('the generated artifact passes the loader’s own registration validator', 
   const ids = artifact.TYPERT.invocations.map(invocation => invocation.id)
   assert.deepEqual(ids, [
     `${PACKAGE_NAME}#routerHealth/checkConnectivity`,
-    `${PACKAGE_NAME}#routerHealth/deleteSessionBinding`,
     `${PACKAGE_NAME}#routerHealth/probeAll`,
     `${PACKAGE_NAME}#routerHealth/probeReport`,
     `${PACKAGE_NAME}#routerHealth/sessionBinding`,
-    `${PACKAGE_NAME}#routerHealth/sessionBindings`,
     `${PACKAGE_NAME}#routerHealth/setSessionBinding`,
   ])
 })
@@ -287,23 +285,6 @@ test('setSessionBinding refuses an out-of-range count instead of clamping it', a
     /0\.\.9/,
   )
   assert.equal((await invoke('sessionBinding', { sessionId: 'session-remote-bad' })).retries['stub-primary/stub-model'], undefined)
-})
-
-test('sessionBindings lists every stored binding, and deleteSessionBinding prunes one', async () => {
-  // 设置页的「会话路由」页签靠这两个读口：列出全部绑定（与会话清单拼），以及清除被删会话
-  // 留下的孤儿记录。删除是幂等的——对账那一端可能已经清过一遍。
-  await invoke('setSessionBinding', { request: { sessionId: 'session-list-a', chain: 'default', retries: { 'stub-primary/stub-model': 2 } } })
-  await invoke('setSessionBinding', { request: { sessionId: 'session-list-b', chain: null, retries: {} } })
-  const listed = await invoke('sessionBindings', {})
-  assert.equal(listed.persistent, true)
-  const rows = listed.bindings.filter((entry) => entry.sessionId.startsWith('session-list-'))
-  assert.deepEqual(rows.map((entry) => [entry.sessionId, entry.chain, entry.retries]),
-    [['session-list-a', 'default', { 'stub-primary/stub-model': 2 }], ['session-list-b', null, {}]])
-  assert.equal(await invoke('deleteSessionBinding', { sessionId: 'session-list-a' }), true)
-  assert.equal(await invoke('deleteSessionBinding', { sessionId: 'session-list-a' }), false, 'deleting twice is harmless')
-  const after = await invoke('sessionBindings', {})
-  assert.equal(after.bindings.some((entry) => entry.sessionId === 'session-list-a'), false)
-  assert.equal((await invoke('sessionBinding', { sessionId: 'session-list-a' })).chain, null, 'a deleted binding reads as "follow the default"')
 })
 
 test('setSessionBinding accepts a chain the config defines and refuses one it does not', async () => {

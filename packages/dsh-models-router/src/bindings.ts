@@ -33,7 +33,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { MAX_SESSION_RETRIES } from './defaults.ts'
 import { routeParts } from './routes.ts'
-import type { SessionBinding, SessionBindingEntry } from './types.ts'
+import type { SessionBinding } from './types.ts'
 
 /** The storage domain name. `UNIT_NAME_RE` allows lowercase letters, digits and `_` only. */
 export const SESSION_BINDINGS_DOMAIN = 'model_router_sessions'
@@ -76,9 +76,7 @@ export interface BindingContext {
 /** The `bindings` table as this module uses it (`storage-domain/src/domain.ts:42-90`). */
 interface BindingTable {
   get(key: string): SessionBinding | undefined
-  entries(): IterableIterator<[string, SessionBinding]>
   put(key: string, value: SessionBinding): Promise<void>
-  delete(key: string): Promise<boolean>
 }
 
 /** An open domain handle: one table plus the caller-owned lifetime. */
@@ -135,39 +133,6 @@ export class SessionBindings {
     } catch (error) {
       if (!this.gone(error)) throw error
       return undefined
-    }
-  }
-
-  /**
-   * Every stored binding, for the settings panel's session list.
-   *
-   * A snapshot, not a live view: the panel joins it with `session.list` to find
-   * the rows whose session no longer exists (the design's one-time cleanup).
-   */
-  list(): SessionBindingEntry[] {
-    if (this.closed) return []
-    try {
-      const entries = this.table !== undefined ? [...this.table.entries()] : [...this.memory.entries()]
-      return entries.map(([sessionId, binding]) => ({ sessionId, chain: binding.chain, retries: binding.retries }))
-    } catch (error) {
-      if (!this.gone(error)) throw error
-      return []
-    }
-  }
-
-  /**
-   * Drop one session's binding. Idempotent: a session with no binding answers
-   * `false` and nothing else happens, so cleanup can run over a stale list.
-   */
-  async delete(sessionId: string): Promise<boolean> {
-    await this.opening
-    if (this.closed) return false
-    try {
-      if (this.table !== undefined) return await this.table.delete(sessionId)
-      return this.memory.delete(sessionId)
-    } catch (error) {
-      if (!this.gone(error)) throw error
-      return false
     }
   }
 

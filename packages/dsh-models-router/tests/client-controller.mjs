@@ -26,6 +26,8 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { RELEASE_NOTES, RELEASE_VERSION } from '../src/client/release.generated.ts'
+import { changelogSection } from '../../../scripts/changelog-section.mjs'
 
 const CLIENT_PATH = process.env.CLIENT_PATH ?? fileURLToPath(new URL('../lib/client.js', import.meta.url))
 
@@ -97,11 +99,28 @@ test('the client bundle carries its own remote artifact instead of requiring it'
     'client.js must inline the generated remote artifact (build with npm run bundle)')
 })
 
+test('the embedded release notes are the packaged version CHANGELOG section', () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+  assert.equal(RELEASE_VERSION, pkg.version, 'the bundle names the version it was built from')
+  const changelog = readFileSync(fileURLToPath(new URL('../../../CHANGELOG.md', import.meta.url)), 'utf8')
+  assert.equal(RELEASE_NOTES, changelogSection(pkg.version, changelog),
+    'the dialog must describe the installed artifact, not a hand-copied note')
+})
+
+/** The version the stubbed browser storage reports; each mount resets it. */
+let seenVersionState = RELEASE_VERSION
+
 /** Load client.js and return its module exports. */
 function loadClient() {
   const source = readFileSync(CLIENT_PATH, 'utf8')
   let captured = null
-  globalThis.window = { __ModuleLoader__: { load: (mod) => { captured = mod } } }
+  globalThis.window = {
+    __ModuleLoader__: { load: (mod) => { captured = mod } },
+    localStorage: {
+      getItem: () => seenVersionState,
+      setItem: (_key, value) => { seenVersionState = value },
+    },
+  }
   new Function(source)()
   const require_ = (name) => {
     if (name === 'react') return react
@@ -111,6 +130,8 @@ function loadClient() {
         SettingsForm: SettingsFormStub, Switch: 'Switch', Button: 'Button', Tag: 'Tag',
         SegmentedTabs: 'SegmentedTabs', Modal: 'Modal', RiskConfirmation: 'RiskConfirmation',
         SegmentedControl: 'SegmentedControl', Checkbox: 'Checkbox', Input: 'Input',
+        // 更新日志用 DSH 的 MarkdownText 渲染，而不是把 markdown 原样塞进 <pre>。
+        MarkdownText: 'MarkdownText',
         // 会话 chip 的弹层是 DSH 的 Menu 原语（portal 模式），按钮由它包一层 span。
         Menu: 'Menu', MenuItemButton: 'MenuItemButton',
       }
@@ -273,8 +294,11 @@ function applyOps(value, ops) {
  * @param options.firstFrame - the scope's FIRST snapshot, before the settings
  *   mirror answers (`status: 'loading'`, value undefined) — the frame a user
  *   can open the dialog in.
+ * @param options.seenVersion - the release this browser has already acknowledged;
+ *   the running version by default, so most tests do not open the notes dialog.
  */
-async function mount({ value, writable = true, mutate, remote, firstFrame } = {}) {
+async function mount({ value, writable = true, mutate, remote, firstFrame, seenVersion = RELEASE_VERSION } = {}) {
+  seenVersionState = seenVersion
   const calls = []
   let snapshot = firstFrame ?? { status: 'ready', value, writable, revision: 1 }
   const listeners = new Set()
@@ -401,6 +425,8 @@ async function mount({ value, writable = true, mutate, remote, firstFrame } = {}
     mutateCalls: calls,
     // The commands this plugin registered with DSH's native shortcuts service.
     shortcutCommands: () => shortcutRegistrations.slice(),
+    // What the stubbed browser storage now remembers as the acknowledged release.
+    seenVersion: () => seenVersionState,
   }
 }
 
@@ -1075,9 +1101,8 @@ test('the workbench is one page with top view tabs, not an internal sidebar', as
 
   const tabs = find(tree, (node) => node.type === 'SegmentedTabs')
   assert.ok(tabs, 'the views are switched by top tabs')
-  // 三个视图：链配置 / 按会话绑定 / 渠道健康。会话那一页是"挑一个会话直接配"的入口，
-  // 与聊天里的 chip 写同一份侧车。
-  assert.deepEqual(tabs.props.items.map((item) => item.value), ['chain', 'sessions', 'health'])
+  // 两个视图：链配置 / 渠道健康。会话级选链只在 composer 的 chip 里，不另设管理页。
+  assert.deepEqual(tabs.props.items.map((item) => item.value), ['chain', 'health'])
   assert.equal(tabs.props.value, 'chain', 'the chain is the default view')
 
   h.actions.onActive('__health__')
@@ -1107,11 +1132,11 @@ test('every plugin dialog is capped to the viewport and scrolls inside itself', 
     sourceOf('styles.ts').indexOf('function ensureStyles'),
   )
 
-  // One carrier class for both dialogs, handed to every Modal instance.
+  // One carrier class for every dialog, handed to each Modal instance.
   assert.ok(components.includes("const MODAL_CLASS = 'dsh-router-modal'"),
     'the shared dialog class must be named once')
   const handed = components.match(/className: MODAL_CLASS/g) ?? []
-  assert.equal(handed.length, 2, `both dialogs must hand the class to Modal, found ${handed.length}`)
+  assert.equal(handed.length, 3, `every dialog must hand the class to Modal, found ${handed.length}`)
   assert.ok(css.includes('.dsh-router-modal {'),
     'ROUTER_CSS must carry the dialog rule')
   // One shared rule block bounds both: assert it once, on the block itself.
@@ -1494,7 +1519,7 @@ test('the modal height chain derives from the dialog root, and no DSH class name
     'DSH\'s scroll region (the content wrapper\'s last child) must be reached structurally, with min-height:0 + overflow')
   const modals = sourceOf('modals.ts')
   const contentHooks = modals.match(/contentClassName: MODAL_CONTENT/g) ?? []
-  assert.equal(contentHooks.length, 2,
+  assert.equal(contentHooks.length, 3,
     `every dialog must pass the content hook so the chain has its first link, found ${contentHooks.length}`)
   // 新增覆盖行要滚进视野：用 scrollIntoView 找最近的可滚动祖先，而不是猜 DSH 类名
   // 或给某个内部 div 挂 id 自己滚（那会变成第二个滚动容器）。
@@ -1962,101 +1987,38 @@ test('an outside close with a rejected write stays open and keeps the error visi
 })
 
 
-// ---- 会话路由页签：按会话配置（与 chip 写同一份侧车） ----
+// ---- 更新日志：只在版本变化/首次运行时弹一次 ----
 
-/** A Host that holds bindings in memory and serves a session list with titles. */
-const sessionsRemote = ({ sessions = [], bindings = [] } = {}) => {
-  const store = new Map(bindings.map((binding) => [binding.sessionId, { ...binding }]))
-  return {
-    session: {
-      list: () => Promise.resolve({ ok: true, value: { items: sessions } }),
-      projections: ({ sessionId }) => Promise.resolve({ ok: true, value: { asOfSeq: 1, values: { title: '标题 ' + sessionId.slice(-4) } } }),
-    },
-    routerHealth: {
-      sessionBindings: () => Promise.resolve({ ok: true, value: { persistent: true, bindings: [...store.values()] } }),
-      setSessionBinding: (request) => {
-        const stored = { sessionId: request.sessionId, chain: request.chain, retries: request.retries ?? {} }
-        store.set(request.sessionId, stored)
-        return Promise.resolve({ ok: true, value: { chain: stored.chain, retries: stored.retries, persistent: true } })
-      },
-      deleteSessionBinding: (sessionId) => Promise.resolve({ ok: true, value: store.delete(sessionId) }),
-    },
-    /** What the Host now holds, for assertions. */
-    store,
-  }
-}
-
-const sessionFixture = () => sessionsRemote({
-  sessions: [
-    { sessionId: 'session-aaaa1111', updatedAt: 2 },
-    { sessionId: 'session-bbbb2222', updatedAt: 1 },
-  ],
-  bindings: [
-    { sessionId: 'session-aaaa1111', chain: 'coding', retries: { 'b/m': 5 } },
-    { sessionId: 'session-gone9999', chain: null, retries: {} },
-  ],
+test('a release change opens the embedded notes once, and dismissing remembers it', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({ value: chipConfig(), seenVersion: '0.0.0' })
+  assert.equal(h.state().ui.notesOpen, true, 'a different acknowledged version opens the dialog')
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  // The notes go through DSH MarkdownText as a `text` prop; assert that exact
+  // payload instead of scraping a substring out of the painted tree.
+  const notes = find(tree, (node) => node.type === 'MarkdownText')
+  assert.notEqual(notes, null, 'the dialog renders the notes as Markdown, not a raw <pre>')
+  assert.equal(notes.props.text, RELEASE_NOTES,
+    'the dialog shows the notes embedded in this build, not a hand-copied note')
+  h.actions.onCloseNotes()
+  assert.equal(h.state().ui.notesOpen, false)
+  assert.equal(h.seenVersion(), RELEASE_VERSION, 'dismissing records the running release')
+  const next = await mount({ value: chipConfig() })
+  assert.equal(next.state().ui.notesOpen, false, 'the acknowledged release does not nag on the next load')
 })
 
-test('the session tab lists every session with its binding, and the orphans separately', async () => {
-  const remote = sessionFixture()
-  const h = await mount({ value: chipConfig(), remote })
-  h.actions.onLoadSessions()
-  await flush()
-  await flush()
-  const rows = h.state().ui.sessions.rows
-  assert.deepEqual(rows.map((row) => [row.sessionId, row.chain, row.orphan]), [
-    ['session-aaaa1111', 'coding', false],
-    ['session-bbbb2222', null, false],
-    // 侧车里还有、会话已经没了：单列出来只给清除，不当成"还能改"的会话。
-    ['session-gone9999', null, true],
-  ])
-  assert.equal(rows[0].title, '标题 1111', 'the title comes from the title projection')
-  assert.deepEqual(rows[0].retries, { 'b/m': 5 })
-  assert.equal(h.state().ui.sessions.error, null)
+test('the page always offers a release-notes button, even after the dialog was acknowledged', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({ value: chipConfig() })
+  assert.equal(h.state().ui.notesOpen, false)
+  h.actions.onOpenNotes()
+  assert.equal(h.state().ui.notesOpen, true, 'the button reopens the notes on demand')
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  const text = collectText(tree).join('\n')
+  assert.ok(text.includes('whatsNewButton'), 'the head keeps a permanent entry point')
+  assert.ok(text.includes('whatsNewTitle'), 'the dialog names the running release')
 })
 
-test('picking a chain for a session writes that session only', async () => {
-  const remote = sessionFixture()
-  const h = await mount({ value: chipConfig(), remote })
-  h.actions.onLoadSessions()
-  await flush()
-  await flush()
-  h.actions.onSetSessionChain('session-bbbb2222', 'coding')
-  await flush()
-  assert.deepEqual(remote.store.get('session-bbbb2222'), { sessionId: 'session-bbbb2222', chain: 'coding', retries: {} })
-  assert.equal(h.state().ui.sessions.rows[1].chain, 'coding')
-  assert.deepEqual(remote.store.get('session-aaaa1111'), { sessionId: 'session-aaaa1111', chain: 'coding', retries: { 'b/m': 5 } },
-    'the other session is untouched')
-})
-
-test('a session retry override is written, and an out-of-range value is refused', async () => {
-  const remote = sessionFixture()
-  const h = await mount({ value: chipConfig(), remote })
-  h.actions.onLoadSessions()
-  await flush()
-  await flush()
-  h.actions.onSetSessionRetry('session-bbbb2222', 'a/m', '3')
-  await flush()
-  assert.deepEqual(remote.store.get('session-bbbb2222').retries, { 'a/m': 3 })
-  // 越界：不写、上屏错误，已存的值保持原样。
-  h.actions.onSetSessionRetry('session-bbbb2222', 'a/m', '10')
-  await flush()
-  assert.match(h.state().ui.sessions.error, /sessionRetryInvalid/)
-  assert.deepEqual(remote.store.get('session-bbbb2222').retries, { 'a/m': 3 })
-})
-
-test('clearing an orphan binding removes the record and reloads the list', async () => {
-  const remote = sessionFixture()
-  const h = await mount({ value: chipConfig(), remote })
-  h.actions.onLoadSessions()
-  await flush()
-  await flush()
-  h.actions.onClearSessionBinding('session-gone9999')
-  await flush()
-  await flush()
-  assert.equal(remote.store.has('session-gone9999'), false)
-  assert.equal(h.state().ui.sessions.rows.some((row) => row.orphan), false)
-})
 await Promise.all(pending)
 console.log(`${passed} client-controller test(s) passed`)
 

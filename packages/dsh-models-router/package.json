@@ -1,6 +1,6 @@
 {
   "name": "dsh-models-router",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Transparent cross-provider failover for DSH Agent main requests: named fallback chains, per-session chain choice, per-route retry overrides.",
   "keywords": [
     "dsh",
@@ -30,7 +30,7 @@
     "node": ">=22.6.0"
   },
   "scripts": {
-    "bundle": "tsc -p tsconfig.json && tsdown --concurrency 1",
+    "bundle": "node ../../scripts/embed-changelog.mjs && node ../../scripts/sync-package-readmes.mjs && tsc -p tsconfig.json && tsdown --concurrency 1",
     "watch": "tsdown --watch",
     "prepublishOnly": "npm run bundle"
   },

@@ -12,7 +12,7 @@ import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import remote from 'dsh-models-router/remote'
 import { createSessionChip, SessionChainChip } from './chip.ts'
-import { createController } from './controller.ts'
+import { createController, notesForCurrentVersion } from './controller.ts'
 import { ModelRouterPanel, ModelRouterPanelIcon } from './panel.ts'
 import { CONFIG_NS, NS, en, zh } from './locales.ts'
 import { ensureStyles } from './styles.ts'
@@ -65,6 +65,9 @@ async function applyInner(ctx: Context): Promise<() => Promise<void>> {
   var t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh: zh, en: en }), 'router: dictionaries')
   ctx.effect(ensureStyles, 'router: global styles')
+  // Read the acknowledged release synchronously, before the first await swaps
+  // anything under this activation (see notesForCurrentVersion).
+  var initialNotesOpen = notesForCurrentVersion()
 
   var unmountRemote = await ctx.remote.$mount(remote)
   // child 的 inject 是显式清单、不从父继承（Cordis 语义；ui-workspace 的 apply 注释
@@ -72,7 +75,7 @@ async function applyInner(ctx: Context): Promise<() => Promise<void>> {
   // registerUi 在这个 child 上注册保存命令——漏列它会在激活时抛
   // "cannot get required service shortcuts in inactive context"。
   var ui = ctx.inject(['remote.routerHealth', 'slots', 'locale', 'configForms', 'remote', 'remote.session', 'shortcuts'], function (child) {
-    registerUi(child, t)
+    registerUi(child, t, initialNotesOpen)
   })
   try {
     await ui
@@ -108,8 +111,9 @@ async function applyInner(ctx: Context): Promise<() => Promise<void>> {
  *
  * @param ctx - child context carrying the mounted probe Remote.
  * @param t - the bound dictionary.
+ * @param initialNotesOpen - whether this activation opens the release notes.
  */
-function registerUi(ctx: Context, t: (key: string) => string): void {
+function registerUi(ctx: Context, t: (key: string) => string, initialNotesOpen: boolean): void {
   // 定时器随插件半包的生命周期一起销毁，不在设置改动后留下孤儿轮询。
   // 它声明在 createController 里，所以由控制器交回 disposer，而不是在这里
   // 直接够那个变量——function 作用域够不到，只会在每次卸载时抛 ReferenceError。
@@ -118,7 +122,7 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
   }, 'router: discover timer')
 
   var scope = ctx.configForms.get(CONFIG_NS)
-  var controller = createController(ctx, scope, t)
+  var controller = createController(ctx, scope, t, initialNotesOpen)
   // 会话内 chip 的控制器：一个会话一份绑定状态（写失败留在弹层里，成功才刷新）。
   var sessionChip = createSessionChip(ctx, t)
 
@@ -161,10 +165,6 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onRenameChain: function (id, value) { controller.renameChain(id, value) },
     onSetDefaultChain: function (id) { controller.setDefaultChain(id) },
     onRemoveChain: function (id) { controller.removeChain(id) },
-    onLoadSessions: function () { controller.loadSessions() },
-    onSetSessionChain: function (sessionId, chainId) { controller.setSessionChain(sessionId, chainId) },
-    onSetSessionRetry: function (sessionId, route, raw) { controller.setSessionRetry(sessionId, route, raw) },
-    onClearSessionBinding: function (sessionId) { controller.clearSessionBinding(sessionId) },
     onActive: function (id) { controller.setActive(id) },
     onMaxRetries: function (index, value) { controller.setMaxRetries(index, value) },
     onNeeds: function (index, patch) { controller.setNeeds(index, patch) },
@@ -187,6 +187,8 @@ function registerUi(ctx: Context, t: (key: string) => string): void {
     onProbeAll: function () { controller.probeAll() },
     onOpenHealthModal: function () { controller.openHealthModal() },
     onUpdateHealth: function (patch) { controller.updateHealth(patch) },
+    onOpenNotes: function () { controller.openNotes() },
+    onCloseNotes: function () { controller.closeNotes() },
     retainSurface: function () { controller.retainSurface() },
     releaseSurface: function () { controller.releaseSurface() },
   }

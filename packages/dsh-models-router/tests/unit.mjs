@@ -2441,9 +2441,7 @@ test('a closed domain does not leak another package error: reads follow the chai
       return {
         table: () => ({
           get: () => { throw closed() },
-          entries: () => { throw closed() },
           put: async () => { throw closed() },
-          delete: async () => { throw closed() },
         }),
         close: async () => {},
       }
@@ -2452,8 +2450,6 @@ test('a closed domain does not leak another package error: reads follow the chai
   const bindings = new SessionBindings(fakeContext(facility))
   assert.equal(bindings.read('s1'), undefined)
   assert.equal(bindings.persistent, false, 'a closed domain is not durable any more')
-  assert.deepEqual(bindings.list(), [])
-  assert.equal(await bindings.delete('s1'), false)
   await assert.rejects(() => bindings.write('s1', { chain: null, retries: {} }), /just restarted/)
 })
 

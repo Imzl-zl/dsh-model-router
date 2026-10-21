@@ -1,12 +1,39 @@
-# Changelog
+# 更新日志
 
-All notable changes to this project are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+本文件记录所有值得注意的变更，格式遵循
+[Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
+[语义化版本](https://semver.org/lang/zh-CN/)。
 
-Versions below `1.0.0` are pre-stable: the minor digit marks a delivery
-milestone, and the plugin's DSH peer range (`0.2.0-rc.2`) moves together with
-it.
+`1.0.0` 之前 minor 位是交付里程碑，插件对 DSH 的 peer 范围（`0.2.0-rc.2`）
+随之移动。
+
+## [0.3.0] — 2026-10-21
+
+更新提示与更新日志版本：DSH 的插件市场负责发现和安装新版本，插件负责在新版本
+跑起来后告诉用户改了什么。
+
+### 新增
+
+- **更新后弹一次更新日志。** 工作台在版本变化后（以及全新安装后）自动打开当前
+  版本的更新说明，页头保留「更新日志」按钮，随时可以重看。说明在构建时从本文件
+  生成，所以弹窗描述的永远是实际安装的产物，而不是手抄的旧文案。
+- **更新仍走 DSH 原生路径。** 插件不启动包管理器，也不复制安装算法：DSH Market
+  的更新行（npm 版本检查、一键更新、「更新了什么」）负责安装，插件只负责更新后的
+  那一步说明。
+
+### 修复
+
+- **点弹层外部现在会提交重试草稿。** DSH 的 `Menu` 在 `pointerdown` 就关闭，输入框
+  的 `blur` 来不及跑，之前会把用户输入的重试次数丢掉；现在关闭回调先写入待提交的
+  按路由重试次数，宿主接受后才关闭。Escape 仍是取消路径，不写任何东西。
+- **README 弹层截图改为 3 倍设备像素**（696×555），两列画廊不再把旧的 348×278
+  元素截图放大发糊。
+
+### 移除
+
+- **设置页的「会话路由」页签。** 日常选链就在 composer 的 chip 里；这个页签只是
+  事后总览，用户明确说不会用。绑定仍按 `sessionId` 保存，chip 与路由行为不变。
+  只为它存在的 `sessionBindings` / `deleteSessionBinding` 两个 Remote 一并删除。
 
 ## [0.2.1] — 2026-10-21
 

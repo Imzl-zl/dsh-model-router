@@ -10,13 +10,55 @@
 
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { clone, deepEqual, fill, summarize } from './format.ts'
-import { defaultChainValue, normalizeNamedChain, normalizeHealth, parseRetryInput, validate } from './validate.ts'
+import { defaultChainValue, normalizeNamedChain, normalizeHealth, validate } from './validate.ts'
 import { defaultChainOf, effectiveChains } from '../chain.ts'
 import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
-import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, MAX_RETRIES, MAX_SESSION_RETRIES } from '../defaults.ts'
+import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, MAX_RETRIES } from '../defaults.ts'
+import { RELEASE_VERSION } from './release.generated.ts'
 
-export function createController(ctx, scope, t) {
+/** Where the browser remembers the last release whose notes it has shown. */
+var SEEN_VERSION_KEY = 'dsh-models-router:seen-version'
+
+/**
+ * The release whose notes this browser last acknowledged, or null when it has
+ * never seen one (fresh install, or storage denied).
+ */
+function seenVersion() {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage.getItem(SEEN_VERSION_KEY)
+  } catch (error) {
+    return null
+  }
+}
+
+/** Remember the running release after the user dismisses its notes. */
+function rememberVersion() {
+  try {
+    if (typeof window !== 'undefined') window.localStorage.setItem(SEEN_VERSION_KEY, RELEASE_VERSION)
+  } catch (error) {
+    // Storage can be denied while the app still works. The dialog then appears
+    // again on the next load; that is better than failing the page over a
+    // courtesy notice.
+  }
+}
+
+/**
+ * Whether this activation should open the release notes.
+ *
+ * Read by the browser-half entry **before its first await**: the activation has
+ * the page's real `localStorage` then, while a later read can race the client
+ * module system swapping the global window between test/browser contexts.
+ * Exported so `apply.ts` can compute it synchronously and hand it in.
+ */
+export function notesForCurrentVersion() {
+  return seenVersion() !== RELEASE_VERSION
+}
+
+/**
+ * @param initialNotesOpen - whether to open the release notes on this activation.
+ */
+export function createController(ctx, scope, t, initialNotesOpen = notesForCurrentVersion()) {
   var seed = function () {
     var value = scope.getSnapshot().value ?? {}
     // 旧配置（单链 / 按模型分规则 + 默认兜底池）在这里迁成命名链：规则模块与宿主读的
@@ -76,9 +118,9 @@ export function createController(ctx, scope, t) {
     // Note: 为何"读不到"必须上屏 —— 见
     // .agents/notes/implemented/2026-10-21-connectivity-deadline-and-honest-history.md
     passiveError: null,
-    // 「会话路由」页签：会话清单 × 各自的绑定。数据来自两个 Host 读口（`session.list`
-    // 与侧车里的全部绑定），所以它是页面状态，不属于配置草稿。
-    sessions: { loading: false, loaded: false, error: null, rows: [] },
+    // 这一版更新日志是否该弹：只在浏览器记录的版本与当前产物不同（或从没记过）
+    // 时为真。关掉即记账，所以同版本不会每次打开都弹。
+    notesOpen: initialNotesOpen,
   }
   var saving = false
   var failed = false
@@ -131,7 +173,7 @@ export function createController(ctx, scope, t) {
         checkSummary: ui.checkSummary,
         probeSummary: ui.probeSummary,
         passiveError: ui.passiveError,
-        sessions: ui.sessions,
+        notesOpen: ui.notesOpen,
       },
     }
   }
@@ -391,122 +433,6 @@ export function createController(ctx, scope, t) {
     return 'chain-' + String(Date.now())
   }
 
-  /** 「会话路由」页签最多列多少个会话：与健康页读投影的上限同量级。 */
-  var SESSION_ROWS = 20
-
-  /**
-   * 「会话路由」页签的数据：全部绑定 × 会话清单。
-   *
-   * 两个 Host 读口：`routerHealth.sessionBindings()` 给"谁配过"，`remote.session.list`
-   * 给"还有哪些会话"。两侧都有的行可以改；只在绑定里的行属于被删掉的会话，只提供清除。
-   * 标题来自 title 投影（与健康页同一条读法），读不到就退到 session id 的末 8 位。
-   */
-  function loadSessions() {
-    var health = ctx.remote && ctx.remote.routerHealth
-    var sessionsRemote = ctx.remote && ctx.remote.session
-    if (!health || typeof health.sessionBindings !== 'function' || !sessionsRemote) {
-      ui.sessions = { loading: false, loaded: true, error: t('sessionsUnavailable'), rows: [] }
-      publish()
-      return
-    }
-    ui.sessions = Object.assign({}, ui.sessions, { loading: true, error: null })
-    publish()
-    Promise.all([health.sessionBindings(), sessionsRemote.list({})]).then(function (results) {
-      var list = results[0]
-      var summaries = results[1]
-      if (!list || list.ok !== true) throw new Error(describeError(list && list.error) || 'sessionBindings refused')
-      if (!summaries || summaries.ok !== true) throw new Error(describeError(summaries && summaries.error) || 'session.list refused')
-      var bindings = {}
-      var listed = list.value && list.value.bindings ? list.value.bindings : []
-      listed.forEach(function (entry) { bindings[entry.sessionId] = entry })
-      var items = (summaries.value && summaries.value.items ? summaries.value.items : []).slice()
-        .sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0) })
-        .slice(0, SESSION_ROWS)
-      var rows = items.map(function (item) {
-        var binding = bindings[item.sessionId]
-        return {
-          sessionId: item.sessionId,
-          updatedAt: item.updatedAt,
-          title: null,
-          chain: binding === undefined ? null : binding.chain,
-          retries: binding === undefined || binding.retries === undefined ? {} : binding.retries,
-          bound: binding !== undefined,
-          orphan: false,
-        }
-      })
-      Object.keys(bindings).forEach(function (sessionId) {
-        var known = items.some(function (item) { return item.sessionId === sessionId })
-        if (known) return
-        var binding = bindings[sessionId]
-        rows.push({
-          sessionId: sessionId,
-          updatedAt: 0,
-          title: null,
-          chain: binding.chain,
-          retries: binding.retries === undefined ? {} : binding.retries,
-          bound: true,
-          orphan: true,
-        })
-      })
-      ui.sessions = { loading: false, loaded: true, error: null, rows: rows }
-      publish()
-      loadSessionTitles(rows)
-    }).catch(function (error) {
-      ui.sessions = { loading: false, loaded: true, error: describeError(error), rows: [] }
-      publish()
-    })
-  }
-
-  /** 逐会话读标题投影（与健康页同一读法），全部读完只发布一次。 */
-  function loadSessionTitles(rows) {
-    var sessionsRemote = ctx.remote && ctx.remote.session
-    if (!sessionsRemote || typeof sessionsRemote.projections !== 'function') return
-    var reads = rows.filter(function (row) { return row.orphan !== true }).map(function (row) {
-      return sessionsRemote.projections({ sessionId: row.sessionId }).then(function (read) {
-        if (!read || read.ok !== true || !read.value) return
-        var title = read.value.values ? read.value.values['title'] : undefined
-        if (typeof title !== 'string' || title === '') return
-        // 迟到的标题不能盖掉用户刚改过的绑定：只替换 title 一个字段。
-        ui.sessions = Object.assign({}, ui.sessions, {
-          rows: ui.sessions.rows.map(function (entry) {
-            return entry.sessionId === row.sessionId ? Object.assign({}, entry, { title: title }) : entry
-          }),
-        })
-      }).catch(function () {})
-    })
-    Promise.all(reads).then(function () { publish() })
-  }
-
-  /** 写一个会话的绑定（链 + 整份重试覆盖），成功才更新那一行。 */
-  function writeSession(sessionId, chain, retries) {
-    var health = ctx.remote && ctx.remote.routerHealth
-    if (!health || typeof health.setSessionBinding !== 'function') {
-      ui.sessions = Object.assign({}, ui.sessions, { error: t('sessionChainUnavailable') })
-      publish()
-      return Promise.resolve()
-    }
-    return Promise.resolve(health.setSessionBinding({ sessionId: sessionId, chain: chain, retries: retries })).then(function (result) {
-      if (!result || result.ok !== true) throw new Error(describeError(result && result.error) || t('sessionChainRefused'))
-      var view = result.value
-      ui.sessions = Object.assign({}, ui.sessions, {
-        error: null,
-        rows: ui.sessions.rows.map(function (row) {
-          return row.sessionId === sessionId
-            ? Object.assign({}, row, { chain: view.chain, retries: view.retries === undefined ? {} : view.retries, bound: true })
-            : row
-        }),
-      })
-      publish()
-    }).catch(function (error) {
-      ui.sessions = Object.assign({}, ui.sessions, { error: describeError(error) })
-      publish()
-    })
-  }
-
-  function sessionRow(sessionId) {
-    return ui.sessions.rows.filter(function (entry) { return entry.sessionId === sessionId })[0]
-  }
-
   var controller = {
     store: store,
     /** The dialog's workbench mounted. */
@@ -554,41 +480,6 @@ export function createController(ctx, scope, t) {
       draft.defaultChainId = id
       publish()
     },
-    /** 「会话路由」页签：重新读全部绑定与会话清单。 */
-    loadSessions: function () { loadSessions() },
-    /** 给一个会话选链（空串 = 跟随默认链），重试覆盖原样带上。 */
-    setSessionChain: function (sessionId, chainId) {
-      var row = sessionRow(sessionId)
-      if (row === undefined) return
-      return writeSession(sessionId, chainId === '' ? null : chainId, row.retries === undefined ? {} : row.retries)
-    },
-    /** 一个会话的一条路由的重试覆盖（失败时保留输入并上屏错误）。 */
-    setSessionRetry: function (sessionId, route, raw) {
-      var row = sessionRow(sessionId)
-      if (row === undefined) return
-      var parsed = parseRetryInput(raw)
-      var retries = Object.assign({}, row.retries === undefined ? {} : row.retries)
-      if (parsed.kind === 'follow') delete retries[route]
-      else if (parsed.kind === 'invalid') {
-        ui.sessions = Object.assign({}, ui.sessions, { error: fill(t('sessionRetryInvalid'), { max: MAX_SESSION_RETRIES }) })
-        publish()
-        return
-      } else retries[route] = parsed.value
-      return writeSession(sessionId, row.chain, retries)
-    },
-    /** 清掉一个会话的绑定（被删会话的对账入口）。 */
-    clearSessionBinding: function (sessionId) {
-      var health = ctx.remote && ctx.remote.routerHealth
-      if (!health || typeof health.deleteSessionBinding !== 'function') {
-        ui.sessions = Object.assign({}, ui.sessions, { error: t('sessionChainUnavailable') })
-        publish()
-        return
-      }
-      Promise.resolve(health.deleteSessionBinding(sessionId)).then(function () { loadSessions() }, function (error) {
-        ui.sessions = Object.assign({}, ui.sessions, { error: describeError(error) })
-        publish()
-      })
-    },
     removeChain: function (id) {
       // 最后一条链不能删：没有链的配置等于"插件完全不接管"，那不是用户点删除时想要的。
       if (draft.chains.length <= 1) return
@@ -605,7 +496,6 @@ export function createController(ctx, scope, t) {
       // 几次本地投影读。定时探测的报告同理：它是 Host 内存里最近一次运行的
       // 结果，打开视图时读，而不是假装有实时推送。
       if (id === '__health__') { loadPassive(); controller.loadProbeReport() }
-      if (id === '__sessions__') { loadSessions() }
       publish()
     },
     discard: function () {
@@ -954,6 +844,17 @@ export function createController(ctx, scope, t) {
     },
     openHealthModal: function () {
       ui.modal = { kind: 'health' }
+      publish()
+    },
+    /** Re-open this release's notes from the page head. */
+    openNotes: function () {
+      ui.notesOpen = true
+      publish()
+    },
+    /** Dismiss the notes and remember this release, so they do not nag on reload. */
+    closeNotes: function () {
+      rememberVersion()
+      ui.notesOpen = false
       publish()
     },
     /** 供插件半包卸载时调用：停掉定时轮询、取消在飞的检查，别留下孤儿 interval 与孤儿请求。 */
