@@ -127,6 +127,43 @@ export interface FailureNote {
   code: string
 }
 
+/**
+ * 本轮最后一条 assistant 消息是怎么结束的。
+ *
+ * `max-tokens` 不是错误、走不到 `agent/request-error`：DSH 在 `agent-loop` 里直接
+ * 把本轮结束掉，界面那条"已达到输出 token 上限 … 发送继续"就是在等用户自己补话。
+ * 插件要"别停在这儿"，就必须在 `agent/turn-stopping` 之前知道这次结束是截断。
+ * 记 `provider/model` 是因为续跑次数按候选算，换候选时计数要跟着换。
+ */
+export interface TruncationNote {
+  turn: number
+  /** 产生这条消息的 step；`turn-stopping` 只认本轮最后一个 step 的记录。 */
+  step: number
+  provider: string
+  model: string
+  truncated: boolean
+}
+
+/**
+ * 跨 step 的落点：本轮在这一步之后要继续、但必须换到哪条候选。
+ *
+ * `pendingAdvance` 是 step 内的意图，`planFire` 会把它消费掉；而"续满了换候选"
+ * 是**跨 step** 的：`agent/turn-stopping` 里决定，下一个 step 的 `agent/request`
+ * 才创建新 state。所以这里单独存一份，按路由而不是下标，因为新 step 的链会按
+ * 起点策略重新旋转，下标对不上。
+ */
+export interface TurnCarry {
+  turn: number
+  /** 落点候选。 */
+  provider: string
+  model: string
+  /** 被截断的那条候选（通知的"从哪儿来"必须是事实，不能就地猜下标）。 */
+  fromProvider: string
+  fromModel: string
+  /** 从它身上已经自动续了几次（通知文案要说清楚）。 */
+  continues: number
+}
+
 export class RouterState {
   private readonly steps = new WeakMap<Agent, StepState>()
   private readonly failures = new WeakMap<Session, FailureNote>()
@@ -140,6 +177,12 @@ export class RouterState {
    * 进程重启归零——轮询是分配手段，不是需要记住的状态。
    */
   private readonly cursors = new WeakMap<Session, number>()
+  /** 本轮最后一条 assistant 消息的结束方式（截断识别）。 */
+  private readonly truncations = new WeakMap<Agent, TruncationNote>()
+  /** 本轮每条候选上已经自动续跑过几次。 */
+  private readonly continues = new WeakMap<Agent, { turn: number; used: Map<string, number> }>()
+  /** 下一个 step 必须落到哪条候选（续跑用尽后的跨 step 换候选）。 */
+  private readonly carries = new WeakMap<Agent, TurnCarry>()
 
   /** The state for this (agent, turn, step), or undefined when the slot moved on. */
   current(agent: Agent, turn: number, step: number): StepState | undefined {
@@ -151,6 +194,53 @@ export class RouterState {
   /** Install the state for a new step, replacing any stale slot. */
   start(agent: Agent, state: StepState): void {
     this.steps.set(agent, state)
+  }
+
+  /** 本轮最近一个 step 的状态（`turn-stopping` 时还不知道 step 号）。 */
+  latestOfTurn(agent: Agent, turn: number): StepState | undefined {
+    const state = this.steps.get(agent)
+    return state !== undefined && state.turn === turn ? state : undefined
+  }
+
+  /** 记本轮最后一条 assistant 消息是怎么结束的。 */
+  noteTruncation(agent: Agent, note: TruncationNote): void {
+    this.truncations.set(agent, note)
+  }
+
+  /** 本轮最后一条 assistant 消息的结束方式；换轮即失效。 */
+  truncationOf(agent: Agent, turn: number): TruncationNote | undefined {
+    const note = this.truncations.get(agent)
+    return note !== undefined && note.turn === turn ? note : undefined
+  }
+
+  /** 这条候选在本轮已经自动续跑过几次。 */
+  continuesUsed(agent: Agent, turn: number, route: string): number {
+    const entry = this.continues.get(agent)
+    if (entry === undefined || entry.turn !== turn) return 0
+    return entry.used.get(route) ?? 0
+  }
+
+  /** 记一次自动续跑。 */
+  noteContinue(agent: Agent, turn: number, route: string): void {
+    const entry = this.continues.get(agent)
+    const used = entry !== undefined && entry.turn === turn
+      ? entry.used
+      : new Map<string, number>()
+    used.set(route, (used.get(route) ?? 0) + 1)
+    this.continues.set(agent, { turn, used })
+  }
+
+  /** 下一个 step 必须落到这条候选（续跑用尽后的换候选）。 */
+  carryTo(agent: Agent, carry: TurnCarry): void {
+    this.carries.set(agent, carry)
+  }
+
+  /** 取出并清掉跨 step 的落点；不属于本轮的一律作废。 */
+  takeCarry(agent: Agent, turn: number): TurnCarry | undefined {
+    const carry = this.carries.get(agent)
+    if (carry === undefined) return undefined
+    this.carries.delete(agent)
+    return carry.turn === turn ? carry : undefined
   }
 
   /** Record the failure code of the most recent attempt, for the next notice. */

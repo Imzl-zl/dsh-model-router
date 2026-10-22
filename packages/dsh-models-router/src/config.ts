@@ -22,7 +22,10 @@ import {
   DEFAULT_FIRST_HOP_MAX_RETRIES,
   DEFAULT_INTERVAL_SECONDS,
   DEFAULT_MAX_RETRIES,
+  DEFAULT_MAX_TOKEN_AUTO_CONTINUE,
+  DEFAULT_MAX_TOKEN_CONTINUES,
   MAX_RETRIES,
+  MAX_TOKEN_CONTINUES,
   DEFAULT_PROBE_PROMPT,
   DEFAULT_PROBE_TIMEOUT_SECONDS,
   DEFAULT_STICKY_TURNS,
@@ -91,13 +94,17 @@ export const switchOnSchema = z.object({
   timeout: z.boolean().default(DEFAULT_SWITCH_ON.timeout).description('超时（TIMEOUT）'),
   transport: z.boolean().default(DEFAULT_SWITCH_ON.transport).description('网络传输失败（TRANSPORT）'),
   emptyResponse: z.boolean().default(DEFAULT_SWITCH_ON.emptyResponse).description('空回复（EMPTY_RESPONSE）。勾选时按候选的重试次数用尽后切换；不勾则由 DSH 按它自己的策略重试，重试完即失败、不切换'),
-  invalidRequest: z.boolean().default(DEFAULT_SWITCH_ON.invalidRequest).description('请求被拒绝 / 能力不兼容（INVALID_REQUEST）；分类依赖 provider，不保证精确'),
+  invalidRequest: z.boolean().default(DEFAULT_SWITCH_ON.invalidRequest).description('请求被拒绝 / 能力不兼容（INVALID_REQUEST）；分类依赖 provider，不保证精确。注意：上游网关的 402「端点不可用」在 pi-ai 适配器里会被归一成这个码（报文带 invalid_request_error），这类是临时故障，应当切换'),
   // 凭证与额度是"渠道自己的毛病"，换一条渠道往往立刻就能救——另一条渠道有自己的
   // 密钥和额度。2026-10-16 修订：此前把它们列为"配置坏了，切换只会把问题藏起来"而
   // 不切换，但熔断本来就会让后续请求跳过死渠道，那条理由只把第一次请求也搭进去；
   // 而切换从不是静默的（中文 notice 点名失败路由与码 + 熔断冷却），比干失败更响。
   auth: z.boolean().default(DEFAULT_SWITCH_ON.auth).description('凭证或权限被拒（AUTH）：换一条渠道通常立刻能救，另一条渠道有自己的密钥'),
   quota: z.boolean().default(DEFAULT_SWITCH_ON.quota).description('额度用尽（QUOTA）：同上，换渠道可继续；熔断会让后续请求先跳过这条'),
+  // 枚举永远覆盖不全：这一项代表表里那 8 个码之外的一切失败码（PI_AI_ERROR、
+  // HTTP_xxx、以后新增的码）。默认 true，因为"未知"不是"不该动"的理由。
+  other: z.boolean().default(DEFAULT_SWITCH_ON.other)
+    .description('其他/未分类失败码（表里没有的一切码）。默认切换：未知码同样先交给 DSH 自己的恢复插件，它们放弃后才切换'),
 })
 
 /**
@@ -114,6 +121,12 @@ const chainFields = {
   strategy: strategySchema,
   firstHopMaxRetries: z.number().step(1).min(0).max(MAX_RETRIES).default(DEFAULT_FIRST_HOP_MAX_RETRIES)
     .description('第一跳（当前选中的模型）失败后最多重试几次（不含首次调用；0 = 首发失败即降级）'),
+  maxTokens: z.object({
+    autoContinue: z.boolean().default(DEFAULT_MAX_TOKEN_AUTO_CONTINUE)
+      .description('输出被截断（达到输出 token 上限）时自动补一句「继续」，而不是停下等用户手动发'),
+    continues: z.number().step(1).min(0).max(MAX_TOKEN_CONTINUES).default(DEFAULT_MAX_TOKEN_CONTINUES)
+      .description('同一个候选上一轮最多自动续几次；用完还继续被截断，就换下一条候选接着写'),
+  }).default({}).description('输出被截断时的处理：续几次、用完是否换候选'),
 }
 
 export const chainSchema = z.object(chainFields)
@@ -218,6 +231,11 @@ export const Config = z.object({
     .description('旧形状：唯一的全局链。只在新形状缺失时读取，首次保存后会被移除'),
   health: healthSchema.default({}).volatile()
     .description('渠道健康监控：运行时记录、连通性检查、发送测试消息、自动禁用四档'),
+  // 策略版本：v2 = "失败默认全切"。旧配置里 emptyResponse/invalidRequest 被写成了
+  // false（那是当时的默认值，不是用户的选择），只改 schema 默认值救不了它们；
+  // chain.ts 按这个标记做一次性改写，第一次保存后落盘为当前版本。
+  policyVersion: z.number().default(0).volatile()
+    .description('失败策略版本；由插件自己维护，不用手动改'),
 })
 
 /**
@@ -242,7 +260,12 @@ export interface Candidate {
   needs?: { images?: boolean; minContextTokens?: number }
 }
 
-/** Which failures move to the next candidate. Fixed set, Chinese labels. */
+/**
+ * Which failures move to the next candidate.
+ *
+ * 八个具名码之外的一切失败码由 `other` 决定（默认 true）。每一格取消勾选的含义
+ * 是"这个码交给 DSH 自己收尾"——插件既不重试也不切换它。
+ */
 export interface SwitchOn {
   rateLimit: boolean
   server: boolean
@@ -252,6 +275,16 @@ export interface SwitchOn {
   invalidRequest: boolean
   auth: boolean
   quota: boolean
+  /** 表里没有的码共用的开关；未知不是"不该动"的理由。 */
+  other: boolean
+}
+
+/** 输出被截断（max-tokens）时的处理。 */
+export interface MaxTokenPolicy {
+  /** 自动补一句「继续」，而不是停下等用户手动发。 */
+  autoContinue: boolean
+  /** 同一个候选上一轮最多自动续几次；用完还截断就换下一条候选。 */
+  continues: number
 }
 
 // The `@typert` tag below marks this interface as the package's host-face
@@ -272,6 +305,8 @@ export interface ChainConfig {
   strategy: Strategy
   /** Retries AFTER the first hop's first call; the step core converts to calls. */
   firstHopMaxRetries: number
+  /** 输出被截断时怎么办：续几次、用完是否换候选。 */
+  maxTokens: MaxTokenPolicy
 }
 
 /**
@@ -344,6 +379,8 @@ export interface Config {
   /** The legacy single chain; read only while `chains` is absent. */
   chain: Volatile<ChainConfig>
   health: Volatile<HealthConfig>
+  /** 失败策略版本：见 {@link POLICY_VERSION}。 */
+  policyVersion: Volatile<number>
 }
 
 /** The plain config value shape, for validating a hot update before it applies. */

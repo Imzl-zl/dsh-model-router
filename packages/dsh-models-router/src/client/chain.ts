@@ -149,7 +149,10 @@ export function ChainView(props) {
       firstHopMaxRetries: chain.firstHopMaxRetries,
       candidates: chain.candidates,
       stickyTurns: chain.stickyTurns,
+      maxTokens: chain.maxTokens,
       disabled: props.disabled,
       onStickyTurns: props.onStickyTurns,
+      onMaxTokenContinue: props.onMaxTokenContinue,
+      onMaxTokenContinues: props.onMaxTokenContinues,
     }))
 }

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 其中「`INVALID_REQUEST` 默认不勾」一句已被 `2026-10-22-failover-by-default-and-max-token-continue.md` 取代（默认全切 + 表外兜底）；本篇关于"删除 `needs.tools`、由运行时 failover 承接"的结论仍有效。
+
 ## Problem
 
 UI 原型与产品文档曾把"必须支持工具 (needs.tools)"设计成候选资格条件，暗示路由前可判定模型是否支持 function calling。DSH 没有任何机器可读的工具能力来源：`LlmModelInfo`/`LlmResolvedModelInfo` 唯一能力字段是 `inputModalities`（`packages/llm/llm/src/types.ts:330-341`），pi-ai SDK 的 `Model` 接口也没有工具能力字段，`normalizeModelInfo` 还按白名单重建、丢弃 adapter 多返字段（`packages/llm/llm/src/index.ts:805-815`）。保留一个不可判定的开关，用户会以为配了能过滤，实际配了不生效——比没有这个条件更糟。

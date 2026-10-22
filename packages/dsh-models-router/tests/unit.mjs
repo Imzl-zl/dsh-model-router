@@ -32,7 +32,7 @@ import { failoverHistoryProjection, failureCodeOfStream, FAILOVER_HISTORY_KEY, M
 import { breakerNotice } from '../src/notice.ts'
 import { assertStructural } from '../src/config.ts'
 import { structuralViolations } from '../src/rules.ts'
-import { SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
+import { POLICY_VERSION, SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
 import { defaultSwitchOn, parseRetryInput, validate, BREAKER_CODE_PRESETS } from '../src/client/validate.ts'
 import { deepEqual, saveShortcutKeyKey } from '../src/client/format.ts'
 import { routeNames } from '../src/client/naming.ts'
@@ -120,7 +120,9 @@ test('context gate: 0 disables, unmeasured is unmet, boundary is inclusive', () 
 const chainOf = (maxAttempts, count = 3, strategy = 'order') => ({
   candidates: Array.from({ length: count }, (_, index) => ({ provider: 'p', model: `m${index}`, maxAttempts, weight: 0 })),
   order: Array.from({ length: count }, (_, index) => index),
-  switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false },
+  // 2026-10-22 起表外还有一个 `other`（默认 true）。这一组用例刻意保留
+  // emptyResponse/invalidRequest = false，它们测的是"用户显式取消勾选"那条路。
+  switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, other: true },
   strategy,
 })
 
@@ -294,10 +296,60 @@ test('the record rule holds across the whole ruling table: only delegate, retry-
         assert.equal(before.record, before.kind === 'advance' || before.kind === 'terminate', `before ${code}/${String(aborted)}`)
         for (const inner of [undefined, 'retry']) {
           const after = decideAfterInner(state, code, aborted, inner)
-          assert.equal(after.record, after.kind !== 'honor', `after ${code}/${String(aborted)}/${String(inner)}`)
+          // 未记录的三种：放行内层、路由器自己补重试、委派。只有换走/终态算"定论"。
+          const unrecorded = after.kind === 'honor' || after.kind === 'retry-self'
+          assert.equal(after.record, !unrecorded, `after ${code}/${String(aborted)}/${String(inner)}`)
         }
       }
     }
+  }
+})
+
+test('a code outside the table is switch-eligible by default, and still asks the inner layers first', () => {
+  // 2026-10-22 的事故形状：402 被 pi-ai 归一成表里的 INVALID_REQUEST（当时默认不勾），
+  // 而 `llm-retry` 也不重试它 → 插件不切、DSH 不重试 → 整轮直接失败。表外的码此前同样
+  // 是死区（`switchOnKeyOf` 返回 undefined ⇒ 永不接管）。现在它们落到 `other`（默认 true）。
+  const state = at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  assert.equal(isSwitchOnEligible(state.chain, 'PI_AI_ERROR'), true)
+  // 先问内层：表外的码不抢在 compaction / 未来的恢复插件前面。
+  assert.equal(decideBeforeInner(state, 'PI_AI_ERROR', false).kind, 'delegate')
+  // 内层放弃后才换下一条候选，并记熔断。
+  const after = decideAfterInner(state, 'PI_AI_ERROR', false, undefined)
+  assert.equal(after.kind, 'advance')
+  assert.equal(after.record, true)
+  // 用户显式关掉兜底 = 交给 DSH 收尾，插件一步都不动。
+  const off = { ...state, chain: { ...state.chain, switchOn: { ...state.chain.switchOn, other: false } } }
+  assert.equal(decideBeforeInner(off, 'PI_AI_ERROR', false).kind, 'delegate')
+  assert.equal(decideAfterInner(off, 'PI_AI_ERROR', false, undefined).kind, 'terminate')
+})
+
+test('after inner: a code llm-retry never looked at still honours the configured retries', () => {
+  // 表外的码永远先 delegate，所以"内层放弃"这条路曾经等于"候选直接定性"——用户给
+  // 候选填的 maxRetries 对这类码完全失效（与表内的码不一致）。这里钉住修正：内层
+  // 根本没为这个码重试过（retryable: false）且候选还有额度时，路由器用自己的退避补上。
+  const policy = { mode: 'normal', maxRetries: 5, retryableCodes: [], initialDelayMs: 500, maxDelayMs: 10000, jitterRatio: 0 }
+  const underCap = at(recoveryChain(2, 2), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  const ruling = decideAfterInner(underCap, 'PI_AI_ERROR', false, undefined, { policy, retryable: false, random: () => 0.5 })
+  assert.equal(ruling.kind, 'retry-self')
+  assert.equal(ruling.record, false)
+  assert.equal(ruling.delayMs, 500)
+  // 内层真的为这个码重试过（策略里列了它）→ 不叠加第二轮，直接换候选。
+  const retried = decideAfterInner(underCap, 'PI_AI_ERROR', false, undefined, { policy, retryable: true })
+  assert.equal(retried.kind, 'advance')
+  // 额度花完 → 换候选；取消 → 不发这一次没人等的调用。
+  const spent = at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  assert.equal(decideAfterInner(spent, 'PI_AI_ERROR', false, undefined, { policy, retryable: false }).kind, 'advance')
+  assert.equal(decideAfterInner(underCap, 'PI_AI_ERROR', true, undefined, { policy, retryable: false }).kind, 'terminate')
+})
+
+test('the codes DSH recovery plugins own get first refusal even with the catch-all on', () => {
+  // 这两个码由 compaction-basic / compaction-image-offload 拥有：压缩历史或卸载图片才是
+  // 对的修法。路由器抢在它们前面就等于把一次可修的溢出换成一次换渠道。
+  const state = at(recoveryChain(1, 2), { attemptsOnCandidate: 1, totalAttempts: 1 })
+  for (const code of ['CONTEXT_WINDOW_EXCEEDED', 'IMAGE_OFFLOAD_REQUIRED']) {
+    assert.equal(decideBeforeInner(state, code, false).kind, 'delegate', `${code} must reach its owner first`)
+    assert.equal(decideAfterInner(state, code, false, 'retry').kind, 'honor')
+    assert.equal(decideAfterInner(state, code, false, undefined).kind, 'advance')
   }
 })
 
@@ -539,8 +591,11 @@ test('the switch-on table, the host schema and the browser draft are one fact', 
   // 来源是 ../defaults.ts，这条用例钉住两边都真的读它。
   const hostDefaults = switchOnSchema({})
   const browserDefaults = defaultSwitchOn()
-  assert.deepEqual(Object.keys(browserDefaults).sort(), SWITCH_ON_CODES.map(entry => entry.key).sort(),
-    'the browser draft names exactly the table\'s keys')
+  // 表里的键 + 一个表外的兜底键。兜底键不来自码清单（它没有码），所以这里显式列出来：
+  // 少了它，`switchOn` 就退回白名单语义，枚举外的一切失败码又变成死区。
+  assert.deepEqual(Object.keys(browserDefaults).sort(), [...SWITCH_ON_CODES.map(entry => entry.key), 'other'].sort(),
+    'the browser draft names the table\'s keys plus the unclassified catch-all')
+  assert.equal(hostDefaults.other, true, 'the catch-all is on by default')
   for (const entry of SWITCH_ON_CODES) {
     assert.ok(Object.hasOwn(hostDefaults, entry.key), `the host schema has no field for ${entry.key}`)
     assert.equal(browserDefaults[entry.key], hostDefaults[entry.key],
@@ -2097,6 +2152,27 @@ test('every surface that names a route paints it through the naming module', () 
   }
 })
 
+// 新增控件的接线是三级传递（apply.ts 映射 controller → page.ts 交给 ChainView →
+// client/chain.ts 交给 RetrySection）。少接一环就是"点一次抛 TypeError、草稿不动"，
+// 而单测的 propsFor 会把全部 action 一次塞进去，永远绿——这个项目踩过一次
+// （接管开关搬家）。所以这三环用源级守卫钉住，浏览器实测另行补。
+test('the truncation controls are wired through every layer that owns the chain view', () => {
+  const srcDir = fileURLToPath(new URL('../src/', import.meta.url))
+  const read = name => readFileSync(join(srcDir, name), 'utf8')
+  assert.match(read('client/apply.ts'), /onMaxTokenContinue: function \(value\) \{ controller\.setMaxTokensContinue\(value\) \}/)
+  assert.match(read('client/apply.ts'), /onMaxTokenContinues: function \(value\) \{ controller\.setMaxTokenContinues\(value\) \}/)
+  const page = read('client/page.ts')
+  assert.match(page, /onMaxTokenContinue: props\.onMaxTokenContinue/)
+  assert.match(page, /onMaxTokenContinues: props\.onMaxTokenContinues/)
+  const view = read('client/chain.ts')
+  assert.match(view, /onMaxTokenContinue: props\.onMaxTokenContinue/)
+  assert.match(view, /onMaxTokenContinues: props\.onMaxTokenContinues/)
+  // 以及控件本身：一个开关 + 一个步进器，都从草稿的 maxTokens 读值。
+  const section = read('client/pipeline.ts')
+  assert.match(section, /props\.maxTokens && props\.maxTokens\.autoContinue/)
+  assert.match(section, /props\.onMaxTokenContinues\(next\)/)
+})
+
 import {
   TIMELINE_BAR_COUNT,
   TIMELINE_BUCKET_SECONDS,
@@ -2286,8 +2362,9 @@ const chainValue = (over = {}) => ({ candidates: [], switchOn: switchOnAll, stic
 const cand = (provider, model = 'm', over = {}) => ({ provider, model, maxRetries: 0, weight: 0, ...over })
 
 test('effectiveChain uses the configured chain when it has fallbacks', () => {
+  // policyVersion: 2 —— 这条测的是"形状谁赢"，重试次数的旧默认改写由专门的迁移用例覆盖。
   const chain = chainValue({ candidates: [cand('a'), cand('b')] })
-  const result = effectiveChain({ enabled: true, chain })
+  const result = effectiveChain({ enabled: true, chain, policyVersion: 2 })
   assert.deepEqual(result.chain.candidates, chain.candidates)
   assert.equal(result.source, 'chain')
   assert.equal(result.ignoredProfiles, 0)
@@ -2315,7 +2392,8 @@ test('effectiveChain adopts a legacy default pool when there is no chain key at 
   const result = effectiveChain({ enabled: true, default: legacy })
   assert.deepEqual(result.chain.candidates.map(c => c.provider), ['a', 'b'])
   assert.equal(result.chain.candidates[0].maxRetries, 2)
-  assert.equal(result.chain.candidates[1].maxRetries, 0)
+  // cand('b') 存的是 0 —— 那是旧默认值（一失败就换），没有 v2 标记时按新默认改写成 5。
+  assert.equal(result.chain.candidates[1].maxRetries, 5)
   assert.equal('maxTotalAttempts' in result.chain, false)
   assert.equal(result.chain.stickyTurns, 2)
   assert.equal(result.chain.strategy, 'round-robin')
@@ -2377,7 +2455,8 @@ test('a legacy single chain migrates to one named chain without changing behavio
   assert.equal(result.chains.length, 1)
   assert.equal(result.chains[0].id, 'default')
   assert.equal(result.chains[0].name, '', 'an unnamed chain is labelled by the dictionary, never by the config')
-  assert.deepEqual(result.chains[0].candidates, legacy.candidates)
+  // 形状与顺序原样搬过来；旧默认 0 的重试次数按新默认（5）改写，那是另一个一次性迁移。
+  assert.deepEqual(result.chains[0].candidates.map(c => [c.provider, c.model]), legacy.candidates.map(c => [c.provider, c.model]))
   assert.equal(result.chains[0].firstHopMaxRetries, 3)
 })
 
@@ -2416,6 +2495,44 @@ test('an empty chains list is a set of zero chains, not the legacy look', () => 
   assert.equal(empty.chains.length, 1)
   assert.deepEqual(empty.chains[0].candidates, [])
   assert.equal(empty.defaultChainId, 'default')
+})
+
+test('a config written before policy v2 gets the new "switch on everything" defaults once, not forever', () => {
+  // 旧配置里的 false 是当时的默认值（用户没选择过），只改 schema 默认值救不了它们：
+  // 存下来的值仍然会被读回。没有 v2 标记 = 一次性按新默认改写；保存后带上标记，
+  // 用户之后自己取消的勾选就不再被覆盖。
+  const stored = namedChain('default', '', {
+    candidates: [cand('a')],
+    switchOn: { rateLimit: true, server: true, timeout: true, transport: true, emptyResponse: false, invalidRequest: false, auth: true, quota: true },
+  })
+  const migrated = effectiveChains({ chains: [stored] })
+  assert.equal(migrated.chains[0].switchOn.invalidRequest, true, 'the old default false must not survive the upgrade')
+  assert.equal(migrated.chains[0].switchOn.emptyResponse, true)
+  assert.equal(migrated.chains[0].switchOn.other, true, 'codes outside the table switch by default too')
+  // 已经带 v2 标记的配置：用户的选择原样保留。
+  // 同一次迁移也把"旧默认 0 次重试"改写成新默认 5：插件接管重试之后，默认比 DSH 自己的
+  // provider 策略（5）更小，等于让升级后的韧性变差。
+  assert.equal(migrated.chains[0].firstHopMaxRetries, 5)
+  assert.equal(migrated.chains[0].candidates[0].maxRetries, 5)
+  const modern = effectiveChains({
+    policyVersion: POLICY_VERSION,
+    chains: [{
+      ...stored,
+      firstHopMaxRetries: 0,
+      candidates: [{ provider: 'a', model: 'm', maxRetries: 0, weight: 0 }],
+      switchOn: { ...stored.switchOn, invalidRequest: false },
+    }],
+  })
+  assert.equal(modern.chains[0].switchOn.invalidRequest, false, 'an explicit choice made under v2 is never rewritten')
+  assert.equal(modern.chains[0].firstHopMaxRetries, 0, 'an explicit "switch at once" made under v2 is kept')
+  assert.equal(modern.chains[0].candidates[0].maxRetries, 0)
+})
+
+test('a chain without a max-tokens policy reads the defaults, and one with it keeps its numbers', () => {
+  const plain = effectiveChains({ chains: [namedChain('default', '')] })
+  assert.deepEqual(plain.chains[0].maxTokens, { autoContinue: true, continues: 2 })
+  const tuned = effectiveChains({ chains: [namedChain('default', '', { maxTokens: { autoContinue: false, continues: 5 } })] })
+  assert.deepEqual(tuned.chains[0].maxTokens, { autoContinue: false, continues: 5 })
 })
 
 test('a session routes on the chain it bound, else on the default chain', () => {

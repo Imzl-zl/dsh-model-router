@@ -88,6 +88,15 @@ interface LineageState {
  * when the attempt did not end in failure. Shared with the router's notice
  * path so both readers agree on what a failed attempt is.
  */
+export function finishKindOfStream(stream: readonly AssistantStreamRecord[]): string | undefined {
+  for (let i = stream.length - 1; i >= 0; i -= 1) {
+    const record = stream[i]!
+    if (record.type !== 'chunk' || record.chunk.type !== 'finish') continue
+    return record.chunk.reason.kind
+  }
+  return undefined
+}
+
 export function failureCodeOfStream(stream: readonly AssistantStreamRecord[]): string | undefined {
   for (let i = stream.length - 1; i >= 0; i -= 1) {
     const record = stream[i]!

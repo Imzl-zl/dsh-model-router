@@ -34,7 +34,7 @@
 import type { LlmCallConfig, ResolvedRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { planBackoff } from './backoff.ts'
 import type { ChainConfig, Strategy, SwitchOn } from './config.ts'
-import { switchOnKeyOf } from './defaults.ts'
+import { NEVER_SWITCH_CODES, OTHER_SWITCH_KEY, delegatesFirst, switchOnKeyOf } from './defaults.ts'
 import { routeKeyOf } from './routes.ts'
 import type { StepCandidate, StepChain, StepConditions, StepState } from './state.ts'
 
@@ -243,14 +243,29 @@ export function skipTo(state: StepState, index: number): StepState {
 }
 
 /**
+ * 把这一步的落点直接放到某条候选上，**不预支**它的调用额度。
+ *
+ * 用于"上一轮输出被截断、续跑用尽，这一步一开头就该打到下一条候选"的跨 step
+ * 换候选。与 {@link skipTo} 的区别是额度：{@link skipTo} 描述的是"这条候选被
+ * 预检跳过了"（它这一击压根不算），而这里是这条候选的**第一次**真实调用。
+ */
+export function jumpTo(state: StepState, index: number): StepState {
+  return { ...state, index, attemptsOnCandidate: 0 }
+}
+
+/**
  * Whether a failure code may move the chain forward. One definition, two call
  * sites: the request handler gates its cap-driven advance on it (because
  * `llm-retry` preempts the recovery listener for retryable codes, an advance
  * must not bypass the user's `switchOn`), and `decideRecovery` gates its retry.
  */
 export function isSwitchOnEligible(chain: StepChain, code: string): boolean {
-  const key = switchOnKeyOf(code)
-  return key !== undefined && chain.switchOn[key]
+  // 没有"切换"这个动作可言的码永远不动（用户自己取消 / 链上无适配器）。
+  if (NEVER_SWITCH_CODES.includes(code)) return false
+  // 表里没有的码落到 `other`（默认 true）。2026-10-22 之前这里直接返回 false，
+  // 于是 `PI_AI_ERROR` / `HTTP_402` / 以后新增的码全是"两层都不管"的死区。
+  const key = switchOnKeyOf(code) ?? OTHER_SWITCH_KEY
+  return chain.switchOn[key] === true
 }
 
 /**
@@ -383,6 +398,16 @@ export interface RetryTiming {
   readonly retryAfterMs?: number
   /** Jitter sample; injectable so the decision table stays deterministic in tests. */
   readonly random?: () => number
+  /**
+   * Would `llm-retry` have retried this code? `false` (or absent policy) means it did
+   * not even look at the failure — the router may then run its own same-route retries
+   * after the delegate returns, with its own backoff.
+   *
+   * This is what keeps the configured `maxRetries` honest for codes outside
+   * `switchOn`'s table: those always delegate first, so without this the budget a user
+   * typed would silently not apply.
+   */
+  readonly retryable?: boolean
 }
 
 /** What the inner layer decided, as the recovery listener sees it. */
@@ -397,6 +422,12 @@ export type InnerDecision = 'retry' | undefined
  */
 export type AfterInnerRuling =
   | { readonly kind: 'honor'; readonly record: false; readonly log: '' }
+  /**
+   * 内层根本没重试过这个码（`llm-retry` 的策略里没有它），而当前候选还有额度：
+   * 由路由器用**自己的**退避重试同一条路由。这不是"盲重试"——盲重试指的是无视内层
+   * 已经做过的退避再来一次。
+   */
+  | { readonly kind: 'retry-self'; readonly record: false; readonly log: ''; readonly delayMs: number }
   | { readonly kind: 'advance'; readonly record: true; readonly log: string }
   | { readonly kind: 'terminate'; readonly record: true; readonly log: string }
 
@@ -433,9 +464,13 @@ export function decideBeforeInner(
   const current = state.chain.candidates[state.index]!
   const route = routeKeyOf(current.provider, current.model)
   const attempt = `(attempt ${state.totalAttempts})`
-  // 未勾选的码永远 delegate：路由器不接管它，DSH 自己按它的策略重试与收尾。
-  // 取消同理——调用方已经不要这个结果了，替它重试是一次没人等的调用。
-  if (aborted || !isSwitchOnEligible(state.chain, code)) {
+  // 取消：调用方已经不要这个结果了，替它重试是一次没人等的调用。
+  if (aborted) return { kind: 'delegate', record: false, log: '' }
+  // 内层拥有的码（compaction 两件套）与表外的码一律**先问内层**：以后 DSH 再长
+  // 出一个恢复插件，也不会被最外层的我们抢走。内层放弃后由 decideAfterInner 接手。
+  if (delegatesFirst(code)) return { kind: 'delegate', record: false, log: '' }
+  // 用户显式取消勾选的码：插件不接管，由 DSH 按自己的策略重试与收尾。
+  if (!isSwitchOnEligible(state.chain, code)) {
     return { kind: 'delegate', record: false, log: '' }
   }
   // 勾选的码由路由器自己执行同渠道重试（2026-10-21 定案）：次数就是配置的次数，
@@ -477,7 +512,13 @@ export function decideBeforeInner(
 }
 
 /** {@link decideBeforeInner} 的姊妹：llm-retry 已经回答之后的裁决。 */
-export function decideAfterInner(state: StepState, code: string, aborted: boolean, inner: InnerDecision): AfterInnerRuling {
+export function decideAfterInner(
+  state: StepState,
+  code: string,
+  aborted: boolean,
+  inner: InnerDecision,
+  timing: RetryTiming = {},
+): AfterInnerRuling {
   const current = state.chain.candidates[state.index]!
   const route = routeKeyOf(current.provider, current.model)
   if (inner === 'retry') {
@@ -486,7 +527,18 @@ export function decideAfterInner(state: StepState, code: string, aborted: boolea
     // 插件只负责数次数与换渠道（2026-10-20 删除整请求总上限）。
     return { kind: 'honor', record: false, log: '' }
   }
-  // 内层全部放弃：记录熔断，并决定是否跨候选继续。
+  // 内层**从未重试**这个码（不在 provider 策略的可重试集里，或压根没有策略），而这条
+  // 候选还有额度：这一步不能算"候选定性"，否则用户填的「失败后重试几次」对表外的码
+  // 全部失效。用路由器自己的退避曲线补上，退避参数来自同一个 provider 策略。
+  if (!aborted
+    && isSwitchOnEligible(state.chain, code)
+    && timing.retryable === false
+    && state.attemptsOnCandidate < current.maxAttempts) {
+    const plan = planBackoff(timing.policy, state.attemptsOnCandidate, timing.retryAfterMs, timing.random)
+    if (plan.kind === 'wait') return { kind: 'retry-self', record: false, log: '', delayMs: plan.delayMs }
+  }
+  // 内层放弃（或从未接手）之后这一击在当前候选上就定性了：记录熔断，并决定是否
+  // 跨候选继续。
   if (decideRecovery(state, code, aborted) === 'terminal') {
     return { kind: 'terminate', record: true, log: '' }
   }

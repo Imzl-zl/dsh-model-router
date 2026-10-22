@@ -154,6 +154,176 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'failover-on-a-request-rejection',
+    note: '402 事故形状：网关把「端点不可用」包成 invalid_request_error，pi-ai 归一成 INVALID_REQUEST；新的默认口径必须切换',
+    // 这条是用户现场那条报错的端到端判据：`INVALID_REQUEST` 此前默认不勾，而
+    // `llm-retry` 的默认可重试集里也没有它——两层都不管，整轮直接失败。默认反转后
+    // 它和其它码一样：本候选额度用完就换下一条。
+    router: {
+      enabled: true,
+      chain: {
+        candidates: [C('stub-backup', 1)],
+        firstHopMaxRetries: 0,
+        switchOn: { ...SWITCH_ON, invalidRequest: true, other: true },
+      },
+    },
+    script: {
+      'stub-primary': { outcomes: ['fail:INVALID_REQUEST', 'fail:INVALID_REQUEST'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['INVALID_REQUEST'])
+      eq('notice count', notices(events).length, 1)
+      ok('notice names 请求被拒绝', notices(events)[0]?.text.includes('请求被拒绝'))
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
+    name: 'an-unclassified-code-is-not-a-dead-end',
+    note: '表外的码（PI_AI_ERROR 等）默认也切换，而且候选自己配的重试次数照样生效',
+    router: {
+      enabled: true,
+      chain: {
+        candidates: [C('stub-backup', 1)],
+        // 2 次重试 = 首发 + 2 = 3 次真实调用。表外的码以前连这份额度都用不上
+        // （内层一放弃就当候选定性），这条场景钉住"配置的次数对任何码都算数"。
+        firstHopMaxRetries: 2,
+        switchOn: { ...SWITCH_ON, other: true },
+      },
+    },
+    script: {
+      // 明确让 llm-retry 不重试这个码：它就是"DSH 原生也不管"的那一类。
+      policy: { retryableCodes: ['SOMETHING_ELSE'], maxRetries: 5 },
+      'stub-primary': { outcomes: ['fail:PI_AI_ERROR', 'fail:PI_AI_ERROR', 'fail:PI_AI_ERROR', 'fail:PI_AI_ERROR'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      // 三次失败尝试都是第一跳（首发 + 插件自己补的 2 次重试），然后才换渠道。
+      eq('failed attempt codes', failedAttempts(events).map(a => a.code), ['PI_AI_ERROR', 'PI_AI_ERROR', 'PI_AI_ERROR'])
+      eq('the router performed those retries, not llm-retry', events.filter(e => e.type === 'llm/retry').length, 0)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
+    name: 'unclassified-codes-can-be-turned-off',
+    note: '关掉兜底 = 未知码交给 DSH 收尾：不重试、不切换，整轮失败',
+    router: {
+      enabled: true,
+      chain: {
+        candidates: [C('stub-backup', 1)],
+        firstHopMaxRetries: 0,
+        switchOn: { ...SWITCH_ON, other: false },
+      },
+    },
+    script: {
+      policy: { retryableCodes: ['SOMETHING_ELSE'], maxRetries: 5 },
+      'stub-primary': { outcomes: ['fail:PI_AI_ERROR', 'fail:PI_AI_ERROR'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model'])
+      eq('notices', notices(events), [])
+      eq('final route', finalRoute(events), undefined)
+      eq('turn end', turnEnd(events), 'error')
+    },
+  },
+  {
+    name: 'truncated-output-continues-then-switches-candidate',
+    note: '输出被截断：同一候选自动续 2 次，续满后换下一条候选接着写，而不是停下来等用户发"继续"',
+    // `max-tokens` 不是错误、走不到 `agent/request-error`（`agent-loop/src/agent.ts:547`
+    // 直接结束本轮）。判据：三次真实调用都在第一跳（首发 + 2 次续跑），第四次换到备用；
+    // 并且中间真的插入了 steer 消息，turn 没有在第二次截断后就结束。
+    router: {
+      enabled: true,
+      chain: {
+        candidates: [C('stub-backup', 1)],
+        firstHopMaxRetries: 0,
+        switchOn: { ...SWITCH_ON, other: true },
+        maxTokens: { autoContinue: true, continues: 2 },
+      },
+    },
+    script: {
+      'stub-primary': { outcomes: ['truncate', 'truncate', 'truncate', 'truncate'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      const answered = events.filter(e => e.type === 'assistant/message')
+      eq('every truncated reply came from the first hop, the last from the fallback',
+        answered.map(e => `${e.data.message.source.provider}/${e.data.message.source.model}`),
+        ['stub-primary/stub-model', 'stub-primary/stub-model', 'stub-primary/stub-model', 'stub-backup/stub-model'])
+      eq('no failure attempts: truncation is not an error', failedAttempts(events), [])
+      // 每条 steer 消息都是一条 model-router 通知：2 条带剩余次数的续跑 + 换候选时那条
+      // 纯指令 + 落位时那条切换事实（"已切换至 …"由真正发出请求的那一步说，正好对上）。
+      eq('two counted continues, one bare continue, one switch notice', notices(events).length, 4)
+      eq('the continues say how many are left',
+        notices(events).filter(n => n.text.includes('本候选还可自动续')).length, 2)
+      eq('the switch is announced by the request that really took it',
+        notices(events).filter(n => n.text.includes('输出连续被截断')).length, 1)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      // DSH 的 max-tokens 结论是"粘"的：本轮任一步撞过上限，后面正常结束也不会把它降级
+      // （agent.ts:338-343）。所以本轮结束原因仍是 max-tokens——界面那条提示的来源。
+      eq('turn end', turnEnd(events), 'max-tokens')
+    },
+  },
+  {
+    name: 'a-truncated-turn-with-auto-continue-off-stops-like-dsh',
+    note: '关掉自动续跑 = DSH 原生行为：截断即结束，不切换、不注入消息',
+    router: {
+      enabled: true,
+      chain: {
+        candidates: [C('stub-backup', 1)],
+        firstHopMaxRetries: 0,
+        switchOn: { ...SWITCH_ON, other: true },
+        maxTokens: { autoContinue: false, continues: 2 },
+      },
+    },
+    script: {
+      'stub-primary': { outcomes: ['truncate', 'truncate'] },
+      'stub-backup': { outcomes: ['ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model'])
+      eq('notices', notices(events), [])
+      eq('turn end', turnEnd(events), 'max-tokens')
+    },
+  },
+  {
+    name: 'default-budget-retries-each-channel-before-switching',
+    note: '默认配置就是"先自己重试、还不行才按链路切、下一条也一样重试"：第一跳 5 次重试打满才换，备用自己重试到成功',
+    // 用户的原话：「选中的模型出问题了一般就会停止，我就是不想它停止，所以先让它自己重试，
+    // 重试还不行就根据自己配置的链路切换，每一个都可以重试」。这条场景**不写任何次数**，
+    // 全部走默认值（5），钉住那句描述就是开箱行为。
+    router: {
+      enabled: true,
+      chain: {
+        candidates: [{ provider: 'stub-backup', model: 'stub-model' }],
+        switchOn: { ...SWITCH_ON, other: true },
+      },
+    },
+    script: {
+      'stub-primary': { outcomes: Array.from({ length: 8 }, () => 'fail:RATE_LIMIT') },
+      'stub-backup': { outcomes: ['fail:TIMEOUT', 'fail:TIMEOUT', 'ok'] },
+    },
+    check(events) {
+      eq('headers', headers(events), ['stub-primary/stub-model', 'stub-backup/stub-model'])
+      // 第一跳首发 + 5 次重试 = 6 次，全部打在同一条渠道上。
+      eq('the first hop retried its own budget before switching', failedAttempts(events).length, 8)
+      eq('first six attempts are the first hop',
+        failedAttempts(events).slice(0, 6).map(a => a.code), Array(6).fill('RATE_LIMIT'))
+      // 备用候选也用自己的默认预算重试，第二次失败后第三次成功。
+      eq('the fallback retried too, then answered',
+        failedAttempts(events).slice(6).map(a => a.code), ['TIMEOUT', 'TIMEOUT'])
+      eq('the router performed every retry, not llm-retry', events.filter(e => e.type === 'llm/retry').length, 0)
+      eq('final route', finalRoute(events), 'stub-backup/stub-model')
+      eq('turn end', turnEnd(events), 'completed')
+    },
+  },
+  {
     name: 'switch-off-terminal',
     note: '未勾选的异常不切换；同渠道内 llm-retry 仍按策略重试后才终态',
     router: { enabled: true, profiles: [profile([C('stub-primary', 2), C('stub-backup', 1)], { switchOn: { ...SWITCH_ON, rateLimit: false } })], default: { enabled: false, candidates: [], switchOn: { ...SWITCH_ON } } },
@@ -745,7 +915,9 @@ function candidateYaml(c, indent) {
   // weight must cross the overlay: an unset field reads as 0, which silently
   // turns a weight strategy into an order one.
   const weight = c.weight === undefined ? '' : `, weight: ${c.weight}`
-  return `${indent}- { provider: ${c.provider}, model: ${c.model}, maxRetries: ${c.maxRetries}${weight}${extra} }`
+  // 省略 maxRetries 表示"用默认值"——这正是要测默认重试次数的场景需要的形状。
+  const retries = c.maxRetries === undefined ? '' : `, maxRetries: ${c.maxRetries}`
+  return `${indent}- { provider: ${c.provider}, model: ${c.model}${retries}${weight}${extra} }`
 }
 
 function overlayYaml(router, selection, binding, noStorage) {
@@ -814,6 +986,7 @@ ${bindingRow}    - id: model-router
       name: '${PLUGIN}'
       config:
         enabled: ${router.enabled ?? false}
+        policyVersion: ${router.policyVersion ?? 2}
 ${chainConfigYaml(router)}
 ${router.breaker === undefined ? '' : `        health:
           breaker:
@@ -847,14 +1020,19 @@ function chainConfigYaml(router) {
 
 /** One chain's fields at a given indentation. */
 function chainFieldsYaml(chain, pad) {
+  const sw = chain.switchOn
   const lines = [
     `${pad}candidates:`,
     ...chain.candidates.map(c => candidateYaml(c, `${pad}  `)),
-    `${pad}switchOn: { rateLimit: ${chain.switchOn.rateLimit}, server: ${chain.switchOn.server}, timeout: ${chain.switchOn.timeout}, transport: ${chain.switchOn.transport}, emptyResponse: ${chain.switchOn.emptyResponse}, invalidRequest: ${chain.switchOn.invalidRequest} }`,
+    // `other` 是表外兜底：场景显式写它，才能分开断言"兜底开"与"兜底关"。
+    `${pad}switchOn: { rateLimit: ${sw.rateLimit}, server: ${sw.server}, timeout: ${sw.timeout}, transport: ${sw.transport}, emptyResponse: ${sw.emptyResponse}, invalidRequest: ${sw.invalidRequest}, auth: ${sw.auth ?? true}, quota: ${sw.quota ?? true}, other: ${sw.other ?? true} }`,
   ]
   if (chain.firstHopMaxRetries !== undefined) lines.push(`${pad}firstHopMaxRetries: ${chain.firstHopMaxRetries}`)
   if (chain.stickyTurns !== undefined) lines.push(`${pad}stickyTurns: ${chain.stickyTurns}`)
   if (chain.strategy !== undefined) lines.push(`${pad}strategy: ${chain.strategy}`)
+  if (chain.maxTokens !== undefined) {
+    lines.push(`${pad}maxTokens: { autoContinue: ${chain.maxTokens.autoContinue}, continues: ${chain.maxTokens.continues} }`)
+  }
   return lines.join('\n')
 }
 

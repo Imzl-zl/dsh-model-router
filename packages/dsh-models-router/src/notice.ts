@@ -43,8 +43,19 @@ const CODE_LABELS: Readonly<Record<SwitchOnCode, string>> = {
   QUOTA: '额度用尽',
 }
 
+/**
+ * 不是 `LlmFailure.code`、但通知里要说得像人话的原因。
+ *
+ * `MAX_TOKENS` 是 `FinishReason`，不是失败码：输出被截断不会经过
+ * `agent/request-error`。它出现在截断续跑/换候选的通知里。
+ */
+const SYNTHETIC_LABELS: Readonly<Record<string, string>> = {
+  MAX_TOKENS: '输出被截断',
+}
+
 export function codeLabel(code: string): string {
-  return Object.hasOwn(CODE_LABELS, code) ? CODE_LABELS[code as SwitchOnCode] : code
+  if (Object.hasOwn(CODE_LABELS, code)) return CODE_LABELS[code as SwitchOnCode]
+  return Object.hasOwn(SYNTHETIC_LABELS, code) ? SYNTHETIC_LABELS[code]! : code
 }
 
 function notice(text: string): UserMessage {
@@ -79,6 +90,44 @@ export function failoverNotice(
     : `已切换至 ${target}（降级 ${position}/${total}）`
   return notice(
     `[路由切换] ${routeLabel(from.provider, from.model, to.provider)} ${reason}，${move}`,
+  )
+}
+
+/**
+ * 输出被截断后的自动续跑。
+ *
+ * 这条消息是**模型也读得到的用户消息**（steer 进 inbox，下一步被 claim），所以
+ * 文案本身就是给模型的指令：接着说、别重述。前半句是给用户看的解释。
+ */
+export function truncationContinueNotice(remaining?: number): UserMessage {
+  const budget = remaining === undefined ? '' : `（本候选还可自动续 ${remaining} 次）`
+  return notice(
+    `[路由续跑] 上一条回复达到输出 token 上限${budget}。`
+    + '请从中断处直接接着写完，不要重复已经输出的内容。',
+  )
+}
+
+/**
+ * 续跑次数用尽、且输出仍在被截断：换下一条候选接着写。
+ *
+ * 与普通失败切换的差别只在原因与"接着写"这句：换候选对模型是新上下文，不点明
+ * 它会从头再答一遍。
+ */
+export function truncationSwitchNotice(
+  from: { provider: string; model: string },
+  to: { provider: string; model: string },
+  position: number,
+  total: number,
+  continues: number,
+): UserMessage {
+  const move = position <= 0
+    ? `已切回你选择的模型 ${routeLabel(to.provider, to.model, from.provider)}`
+    : `已切换至 ${routeLabel(to.provider, to.model, from.provider)}（降级 ${position}/${total}）`
+  const why = continues <= 0
+    ? `${routeLabel(from.provider, from.model, to.provider)} 的输出被截断（未配置自动续跑）`
+    : `输出连续被截断（${routeLabel(from.provider, from.model, to.provider)} 上已自动续 ${continues} 次）`
+  return notice(
+    `[路由切换] ${why}，${move}，请从中断处接着写完，不要重复已经输出的内容`,
   )
 }
 

@@ -14,7 +14,7 @@ import { defaultChainValue, normalizeNamedChain, normalizeHealth, validate } fro
 import { defaultChainOf, effectiveChains } from '../chain.ts'
 import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
-import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, MAX_RETRIES } from '../defaults.ts'
+import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOKEN_CONTINUES, MAX_RETRIES, MAX_TOKEN_CONTINUES, POLICY_VERSION } from '../defaults.ts'
 import { RELEASE_VERSION } from '../release.generated.ts'
 
 /** Where the browser remembers the last release whose notes it has shown. */
@@ -536,6 +536,9 @@ export function createController(ctx, scope, t, initialNotesOpen = notesForCurre
         // 旧形状的单链键：迁移之后就不能留第二份「当前链」，否则下一次加载看到两个
         // 形状并存，谁赢取决于一条迁移规则，而用户以为自己改的是另一份。
         { op: 'unset', path: ['chain'] },
+        // 策略版本标记：没有它，host 会把这次保存的 switchOn 也当成旧默认值再改一遍，
+        // 用户在这里取消的勾选就永远不算数。
+        { op: 'set', path: ['policyVersion'], value: POLICY_VERSION },
         { op: 'set', path: ['health'], value: draft.health },
       ], scope.getSnapshot().revision).then(function (accepted) {
         saving = false
@@ -598,6 +601,19 @@ export function createController(ctx, scope, t, initialNotesOpen = notesForCurre
     setStickyTurns: function (value) {
       var parsed = Number(value)
       edited(draft).stickyTurns = Number.isFinite(parsed) ? Math.min(99, Math.max(0, Math.round(parsed))) : 0
+      publish()
+    },
+    /** 截断时是否自动续跑（`max-tokens` 不是错误，走不到恢复扩展点）。 */
+    setMaxTokensContinue: function (value) {
+      edited(draft).maxTokens.autoContinue = Boolean(value)
+      publish()
+    },
+    /** 同一个候选上一轮最多自动续几次；用完换下一条候选。 */
+    setMaxTokenContinues: function (value) {
+      var parsed = Number(value)
+      edited(draft).maxTokens.continues = Number.isFinite(parsed)
+        ? Math.min(MAX_TOKEN_CONTINUES, Math.max(0, Math.round(parsed)))
+        : DEFAULT_MAX_TOKEN_CONTINUES
       publish()
     },
     setFirstHopMaxRetries: function (value) {

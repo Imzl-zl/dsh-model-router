@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 其中「`switchOn` 之外的码永不接管」一句已被 `2026-10-22-failover-by-default-and-max-token-continue.md` 取代（表外码落到 `other`，先交给内层再换候选）；本篇关于 AUTH/QUOTA 该切换的结论仍有效。
+
 ## Problem
 
 2026-10-16 用户提问戳中一个产品级缺口：「密钥失效肯定也是需要切换的啊，做这个不就是各种问题

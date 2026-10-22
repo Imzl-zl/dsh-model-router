@@ -44,14 +44,14 @@ import {
   type NamedChain,
   type RouterOptions,
 } from './config.ts'
-import { decideAfterInner, decideBeforeInner, hasImageContent, isSwitchOnEligible, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
+import { decideAfterInner, decideBeforeInner, hasImageContent, isSwitchOnEligible, jumpTo, planFire, resolveChain, resolveStartIndex, skipTo, startStep, toolResultHasImage, unmetCondition } from './router.ts'
 import type { AfterInnerRuling, BeforeInnerRuling } from './router.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from './routes.ts'
 import { DEFAULT_PROBE_PROMPT, DEFAULT_PROBE_TIMEOUT_SECONDS } from './defaults.ts'
-import { RouterState, candidateConfig, type StepCandidate, type StepChain, type StepConditions } from './state.ts'
-import { bindingMissingNotice, conditionSkipNotice, failoverNotice, breakerNotice, skipNotice, routeMissingNotice, adapterDefectNotice } from './notice.ts'
+import { RouterState, candidateConfig, type StepCandidate, type StepChain, type StepConditions, type TurnCarry } from './state.ts'
+import { bindingMissingNotice, conditionSkipNotice, failoverNotice, breakerNotice, skipNotice, routeMissingNotice, adapterDefectNotice, truncationContinueNotice, truncationSwitchNotice } from './notice.ts'
 import { precheckTierOf, type PrecheckTier } from './precheck.ts'
-import { failoverHistoryProjection, failureCodeOfStream } from './lineage.ts'
+import { failoverHistoryProjection, failureCodeOfStream, finishKindOfStream } from './lineage.ts'
 import { channelHealthProjection } from './health.ts'
 import { CircuitBreaker, type RouteBlock } from './breaker.ts'
 import { waitBeforeRetry } from './backoff.ts'
@@ -208,6 +208,23 @@ export default class ModelRouter extends TypertRemoteService {
         const agent = agentsBySession.get(session)
         if (agent !== undefined) states.noteToolResult(agent, event.data.turn, toolResultHasImage(event.data))
       }
+      if (event.type === 'assistant/message') {
+        // 输出被截断不是错误、不经过 `agent/request-error`（`agent-loop/src/agent.ts:547`
+        // 直接结束本轮），所以"这一轮是不是截断结束"只能从这里读。`turn-stopping`
+        // 在 `turn/end` 之前派发，届时还没有 turn/end 可读。
+        const agent = agentsBySession.get(session)
+        if (agent !== undefined) {
+          const source = event.data.message.source
+          states.noteTruncation(agent, {
+            turn: event.data.turn,
+            step: event.data.step,
+            provider: source.provider,
+            model: source.model,
+            truncated: finishKindOfStream(event.data.stream) === 'max-tokens',
+          })
+        }
+        return
+      }
       if (event.type !== 'assistant/attempt') return
       const failure = failureCodeOfStream(event.data.stream)
       if (failure !== undefined) states.noteFailure(session, event.data.turn, event.data.step, failure)
@@ -253,6 +270,8 @@ export default class ModelRouter extends TypertRemoteService {
         if (!config.enabled.get()) return resolved
 
         let state = states.current(agent, turn, step)
+        /** 本步是否由"截断续满"落到另一条候选；通知在落点确定后发。 */
+        let carried: TurnCarry | undefined
         if (state === undefined) {
           // 本会话绑定的是哪条链、每条路由重试几次。读取是同步的（storage 域的内存
           // 权威），因此这个请求看到的一定是"上一次写入已落盘"的状态；绑定在 step
@@ -278,6 +297,19 @@ export default class ModelRouter extends TypertRemoteService {
           const fallbacks = chain.candidates.slice(1)
           const start = resolveStartIndex(fallbacks, chain.strategy, states.nextCursor(agent.session, fallbacks.length))
           state = startStep(turn, step, chain, states.conditionsFor(agent, turn, step), start)
+          // 上一轮输出被截断、自动续跑次数用尽：这一步一开头就落到下一条候选。
+          // 落点按路由记（不是下标），因为新 step 的链按起点策略重新旋转过。
+          // 通知不在这里发：这条候选还可能被条件/熔断/预检跳过，真正落在哪儿要等
+          // 下面走完——通知说"已切换至 X"就必须真的发到 X（项目的老毛病是文案先于事实）。
+          const carry = states.takeCarry(agent, turn)
+          if (carry !== undefined) {
+            const target = chain.candidates.findIndex(candidate =>
+              candidate.provider === carry.provider && candidate.model === carry.model)
+            if (target > 0) {
+              carried = carry
+              state = jumpTo(state, target)
+            }
+          }
           states.start(agent, state)
         }
 
@@ -380,6 +412,26 @@ export default class ModelRouter extends TypertRemoteService {
         }
         states.start(agent, skipped.length === 0 && conditionSkipped.length === 0 && index === plan.state.index ? plan.state : skipTo(plan.state, index))
 
+        // 截断续满后的换候选：现在才知道真正落在哪条候选上。落在被截断的那条上
+        // （链上其他都不可用，走的是"落回原路由"路径）就不发切换通知——那会是一句假话。
+        if (carried !== undefined) {
+          const landing = candidates[index]!
+          if (routeKeyOf(landing.provider, landing.model) !== routeKeyOf(carried.fromProvider, carried.fromModel)) {
+            const order = plan.state.chain.order
+            agent.session.append(
+              'user/message',
+              truncationSwitchNotice(
+                { provider: carried.fromProvider, model: carried.fromModel },
+                landing,
+                order[index] ?? index,
+                Math.max(0, order.length - 1),
+                carried.continues,
+              ),
+              { surfaceOp: 'append' },
+            )
+          }
+        }
+
         if (plan.advanced) {
           const order = plan.state.chain.order
           agent.session.append(
@@ -462,12 +514,26 @@ export default class ModelRouter extends TypertRemoteService {
       }
 
       const inner = await next()
-      const after = decideAfterInner(state, failure.code, signal.aborted, inner?.kind === 'retry' ? 'retry' : undefined)
+      const after = decideAfterInner(state, failure.code, signal.aborted, inner?.kind === 'retry' ? 'retry' : undefined, {
+        policy: payload.retryPolicy,
+        retryAfterMs: failure.providerRetryAfterMs,
+        // 内层到底有没有为这个码做过重试：没有策略 = 它直接放行；always = 它全重试；
+        // normal = 看可重试集。只有"它根本没管"时，路由器才补自己的重试。
+        retryable: payload.retryPolicy === undefined
+          ? false
+          : payload.retryPolicy.mode === 'always'
+            || payload.retryPolicy.retryableCodes.includes(failure.code),
+      })
       apply(after)
       // honor：原样放行——llm-retry 还在重试同一条路由，失败尚未定论。
       if (after.kind === 'honor') {
         state.pendingAdvance = false
         return inner
+      }
+      if (after.kind === 'retry-self') {
+        state.pendingAdvance = false
+        const waited = await waitBeforeRetry(after.delayMs, signal)
+        return waited ? { kind: 'retry' as const } : undefined
       }
       if (after.kind === 'advance') {
         state.pendingAdvance = true
@@ -475,6 +541,50 @@ export default class ModelRouter extends TypertRemoteService {
       }
       return undefined
     }, { prepend: true })
+
+    // 输出被截断（`max-tokens`）不经过恢复扩展点：DSH 在 `agent-loop/src/agent.ts:547`
+    // 直接把本轮结束掉，界面那条"发送继续"就是在等用户手动补一句。插件的目的是
+    // "别停在这儿"，所以这里接管：先在同一候选上自动续（次数可配），续满了就换
+    // 下一条候选接着写——换候选走 `carryTo`，由下一次 `agent/request` 落位。
+    //
+    // `agent/turn-stopping` 是 DSH 官方给的续跑口子（`agent.ts:361-365`，官方的
+    // `/loop` pattern 就是在这个事件里 `agent.steer()`），且它**先于** `turn/end`
+    // 派发，所以"这次是不是截断结束"只能读上一条 assistant 消息的 finish 记录。
+    ctx.on('agent/turn-stopping', ({ agent, turn, signal }) => {
+      if (signal.aborted || !config.enabled.get()) return
+      const note = states.truncationOf(agent, turn)
+      if (note === undefined || !note.truncated) return
+      // 只认本轮**最后一个 step** 的记录：辅助调用（标题、压缩）也会写 assistant 消息，
+      // 它们不是 step，用它们的截断去 steer 会把一句话塞进不相干的一轮。
+      const state = states.latestOfTurn(agent, turn)
+      if (state === undefined || state.step !== note.step) return
+      const effective = readConfig(config, this.raw)
+      const bound = bindings.read(agent.session.id)
+      const policy = chainForSession(effective, bound?.chain ?? null).chain.maxTokens
+      if (!policy.autoContinue) return
+      const route = routeKeyOf(note.provider, note.model)
+      const used = states.continuesUsed(agent, turn, route)
+      if (used < policy.continues) {
+        states.noteContinue(agent, turn, route)
+        agent.steer(truncationContinueNotice(policy.continues - used - 1))
+        return
+      }
+      // 续满了：这一步之后再写就该换候选。链上没有下一条就到此为止，交给 DSH 的
+      // 截断结束（界面照旧提示用户自己继续），插件不伪造一次没有对象的切换。
+      const index = state.chain.candidates.findIndex(candidate =>
+        candidate.provider === note.provider && candidate.model === note.model)
+      const next = index >= 0 ? state.chain.candidates[index + 1] : undefined
+      if (next === undefined) return
+      states.carryTo(agent, {
+        turn,
+        provider: next.provider,
+        model: next.model,
+        fromProvider: note.provider,
+        fromModel: note.model,
+        continues: used,
+      })
+      agent.steer(truncationContinueNotice())
+    })
   }
 
   // ---- the plugin's own Remote ----

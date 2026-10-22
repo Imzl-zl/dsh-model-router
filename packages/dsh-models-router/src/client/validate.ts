@@ -8,6 +8,8 @@ import {
   DEFAULT_FIRST_HOP_MAX_RETRIES,
   DEFAULT_INTERVAL_SECONDS,
   DEFAULT_MAX_RETRIES,
+  DEFAULT_MAX_TOKEN_AUTO_CONTINUE,
+  DEFAULT_MAX_TOKEN_CONTINUES,
   DEFAULT_PROBE_PROMPT,
   DEFAULT_PROBE_TIMEOUT_SECONDS,
   DEFAULT_STICKY_TURNS,
@@ -16,6 +18,7 @@ import {
   DEFAULT_TIMELINE_BUCKET_SECONDS,
   MAX_RETRIES,
   MAX_SESSION_RETRIES,
+  MAX_TOKEN_CONTINUES,
 } from '../defaults.ts'
 import { structuralViolations } from '../rules.ts'
 
@@ -38,6 +41,11 @@ export function defaultSwitchOn() {
   return Object.assign({}, DEFAULT_SWITCH_ON)
 }
 
+/** 截断策略的默认值，与 host 的 `chain.ts` 同源。 */
+export function defaultMaxTokens() {
+  return { autoContinue: DEFAULT_MAX_TOKEN_AUTO_CONTINUE, continues: DEFAULT_MAX_TOKEN_CONTINUES }
+}
+
 /** A chain with no fallbacks: what a fresh draft, and a legacy record, start from. */
 export function defaultChainValue() {
   return {
@@ -46,6 +54,7 @@ export function defaultChainValue() {
     stickyTurns: DEFAULT_STICKY_TURNS,
     strategy: DEFAULT_STRATEGY,
     firstHopMaxRetries: DEFAULT_FIRST_HOP_MAX_RETRIES,
+    maxTokens: defaultMaxTokens(),
   }
 }
 
@@ -61,6 +70,14 @@ export function normalizeChain(value) {
       : Object.assign({}, candidate, { maxRetries: DEFAULT_MAX_RETRIES })
   })
   if (typeof chain.firstHopMaxRetries !== 'number') chain.firstHopMaxRetries = DEFAULT_FIRST_HOP_MAX_RETRIES
+  // 旧配置没有这一节：缺字段会渲染成空步进器，所以在这里补齐，与 host 同源。
+  var maxTokens = chain.maxTokens && typeof chain.maxTokens === 'object' ? chain.maxTokens : {}
+  chain.maxTokens = {
+    autoContinue: typeof maxTokens.autoContinue === 'boolean' ? maxTokens.autoContinue : DEFAULT_MAX_TOKEN_AUTO_CONTINUE,
+    continues: typeof maxTokens.continues === 'number'
+      ? Math.max(0, Math.min(MAX_TOKEN_CONTINUES, Math.round(maxTokens.continues)))
+      : DEFAULT_MAX_TOKEN_CONTINUES,
+  }
   return chain
 }
 

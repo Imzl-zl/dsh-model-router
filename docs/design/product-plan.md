@@ -45,25 +45,32 @@ last_updated: "2026-10-12"
 
 ### 2.2 什么情况算失败（`switchOn`）
 
-哪些失败码触发切换到下一个候选。**默认值直接用 DSH 自己那套**（`EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`、`TIMEOUT`、`TRANSPORT`），不自己发明集合。
+哪些失败码触发切换到下一个候选。**默认全部切换**：
 
-暴露给用户时给中文别名：限流 / 服务端错误 / 超时 / 空回复 / 网络传输。用户不需要懂 `RATE_LIMIT` 这个词。
+- 八个具名码：`EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`、`TIMEOUT`、`TRANSPORT`、`INVALID_REQUEST`、`AUTH`、`QUOTA`；界面给中文别名（空回复 / 限流 / 服务端错误 / 超时 / 网络传输 / 请求被拒绝 / 凭证被拒 / 额度用尽），用户不需要懂 `LlmFailure.code`。
+- `other`：上表之外的一切码（`PI_AI_ERROR`、网关自造的 `HTTP_xxx`、DSH 以后新增的码）。枚举不可能覆盖全部失败，未知不等于不该动。
 
-**明确不切换的**：取消（`ABORTED`）、无适配器（`NO_ADAPTER`）、能力/请求构造错误。取消是用户主动中断；`NO_ADAPTER` 对候选会在调用前被预校验拦掉（`resolveCallConfig` 抛错即跳过），对用户自己的路由则意味着链上无人能服务，切换没有对象；能力/请求构造错误换渠道也未必好，`INVALID_REQUEST` 因此默认不勾。
+取消某一格的含义是"这个码交给 DSH 收尾"——插件既不重试也不切换它。
 
-**默认切换的**（2026-10-16 修订）：`AUTH`（凭证被拒）与 `QUOTA`（额度用尽）。此前把它们归入"配置坏了，切换只会把问题藏起来"而不切换——该理由不成立：熔断本来就会让后续请求跳过死渠道（系统早已决定绕着走，旧设计只是把第一次请求也搭进去），且切换从不是静默的（中文 notice 点名失败渠道与码 + 熔断冷却）。对 agent/工作流，"带提示的成功"严格优于硬失败。依据见[决策笔记](../../.agents/notes/implemented/2026-10-16-switch-on-auth-and-quota.md)。
+**明确不切换的**：取消（`ABORTED`）、无适配器（`NO_ADAPTER`）。取消是用户主动中断；`NO_ADAPTER` 对候选在调用前就被预校验拦掉（`resolveCallConfig` 抛错即跳过），对用户自己的路由意味着链上无人能服务，切换没有对象。
+
+**永远先问内层**：表外的码，以及 `CONTEXT_WINDOW_EXCEEDED` / `IMAGE_OFFLOAD_REQUIRED`（由 DSH 自己的 `compaction-basic` / `compaction-image-offload` 拥有）。压缩历史或卸载图片才是这两类失败的正确修法；内层放弃之后才轮到插件换候选。
+
+`INVALID_REQUEST` 的归属值得单独记一笔：pi-ai 适配器按错误文案归一（`llm-pi-ai/src/stream.ts:34-49`），上游网关的 402「端点不可用」会命中 `invalid_request_error` 而被归成这个码——它看着像请求形状错误，实际是临时故障，所以默认必须切。依据与代价见[决策笔记](../../.agents/notes/implemented/2026-10-22-failover-by-default-and-max-token-continue.md)。
 
 ### 2.3 重试次数与退避
 
 ```yaml
-  firstHopMaxRetries: 0
+  firstHopMaxRetries: 5   # 默认值；每条候选各自 0..99，填多少就真的执行多少次
   candidates:
     - { provider: pi-ai-gpt, model: gpt-5, maxRetries: 2 }
 ```
 
 - 字段是**失败后重试几次**（`0..99`），首发不计入；0 = 首发失败即切下一条。每条候选各自独立，没有整请求总上限——一个 step 的花费上界就是各候选 `maxRetries + 1` 之和。
+- **默认 5，与 DSH 自己的 provider 策略一致**（`llm/llm/src/retry-policy.ts` 的 `DEFAULT_MAX_RETRIES = 5`）。插件接管重试后默认值不能比它小，否则升级会让韧性变差。开箱行为因此是：首发失败 → 同渠道退避重试（最多 5 次）→ 仍失败才换下一条候选，下一条同样先用自己的重试预算。
 - 重试由 DSH 的 `llm-retry` 执行，插件只数次数并在额度用尽时切走；因此实际次数还受该 provider 的 `retryPolicy.maxRetries` 限制，填得比它大也没人执行。设置入口在 Models 页，插件不复制这个配置。
 - 未勾选 `switchOn` 的失败码不归插件切：插件不介入，由 DSH 按自己的策略重试并收尾。
+- **输出被截断（`max-tokens`）不是错误**，走不到 `agent/request-error`：DSH 直接结束本轮并提示用户自己发"继续"。它由链上的 `maxTokens` 管辖——`autoContinue`（默认开）先在同一候选上自动续 `continues` 次（默认 2），续满仍截断就换下一条候选接着写；链上没有下一条时交给 DSH 的截断结束。
 - 退避**不可配置、UI 只读**：同渠道重试之间的退避归 `llm-retry`（500ms 起步、10s 封顶、0.1 jitter），插件不另设一套；跨候选切换是立即的，不插入退避。
 
 ### 2.4 条件路由（images 三态 + 上下文门槛 + 推理档位自动维度）

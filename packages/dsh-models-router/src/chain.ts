@@ -35,9 +35,12 @@ import {
   DEFAULT_CHAIN_ID,
   DEFAULT_FIRST_HOP_MAX_RETRIES,
   DEFAULT_MAX_RETRIES,
+  DEFAULT_MAX_TOKEN_AUTO_CONTINUE,
+  DEFAULT_MAX_TOKEN_CONTINUES,
   DEFAULT_STICKY_TURNS,
   DEFAULT_STRATEGY,
   DEFAULT_SWITCH_ON,
+  POLICY_VERSION,
 } from './defaults.ts'
 
 /** Where the effective chains came from, for a one-time log line. */
@@ -68,7 +71,13 @@ export function emptyChain(): ChainConfig {
     stickyTurns: DEFAULT_STICKY_TURNS,
     strategy: DEFAULT_STRATEGY,
     firstHopMaxRetries: DEFAULT_FIRST_HOP_MAX_RETRIES,
+    maxTokens: defaultMaxTokens(),
   }
+}
+
+/** 截断策略的默认值：续跑开、每候选 2 次；用完换候选。 */
+export function defaultMaxTokens(): ChainConfig['maxTokens'] {
+  return { autoContinue: DEFAULT_MAX_TOKEN_AUTO_CONTINUE, continues: DEFAULT_MAX_TOKEN_CONTINUES }
 }
 
 /**
@@ -121,6 +130,8 @@ export interface LegacyAwareConfig {
   chain?: Partial<ChainConfig> & { firstHopMaxAttempts?: number }
   default?: unknown
   profiles?: unknown
+  /** 策略版本：缺失 = 本次之前写的配置，按"失败默认全切"的一次性迁移处理。 */
+  policyVersion?: unknown
 }
 
 /** The chain-level fields a legacy record may carry, in either vocabulary. */
@@ -130,15 +141,43 @@ interface LegacyChainFields {
   strategy?: Strategy
   firstHopMaxRetries?: number
   firstHopMaxAttempts?: number
+  maxTokens?: Partial<ChainConfig['maxTokens']>
 }
 
-function chainFrom(candidates: LegacyCandidate[], over: LegacyChainFields): ChainConfig {
+/**
+ * 这次读取是否要按"失败默认全切"改写 `switchOn`。
+ *
+ * 旧配置里 `emptyResponse` / `invalidRequest` 是 false——那是当时的默认值，
+ * 不是用户的选择，读不出区别。所以没有 v2 标记的配置一律按新默认（全 true）读，
+ * 用户之后自己取消勾选的码在保存后带着标记落盘，再也不会被覆盖。
+ */
+function policyIsCurrent(raw: LegacyAwareConfig): boolean {
+  return raw.policyVersion === POLICY_VERSION
+}
+
+function switchOnOf(over: Partial<SwitchOn> | undefined, policyCurrent: boolean): SwitchOn {
+  return policyCurrent ? { ...DEFAULT_SWITCH_ON, ...over } : { ...DEFAULT_SWITCH_ON }
+}
+
+function maxTokensOf(over: Partial<ChainConfig['maxTokens']> | undefined): ChainConfig['maxTokens'] {
   return {
-    candidates: candidates.map(normalizeCandidate),
-    switchOn: { ...DEFAULT_SWITCH_ON, ...over.switchOn },
+    autoContinue: typeof over?.autoContinue === 'boolean'
+      ? over.autoContinue
+      : DEFAULT_MAX_TOKEN_AUTO_CONTINUE,
+    continues: typeof over?.continues === 'number'
+      ? Math.max(0, Math.min(9, Math.round(over.continues)))
+      : DEFAULT_MAX_TOKEN_CONTINUES,
+  }
+}
+
+function chainFrom(candidates: LegacyCandidate[], over: LegacyChainFields, policyCurrent: boolean): ChainConfig {
+  return {
+    candidates: candidates.map(candidate => normalizeCandidate(candidate, policyCurrent)),
+    switchOn: switchOnOf(over.switchOn, policyCurrent),
     stickyTurns: typeof over.stickyTurns === 'number' ? over.stickyTurns : DEFAULT_STICKY_TURNS,
     strategy: over.strategy === 'weight' || over.strategy === 'round-robin' ? over.strategy : DEFAULT_STRATEGY,
-    firstHopMaxRetries: firstHopRetriesOf(over),
+    firstHopMaxRetries: firstHopRetriesOf(over, policyCurrent),
+    maxTokens: maxTokensOf(over.maxTokens),
   }
 }
 
@@ -149,16 +188,26 @@ function chainFrom(candidates: LegacyCandidate[], over: LegacyChainFields): Chai
  * before 2026-10-20 has `firstHopMaxAttempts` (calls); the schema then stamps
  * the new `firstHopMaxRetries: 0` default beside it.
  */
-function firstHopRetriesOf(over: { firstHopMaxRetries?: number; firstHopMaxAttempts?: number }): number {
+function firstHopRetriesOf(
+  over: { firstHopMaxRetries?: number; firstHopMaxAttempts?: number },
+  policyCurrent: boolean,
+): number {
   if (typeof over.firstHopMaxAttempts === 'number') return Math.max(0, over.firstHopMaxAttempts - 1)
-  return typeof over.firstHopMaxRetries === 'number' ? over.firstHopMaxRetries : DEFAULT_FIRST_HOP_MAX_RETRIES
+  if (typeof over.firstHopMaxRetries !== 'number') return DEFAULT_FIRST_HOP_MAX_RETRIES
+  // 旧默认是 0（一失败就换），它是当时的默认值而不是用户的选择：没有 v2 标记的配置
+  // 里出现的 0 与"用户刻意关掉重试"读不出区别，按新默认改写一次。保存后带标记落盘。
+  if (!policyCurrent && over.firstHopMaxRetries === 0) return DEFAULT_FIRST_HOP_MAX_RETRIES
+  return over.firstHopMaxRetries
 }
 
 /** One candidate in the config's vocabulary: retries, not total calls. */
-function normalizeCandidate(candidate: LegacyCandidate): Candidate {
+function normalizeCandidate(candidate: LegacyCandidate, policyCurrent: boolean): Candidate {
   const maxRetries = typeof candidate.maxAttempts === 'number'
     ? Math.max(0, candidate.maxAttempts - 1)
-    : typeof candidate.maxRetries === 'number' ? candidate.maxRetries : DEFAULT_MAX_RETRIES
+    : typeof candidate.maxRetries === 'number'
+      // 同上：旧默认 0 一次性改写成新默认。
+      ? (policyCurrent || candidate.maxRetries !== 0 ? candidate.maxRetries : DEFAULT_MAX_RETRIES)
+      : DEFAULT_MAX_RETRIES
   return {
     provider: candidate.provider,
     model: candidate.model,
@@ -179,10 +228,11 @@ function normalizeCandidate(candidate: LegacyCandidate): Candidate {
  * Only a config with no `chain` at all gets the legacy look.
  */
 export function effectiveChain(raw: LegacyAwareConfig): EffectiveChain {
+  const policyCurrent = policyIsCurrent(raw)
   const chain = raw.chain
   if (chain !== undefined) {
     return {
-      chain: chainFrom(chain.candidates ?? [], chain),
+      chain: chainFrom(chain.candidates ?? [], chain, policyCurrent),
       source: 'chain',
       ignoredProfiles: 0,
     }
@@ -207,7 +257,7 @@ export function effectiveChain(raw: LegacyAwareConfig): EffectiveChain {
       chain: chainFrom(fallbacks, {
         ...adopted,
         ...(pinned?.maxAttempts === undefined ? {} : { firstHopMaxAttempts: pinned.maxAttempts }),
-      }),
+      }, policyCurrent),
       source: 'profile',
       ignoredProfiles: Math.max(0, profiles.length - 1),
     }
@@ -216,7 +266,7 @@ export function effectiveChain(raw: LegacyAwareConfig): EffectiveChain {
   const legacyDefault = isLegacyDefault(raw.default) ? raw.default : undefined
   if (legacyDefault !== undefined && legacyDefault.candidates !== undefined && legacyDefault.candidates.length > 0) {
     return {
-      chain: chainFrom(legacyDefault.candidates, legacyDefault),
+      chain: chainFrom(legacyDefault.candidates, legacyDefault, policyCurrent),
       source: 'default',
       ignoredProfiles: 0,
     }
@@ -245,11 +295,12 @@ export function effectiveChain(raw: LegacyAwareConfig): EffectiveChain {
  * .agents/notes/implemented/2026-10-21-raw-config-shape-and-domain-lifecycle.md
  */
 export function effectiveChains(raw: LegacyAwareConfig): EffectiveChains {
+  const policyCurrent = policyIsCurrent(raw)
   if (raw.chains !== undefined) {
     const stored = Array.isArray(raw.chains) ? raw.chains : []
     return {
       chains: stored.length > 0
-        ? stored.map((value, index) => namedChainFrom(value, index))
+        ? stored.map((value, index) => namedChainFrom(value, index, policyCurrent))
         // 一条链都没有与"一条空链"行为完全相同（插件不接管），但只有后者是可编辑的对象。
         : [{ id: defaultChainIdOf(raw), name: '', ...emptyChain() }],
       defaultChainId: defaultChainIdOf(raw),
@@ -259,7 +310,7 @@ export function effectiveChains(raw: LegacyAwareConfig): EffectiveChains {
   }
   if (raw.chain !== undefined) {
     return {
-      chains: [{ id: DEFAULT_CHAIN_ID, name: '', ...chainFrom(raw.chain.candidates ?? [], raw.chain) }],
+      chains: [{ id: DEFAULT_CHAIN_ID, name: '', ...chainFrom(raw.chain.candidates ?? [], raw.chain, policyCurrent) }],
       defaultChainId: DEFAULT_CHAIN_ID,
       source: 'chain',
       ignoredProfiles: 0,
@@ -316,12 +367,12 @@ export function chainLabel(chain: { id: string; name: string }): string {
 }
 
 /** One stored chain, read through the same normalizer as every other shape. */
-function namedChainFrom(value: unknown, index: number): NamedChain {
+function namedChainFrom(value: unknown, index: number, policyCurrent: boolean): NamedChain {
   const record = isRecord(value) ? value : {}
   const candidates = Array.isArray(record.candidates) ? record.candidates.filter(isLegacyCandidate) : []
   const id = typeof record.id === 'string' && record.id !== '' ? record.id : `${DEFAULT_CHAIN_ID}-${index + 1}`
   const name = typeof record.name === 'string' ? record.name : ''
-  return { id, name, ...chainFrom(candidates, record) }
+  return { id, name, ...chainFrom(candidates, record, policyCurrent) }
 }
 
 function defaultChainIdOf(raw: LegacyAwareConfig): string {

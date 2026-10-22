@@ -210,6 +210,8 @@ export function RouterPage(props) {
                   onReorder: props.onReorder,
                   onRemove: props.onRemove,
                   onStickyTurns: props.onStickyTurns,
+                  onMaxTokenContinue: props.onMaxTokenContinue,
+                  onMaxTokenContinues: props.onMaxTokenContinues,
                   onToggleSwitchOn: props.onToggleSwitchOn,
                   onNeeds: props.onNeeds,
                   onOpenAddCandidate: props.onOpenAddCandidate,

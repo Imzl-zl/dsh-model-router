@@ -16,7 +16,7 @@ import { fill, routeStatus } from './format.ts'
 import { routeNames } from './naming.ts'
 import { Icon, ICON_BOLT, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_TRASH, ICON_UP } from './icons.ts'
 import { routeKeyOf, routeParts } from '../routes.ts'
-import { DEFAULT_FIRST_HOP_MAX_RETRIES, MAX_RETRIES, STRATEGIES, SWITCH_ON_CODES } from '../defaults.ts'
+import { DEFAULT_FIRST_HOP_MAX_RETRIES, MAX_RETRIES, MAX_TOKEN_CONTINUES, OTHER_SWITCH_KEY, STRATEGIES, SWITCH_ON_CODES } from '../defaults.ts'
 
 /** The status text one route's health tag carries. */
 function statusLabel(t, status) {
@@ -369,15 +369,26 @@ export function CandidatesSection(props) {
           })))
 }
 
-/** Which failures move the chain forward: one checkbox per code. */
+/**
+ * Which failures move the chain forward: one checkbox per known code, plus one
+ * catch-all row for every code the table does not name.
+ *
+ * The catch-all is the structural fix for "枚举覆盖不了"：a failure code the
+ * table does not know (`PI_AI_ERROR`, an HTTP status a relay invented, a code a
+ * future DSH release adds) is not a reason to do nothing. Unchecking a row means
+ * "this failure is DSH's to finish" — the plugin then neither retries nor
+ * switches it.
+ */
 export function SwitchOnSection(props) {
   var t = props.t
+  var total = SWITCH_ON_CODES.length + 1
   var checked = SWITCH_ON_CODES.filter(function (entry) { return Boolean(props.value[entry.key]) }).length
+    + (props.value[OTHER_SWITCH_KEY] ? 1 : 0)
   return h('section', { className: 'dsh-router-section' },
     h('div', { className: 'dsh-router-section-head' },
       h('h2', { className: 'dsh-router-section-title' }, t('switchOnTitle')),
       h('span', { className: 'dsh-router-section-hint' },
-        fill(t('triggerSummaryLine'), { n: checked, total: SWITCH_ON_CODES.length }))),
+        fill(t('triggerSummaryLine'), { n: checked, total: total }))),
     h('div', { className: 'dsh-router-check-grid' },
       SWITCH_ON_CODES.map(function (entry) {
         return h(Checkbox, {
@@ -389,6 +400,15 @@ export function SwitchOnSection(props) {
           title: t(entry.labelKey + 'Desc'),
           onChange: function () { props.onToggle(entry.key) },
         })
+      }),
+      h(Checkbox, {
+        key: OTHER_SWITCH_KEY,
+        className: 'dsh-router-check',
+        checked: Boolean(props.value[OTHER_SWITCH_KEY]),
+        disabled: props.disabled,
+        label: t('otherName'),
+        title: t('otherDesc'),
+        onChange: function () { props.onToggle(OTHER_SWITCH_KEY) },
       })))
 }
 
@@ -465,7 +485,26 @@ export function RetrySection(props) {
             return { value: String(turns), label: turns === 0 ? t('stickyTurnsOff') : String(turns) }
           }),
           onChange: function (next) { props.onStickyTurns(Number(next)) },
-        }))),
+        })),
+      // `max-tokens` 不是错误，DSH 会直接结束本轮并在界面上提示用户自己发"继续"。
+      // 这一格就是"别停在这儿"：同一条候选先自动续几次，续满了换下一条候选接着写。
+      h(FieldCol, { label: t('maxTokenContinueLabel'), hint: t('maxTokenContinueHint') },
+        h('span', { className: 'dsh-router-inline-field' },
+          h(Checkbox, {
+            className: 'dsh-router-check',
+            checked: Boolean(props.maxTokens && props.maxTokens.autoContinue),
+            disabled: props.disabled,
+            label: t('maxTokenContinueOn'),
+            onChange: function () { props.onMaxTokenContinue(!(props.maxTokens && props.maxTokens.autoContinue)) },
+          }),
+          h(Stepper, {
+            t: t,
+            value: Math.max(0, Math.min(MAX_TOKEN_CONTINUES, Number(props.maxTokens && props.maxTokens.continues) || 0)),
+            min: 0,
+            max: MAX_TOKEN_CONTINUES,
+            disabled: props.disabled || !(props.maxTokens && props.maxTokens.autoContinue),
+            onChange: function (next) { props.onMaxTokenContinues(next) },
+          })))),
     h('p', { className: 'dsh-router-formula' }, formula),
     h('p', { className: 'dsh-router-note' }, t('retryHierarchyNote')))
 }

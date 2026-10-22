@@ -172,6 +172,8 @@ function registerUi(ctx: Context, t: (key: string) => string, initialNotesOpen: 
     onReorder: function (fromIndex, toIndex) { controller.reorderCandidates(fromIndex, toIndex) },
     onRemove: function (index) { controller.removeCandidate(index) },
     onStickyTurns: function (value) { controller.setStickyTurns(value) },
+    onMaxTokenContinue: function (value) { controller.setMaxTokensContinue(value) },
+    onMaxTokenContinues: function (value) { controller.setMaxTokenContinues(value) },
     onToggleSwitchOn: function (key) { controller.toggleSwitchOn(key) },
     onStrategy: function (value) { controller.setStrategy(value) },
     onFirstHopMaxRetries: function (value) { controller.setFirstHopMaxRetries(value) },

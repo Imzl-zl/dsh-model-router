@@ -108,7 +108,10 @@ class StubAdapter extends LlmAdapter {
     yield { type: 'text-delta', index: 0, text }
     yield { type: 'block-end', index: 0, block: { type: 'text', text } }
     yield { type: 'usage', usage: { inputTokens: 4, outputTokens: 2 } }
-    yield { type: 'finish', reason: { kind: 'stop' } }
+    // `truncate`: a reply cut off by the output-token ceiling. DSH ends the turn
+    // there (agent-loop/src/agent.ts:547) and shows the "send 继续" notice — the
+    // one case the router can only act on through `agent/turn-stopping`.
+    yield { type: 'finish', reason: { kind: outcome === 'truncate' ? 'max-tokens' : 'stop' } }
   }
 }
 
