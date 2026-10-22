@@ -178,6 +178,8 @@ function registerUi(ctx: Context, t: (key: string) => string, initialNotesOpen: 
     onWeight: function (index, value) { controller.setWeight(index, value) },
     onLoadCatalog: function () { controller.loadCatalog() },
     onOpenAddCandidate: function () { controller.openModal({ kind: 'add-candidate' }) },
+    onOpenUpdateCheck: function () { controller.openUpdateCheck() },
+    onCloseUpdateCheck: function () { controller.closeUpdateCheck() },
     onCloseModal: function () { controller.closeModal() },
     onAddCandidates: function (entries) { controller.addCandidates(entries) },
     onOpenDrawer: function () { controller.openDrawer() },

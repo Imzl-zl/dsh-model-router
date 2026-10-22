@@ -15,7 +15,7 @@ import { defaultChainOf, effectiveChains } from '../chain.ts'
 import { pruneTimeline } from '../timeline.ts'
 import { configuredRouteList, routeKeyOf, routeParts } from '../routes.ts'
 import { DEFAULT_FIRST_HOP_MAX_RETRIES, DEFAULT_MAX_RETRIES, MAX_RETRIES } from '../defaults.ts'
-import { RELEASE_VERSION } from './release.generated.ts'
+import { RELEASE_VERSION } from '../release.generated.ts'
 
 /** Where the browser remembers the last release whose notes it has shown. */
 var SEEN_VERSION_KEY = 'dsh-models-router:seen-version'
@@ -121,6 +121,12 @@ export function createController(ctx, scope, t, initialNotesOpen = notesForCurre
     // 这一版更新日志是否该弹：只在浏览器记录的版本与当前产物不同（或从没记过）
     // 时为真。关掉即记账，所以同版本不会每次打开都弹。
     notesOpen: initialNotesOpen,
+    // 「检查更新」弹窗：它问宿主"有没有更新的版本"，并把新版本的说明读回来。
+    // 三种状态分开存：检查中、查到的结果、以及连宿主都没答上来的那一层失败。
+    updateOpen: false,
+    updateChecking: false,
+    updateResult: null,
+    updateError: null,
   }
   var saving = false
   var failed = false
@@ -174,6 +180,10 @@ export function createController(ctx, scope, t, initialNotesOpen = notesForCurre
         probeSummary: ui.probeSummary,
         passiveError: ui.passiveError,
         notesOpen: ui.notesOpen,
+        updateOpen: ui.updateOpen,
+        updateChecking: ui.updateChecking,
+        updateResult: ui.updateResult,
+        updateError: ui.updateError,
       },
     }
   }
@@ -860,6 +870,46 @@ export function createController(ctx, scope, t, initialNotesOpen = notesForCurre
     /** Re-open this release's notes from the page head. */
     openNotes: function () {
       ui.notesOpen = true
+      publish()
+    },
+    /**
+     * Open the update check and ask the Host whether a newer version is out.
+     *
+     * The Host does the two requests (the registry for the newest published
+     * version, the release for that version's notes): the browser half opens no
+     * connection to a third party. A refused call is shown as such — the dialog
+     * never falls back to "you are up to date" for a check that did not run.
+     */
+    openUpdateCheck: function () {
+      ui.updateOpen = true
+      ui.updateChecking = true
+      ui.updateResult = null
+      ui.updateError = null
+      publish()
+      var host = ctx.remote && ctx.remote.routerHealth
+      if (host === undefined || typeof host.checkUpdate !== 'function') {
+        ui.updateError = t('updateHostUnavailable')
+        ui.updateChecking = false
+        publish()
+        return
+      }
+      host.checkUpdate().then(function (result) {
+        // Remote 调用回来的是 `{ ok, value }` 信封，不是裸值。
+        if (!result || result.ok !== true) {
+          throw new Error(result?.error?.message ?? t('updateHostUnavailable'))
+        }
+        ui.updateResult = result.value
+        ui.updateChecking = false
+        publish()
+      }).catch(function (error) {
+        ui.updateError = describeError(error)
+        ui.updateChecking = false
+        publish()
+      })
+    },
+    /** Close the update dialog; the check itself is a one-shot read. */
+    closeUpdateCheck: function () {
+      ui.updateOpen = false
       publish()
     },
     /** Dismiss the notes and remember this release, so they do not nag on reload. */

@@ -27,8 +27,8 @@ import { Button, SegmentedTabs, Switch, Tag } from '@deepseek-ai/dsh-client-ui-p
 import { fill, routeStatus } from './format.ts'
 import { configuredRouteList, routeKeyOf } from '../routes.ts'
 import { ChainView } from './chain.ts'
-import { AddCandidateModal, HealthSettingsModal, WhatsNewModal } from './modals.ts'
-import { RELEASE_NOTES, RELEASE_VERSION } from './release.generated.ts'
+import { AddCandidateModal, HealthSettingsModal, UpdateCheckModal, WhatsNewModal } from './modals.ts'
+import { RELEASE_NOTES, RELEASE_VERSION } from '../release.generated.ts'
 import { FailoverHistoryModal } from './pipeline.ts'
 import { GlobalHealthWorkspace } from './workspace.ts'
 import { Icon, ICON_SAVE, ICON_UNDO } from './icons.ts'
@@ -122,12 +122,14 @@ export function RouterPage(props) {
             state.dirty ? h(Tag, { tone: 'warning' }, t('unsavedChangesBadge')) : null,
             state.failed ? h(Tag, { tone: 'danger' }, t('formSaveFailed')) : null)),
         h('div', { className: 'dsh-router-head-actions' },
+          // 这个按钮查的是"有没有新版本"，顺带把更新日志摊开——只看日志的那个
+          // 按钮是鸡肋：版本号和它改了什么本来就该在一起看。
           h(Button, {
             variant: 'ghost',
             size: 'sm',
-            title: fill(t('whatsNewButtonTitle'), { version: RELEASE_VERSION }),
-            onClick: props.onOpenNotes,
-          }, t('whatsNewButton')),
+            title: fill(t('updateCheckButtonTitle'), { version: RELEASE_VERSION }),
+            onClick: props.onOpenUpdateCheck,
+          }, t('updateCheckButton')),
           h('span', { className: 'dsh-router-head-switch-label' }, t('takeoverSwitchLabel')),
           h(Switch, {
             checked: draft.enabled,
@@ -248,6 +250,17 @@ export function RouterPage(props) {
       version: RELEASE_VERSION,
       notes: RELEASE_NOTES,
       onClose: props.onCloseNotes,
+    }) : null,
+    state.ui.updateOpen ? h(UpdateCheckModal, {
+      key: 'update',
+      t: t,
+      result: state.ui.updateResult,
+      checking: state.ui.updateChecking,
+      error: state.ui.updateError,
+      currentVersion: RELEASE_VERSION,
+      currentNotes: RELEASE_NOTES,
+      onClose: props.onCloseUpdateCheck,
+      onRecheck: props.onOpenUpdateCheck,
     }) : null,
     footer)
 }

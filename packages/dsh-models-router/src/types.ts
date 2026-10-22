@@ -109,3 +109,39 @@ export interface SessionBindingView extends SessionBinding {
 export interface SessionBindingRequest extends SessionBinding {
   sessionId: string
 }
+
+// ---- update check ----
+
+/**
+ * What one "is there a newer release?" check found.
+ *
+ * The three failure shapes are kept apart on purpose, because they mean
+ * different things to the person reading the dialog:
+ *
+ * - `error` — the registry could not be reached, so **the version question is
+ *   unknown**. It is never "up to date": an unanswered check is not an answer.
+ * - `notesError` — the version IS known (a newer one exists), but its release
+ *   notes could not be read. The version answer still stands.
+ * - neither — the check ran; `newer` says whether the newest published version
+ *   is newer than the one this artifact carries.
+ *
+ * `notes` carries the newest version's release notes. The running version's own
+ * notes are not here: they are embedded in the artifact, so the dialog can show
+ * them without a network round trip.
+ */
+export interface UpdateCheck {
+  /** The version this artifact carries. */
+  current: string
+  /** The newest published version, when the registry answered. */
+  latest: string | null
+  /** Whether `latest` is newer than `current`. */
+  newer: boolean
+  /** When the newest version was published (ISO 8601), when the release says so. */
+  publishedAt: string | null
+  /** The newest version's release notes, when they could be read. */
+  notes: string | null
+  /** Why the check could not run, when it could not. */
+  error: string | null
+  /** Why the newest version's notes could not be read, when the version could. */
+  notesError: string | null
+}

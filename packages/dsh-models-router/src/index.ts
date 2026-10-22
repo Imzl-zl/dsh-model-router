@@ -59,6 +59,8 @@ import { SessionBindings } from './bindings.ts'
 import { checkConnectivity, type ConnectivityLlm, type ConnectivitySettings } from './connectivity.ts'
 import { probePromptFor, probeRoute } from './probe.ts'
 import { chainForSession, chainLabel, effectiveChains, type ChainSource } from './chain.ts'
+import { checkForUpdate } from './update.ts'
+import { RELEASE_VERSION } from './release.generated.ts'
 import type {
   ConnectivityRequest,
   ConnectivityVerdict,
@@ -67,6 +69,7 @@ import type {
   ProbeRoute,
   SessionBindingRequest,
   SessionBindingView,
+  UpdateCheck,
 } from './types.ts'
 
 /**
@@ -553,6 +556,27 @@ export default class ModelRouter extends TypertRemoteService {
     // signal 是 Typert 的取消通道（描述符声明末参即注入，与 probeAll 同一机制）：
     // 浏览器卸载时在飞的发现调用随它中止，不继续打端点。
     return await Promise.all(wanted.map(route => checkConnectivity(this.ctx.llm, settings, route, signal)))
+  }
+
+  /**
+   * Ask whether a newer release of this plugin is published, and read that
+   * release's notes.
+   *
+   * It runs on the Host for the same reason the connectivity check does: the
+   * browser half must not open a connection to a third party on its own, and
+   * the two answers it needs (the newest published version, that version's
+   * release notes) are exactly the Host's business.
+   *
+   * The running version's own notes are NOT fetched: they are embedded in this
+   * artifact, so the dialog can show them offline and can never disagree with
+   * what is installed.
+   *
+   * Note: 为何版本以 registry 为准、为何失败分成"查不到"与"读到版本但读不到说明" ——
+   * 见 .agents/notes/implemented/2026-10-22-check-update-instead-of-a-changelog-button.md
+   */
+  @Remote
+  async checkUpdate(signal?: AbortSignal): Promise<UpdateCheck> {
+    return await checkForUpdate(RELEASE_VERSION, { signal })
   }
 
   /**

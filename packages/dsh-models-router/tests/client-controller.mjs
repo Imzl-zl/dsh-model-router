@@ -26,7 +26,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { RELEASE_NOTES, RELEASE_VERSION } from '../src/client/release.generated.ts'
+import { RELEASE_NOTES, RELEASE_VERSION } from '../src/release.generated.ts'
 import { changelogSection } from '../../../scripts/changelog-section.mjs'
 
 const CLIENT_PATH = process.env.CLIENT_PATH ?? fileURLToPath(new URL('../lib/client.js', import.meta.url))
@@ -385,6 +385,20 @@ async function mount({ value, writable = true, mutate, remote, firstFrame, seenV
           },
         }),
         probeReport: () => Promise.resolve({ ok: true, value: { at: 0, routes: [] } }),
+        // 「检查更新」：宿主替浏览器去问 registry 与 release。默认答"已是最新"，
+        // 需要别的答案的用例自己覆盖这一个方法。
+        checkUpdate: () => Promise.resolve({
+          ok: true,
+          value: {
+            current: RELEASE_VERSION,
+            latest: RELEASE_VERSION,
+            newer: false,
+            publishedAt: null,
+            notes: null,
+            error: null,
+            notesError: null,
+          },
+        }),
         // 会话绑定的两个 Remote：这个桩就是宿主的内存版——写进去、读出来，
         // 与真宿主同一份语义（没有绑定读成"跟随默认链"）。
         sessionBinding: (sessionId) => Promise.resolve({
@@ -953,6 +967,112 @@ test('the save command is registered with DSH\'s shortcuts service and gated by 
   assert.equal(h.mutateCalls[0].ops.some((op) => op.path[0] === 'chain'), true)
 })
 
+// ---- 检查更新弹窗 ----
+// 右上角那个按钮从"更新日志"变成"检查更新"：版本与它改了什么本来就该一起看。
+// 三种结果都要有明确的说法：已是最新 / 有新版本 / 查不到。
+
+/** The dialog's tree, opened through the page head's button. */
+const renderUpdateDialog = async (h, RouterPage) => {
+  h.actions.onOpenUpdateCheck()
+  await flush()
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  await flush()
+  return tree
+}
+
+test('the update check reports the running version and that it is the latest one', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({ value: config() })
+  const tree = await renderUpdateDialog(h, RouterPage)
+  const text = collectText(tree).join(' ')
+  assert.ok(text.includes('updateCurrentVersion'), 'the running version is named')
+  assert.ok(text.includes('updateLatestVersion'), 'the newest published version is named')
+  assert.ok(text.includes('updateUpToDate'), 'the answer says "up to date"')
+  // 已是最新时给的是当前版本自己的说明（内嵌在产物里，不联网）。
+  assert.ok(text.includes('updateNotesTitle'), 'the notes section is there')
+  assert.ok(!text.includes('updateCheckFailed'), 'a successful check is not an error')
+})
+
+test('a newer version is announced with its notes and a way to reach the release', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({
+    value: config(),
+    remote: {
+      routerHealth: {
+        checkUpdate: () => Promise.resolve({
+          ok: true,
+          value: {
+            current: '0.3.3',
+            latest: '0.4.0',
+            newer: true,
+            publishedAt: '2026-10-25T08:00:00Z',
+            notes: '新的说明正文',
+            error: null,
+            notesError: null,
+          },
+        }),
+      },
+    },
+  })
+  const tree = await renderUpdateDialog(h, RouterPage)
+  const text = collectText(tree).join(' ')
+  assert.ok(text.includes('updateNewVersion'), 'the new version is announced')
+  // 说明正文走 MarkdownText 原语，harness 把它换成了宿主元素：断言它的 text prop。
+  const notes = find(tree, (node) => node.type === 'MarkdownText')
+  assert.ok(notes, 'the notes are rendered')
+  assert.equal(notes.props.text, '新的说明正文', 'the NEW version\'s notes are shown, not the running one')
+  assert.ok(!text.includes('updateUpToDate'), 'a newer version is not "up to date"')
+  const link = find(tree, (node) => node.props?.className === 'dsh-router-update-link')
+  assert.ok(link, 'the release page is reachable from the dialog')
+  assert.equal(link.props.href, 'https://github.com/Imzl-zl/dsh-models-router/releases/tag/v0.4.0')
+})
+
+test('a check that could not run says so, and never claims the artifact is up to date', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({
+    value: config(),
+    remote: {
+      routerHealth: {
+        checkUpdate: () => Promise.resolve({
+          ok: true,
+          value: {
+            current: '0.3.3',
+            latest: null,
+            newer: false,
+            publishedAt: null,
+            notes: null,
+            error: 'registry 读不到',
+            notesError: null,
+          },
+        }),
+      },
+    },
+  })
+  const tree = await renderUpdateDialog(h, RouterPage)
+  const text = collectText(tree).join(' ')
+  assert.ok(text.includes('updateCheckFailed'), 'the failure is on screen')
+  // 失败用 alert 角色上屏：它是这一条对话框里唯一的结论，不能只是灰色小字。
+  assert.ok(find(tree, (node) => node.props?.role === 'alert'), 'the failure is an alert')
+  assert.equal(text.includes('updateUpToDate'), false,
+    'a check that did not run must not be reported as "up to date"')
+})
+
+test('the page head offers the update check, not a changelog viewer', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({ value: config() })
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  const button = find(tree, (node) => node.props?.onClick === h.actions.onOpenUpdateCheck)
+  assert.ok(button, 'the head button opens the update check')
+  const text = collectText(tree).join(' ')
+  assert.ok(text.includes('updateCheckButton'), 'and it says so')
+  assert.equal(text.includes('whatsNewButton'), false,
+    'the old "what\'s new" button is gone from the head')
+})
+
 // ---- component-level mounts (the loading frame and the surface gate) ----
 
 /** The dictionary function the locale stub hands the components. */
@@ -1293,7 +1413,7 @@ test('every plugin dialog is capped to the viewport and scrolls inside itself', 
   assert.ok(components.includes("const MODAL_CLASS = 'dsh-router-modal'"),
     'the shared dialog class must be named once')
   const handed = components.match(/className: MODAL_CLASS/g) ?? []
-  assert.equal(handed.length, 3, `every dialog must hand the class to Modal, found ${handed.length}`)
+  assert.equal(handed.length, 4, `every dialog must hand the class to Modal, found ${handed.length}`)
   assert.ok(css.includes('.dsh-router-modal {'),
     'ROUTER_CSS must carry the dialog rule')
   // One shared rule block bounds both: assert it once, on the block itself.
@@ -1676,7 +1796,7 @@ test('the modal height chain derives from the dialog root, and no DSH class name
     'DSH\'s scroll region (the content wrapper\'s last child) must be reached structurally, with min-height:0 + overflow')
   const modals = sourceOf('modals.ts')
   const contentHooks = modals.match(/contentClassName: MODAL_CONTENT/g) ?? []
-  assert.equal(contentHooks.length, 3,
+  assert.equal(contentHooks.length, 4,
     `every dialog must pass the content hook so the chain has its first link, found ${contentHooks.length}`)
   // 新增覆盖行要滚进视野：用 scrollIntoView 找最近的可滚动祖先，而不是猜 DSH 类名
   // 或给某个内部 div 挂 id 自己滚（那会变成第二个滚动容器）。
@@ -1703,6 +1823,27 @@ test('the modal height chain derives from the dialog root, and no DSH class name
   assert.ok(!styles.includes('dsh-router-form-body'), 'the SettingsForm frame hack is gone')
   assert.ok(!styles.includes('master-sidebar') && !styles.includes('masterSidebar'),
     'the internal sidebar styles are gone')
+})
+
+// 注入的每一段 CSS 都必须自己站得住：一个没闭合的注释会把**后面所有**规则吞成
+// 注释，浏览器不报错、页面只是"少了几条样式"——2026-10-22 实测踩到：一条
+// `/* …` 少了 `*/`，后面 150 行规则一起消失（对话框的版本行挤成一行）。
+test('the injected stylesheet is balanced, so one bad rule cannot swallow the rest', () => {
+  const styles = sourceOf('styles.ts')
+  // 只取 ROUTER_CSS 数组里的字符串字面量：注释与文档不参与 CSS 解析。
+  const array = styles.slice(styles.indexOf('var ROUTER_CSS'), styles.indexOf('function ensureStyles'))
+  const fragments = [...array.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map(match => match[1].replace(/\\'/g, "'"))
+  assert.ok(fragments.length > 50, 'the style array is found')
+  // 数组元素是拼成一张样式表的（注释常常跨元素），所以判据落在**整张表**上：
+  // 注释必须成对闭合，花括号必须配平。少一个 `*/` 就会把后面所有规则吞成注释，
+  // 浏览器不报错，只是"少了几条样式"——2026-10-22 实测踩到过。
+  const sheet = fragments.join('\n')
+  const opens = (sheet.match(/\/\*/g) ?? []).length
+  const closes = (sheet.match(/\*\//g) ?? []).length
+  assert.equal(opens, closes, `every CSS comment must be closed (${String(opens)} open, ${String(closes)} closed)`)
+  const code = sheet.replace(/\/\*[\s\S]*?\*\//g, '')
+  const braces = (code.match(/\{/g) ?? []).length - (code.match(/\}/g) ?? []).length
+  assert.equal(braces, 0, `every CSS rule must close its block (off by ${String(braces)})`)
 })
 
 // 语义色只有一个来源：`healthToneStyle` 读 `--dsh-router-tone-*` 变量；状态文字
@@ -2170,16 +2311,16 @@ test('a release change opens the embedded notes once, and dismissing remembers i
   assert.equal(next.state().ui.notesOpen, false, 'the acknowledged release does not nag on the next load')
 })
 
-test('the page always offers a release-notes button, even after the dialog was acknowledged', async () => {
+test('the page always offers the update check, even after the notes dialog was acknowledged', async () => {
   const { RouterPage } = loadClient()
   const h = await mount({ value: chipConfig() })
   assert.equal(h.state().ui.notesOpen, false)
   h.actions.onOpenNotes()
-  assert.equal(h.state().ui.notesOpen, true, 'the button reopens the notes on demand')
+  assert.equal(h.state().ui.notesOpen, true, 'the post-update notes still open on demand')
   const tree = render(createEl(RouterPage, propsFor(h)))
   const text = collectText(tree).join('\n')
-  assert.ok(text.includes('whatsNewButton'), 'the head keeps a permanent entry point')
-  assert.ok(text.includes('whatsNewTitle'), 'the dialog names the running release')
+  assert.ok(text.includes('updateCheckButton'), 'the head keeps a permanent entry point')
+  assert.ok(text.includes('whatsNewTitle'), 'the post-update dialog names the running release')
 })
 
 await Promise.all(pending)

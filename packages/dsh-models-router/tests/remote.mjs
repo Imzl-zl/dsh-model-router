@@ -194,6 +194,7 @@ test('the generated artifact passes the loader’s own registration validator', 
   const ids = artifact.TYPERT.invocations.map(invocation => invocation.id)
   assert.deepEqual(ids, [
     `${PACKAGE_NAME}#routerHealth/checkConnectivity`,
+    `${PACKAGE_NAME}#routerHealth/checkUpdate`,
     `${PACKAGE_NAME}#routerHealth/probeAll`,
     `${PACKAGE_NAME}#routerHealth/probeReport`,
     `${PACKAGE_NAME}#routerHealth/sessionBinding`,

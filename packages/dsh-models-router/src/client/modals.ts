@@ -525,6 +525,107 @@ export function AddCandidateModal(props) {
 }
 
 /**
+ * The update check: is there a newer release, and what did it change?
+ *
+ * One dialog does both, because the two answers belong together: a version
+ * number without its notes says nothing about whether to update, and notes
+ * without a version number describe a release the reader may already have.
+ *
+ * The running version's notes are embedded in the artifact, so the dialog can
+ * show them offline and can never disagree with what is installed. A newer
+ * version's notes come from its GitHub release — the same body the release
+ * workflow writes from this repository's CHANGELOG.
+ *
+ * What the dialog does NOT do is turn an unanswered check into an answer: a
+ * registry that could not be reached says so, and the current version's notes
+ * are shown beside that failure rather than instead of it.
+ */
+export function UpdateCheckModal(props) {
+  var t = props.t
+  var result = props.result
+  var current = result !== null && result !== undefined ? result.current : props.currentVersion
+  var newer = result !== null && result !== undefined && result.newer === true
+  var latest = result !== null && result !== undefined ? result.latest : null
+  var notesVersion = newer && latest !== null ? latest : current
+  var notes = newer && result.notes !== null && result.notes !== undefined
+    ? result.notes
+    : props.currentNotes
+  var publishedAt = newer && result.publishedAt !== null && result.publishedAt !== undefined
+    ? result.publishedAt
+    : null
+
+  // 两种失败都要上屏：宿主没答上来（props.error，传输层）与宿主答了但"查不到"
+  // （result.error，registry 读不到）。两者都不是"已是最新"。
+  var checkError = props.error !== null && props.error !== undefined
+    ? props.error
+    : (result !== null && result !== undefined ? result.error : null)
+
+  var status
+  if (checkError !== null && checkError !== undefined) {
+    status = h('p', { className: 'dsh-router-notice dsh-router-notice-error', role: 'alert' },
+      fill(t('updateCheckFailed'), { reason: checkError }))
+  } else if (newer) {
+    status = h('p', { className: 'dsh-router-update-status' },
+      fill(t('updateNewVersion'), { version: latest, date: publishedAt === null ? '' : formatDate(publishedAt) }))
+  } else if (latest !== null) {
+    status = h('p', { className: 'dsh-router-update-status' }, t('updateUpToDate'))
+  } else {
+    status = h('p', { className: 'dsh-router-muted' }, props.checking ? t('updateChecking') : '')
+  }
+
+  var notesUnavailable = result !== null && result !== undefined
+    && result.notesError !== null && result.notesError !== undefined
+
+  return h(Modal, {
+    open: true,
+    className: MODAL_CLASS,
+    contentClassName: MODAL_CONTENT,
+    title: t('updateCheckTitle'),
+    closeLabel: t('close'),
+    onClose: props.onClose,
+    footer: h('div', { className: 'dsh-router-footer-actions' },
+      h(Button, { variant: 'outline', size: 'sm', disabled: props.checking, onClick: props.onRecheck }, t('updateRecheck')),
+      h(Button, { variant: 'primary', onClick: props.onClose }, t('updateClose'))),
+  },
+    h('div', { className: 'dsh-router-modal-body' },
+      h('div', { className: 'dsh-router-update-versions' },
+        h('span', { className: 'dsh-router-muted' }, t('updateCurrentVersion') + ' ' + current),
+        h('span', { className: 'dsh-router-muted' }, t('updateLatestVersion') + ' ' + (latest ?? '—'))),
+      status,
+      newer
+        ? h('div', { className: 'dsh-router-update-actions' },
+            h('a', {
+              className: 'dsh-router-update-link',
+              href: 'https://github.com/Imzl-zl/dsh-models-router/releases/tag/v' + latest,
+              target: '_blank',
+              rel: 'noreferrer',
+            }, t('updateOpenRelease')),
+            h('span', { className: 'dsh-router-hint' }, t('updateInstallHint')))
+        : null,
+      notesUnavailable
+        ? h('p', { className: 'dsh-router-notice', role: 'status' },
+            fill(t('updateNotesUnavailable'), { reason: result.notesError }))
+        : null,
+      h('h3', { className: 'dsh-router-modal-section-title' }, fill(t('updateNotesTitle'), { version: notesVersion })),
+      h('div', { className: 'dsh-router-release-notes' },
+        h(MarkdownText, {
+          text: notes,
+          variant: 'compact',
+          labels: {
+            code: { copyLabel: t('notesCopy'), copiedLabel: t('notesCopied') },
+            footnotes: t('notesFootnotes'),
+          },
+        }))))
+}
+
+/** A publication date, as a plain local date. */
+function formatDate(iso) {
+  var date = new Date(iso)
+  if (isNaN(date.getTime())) return iso
+  return date.toISOString().slice(0, 10)
+}
+
+/**
  * The running release's notes, shown once after an update.
  *
  * DSH Market owns the update check and the one-click install; it does not pop a

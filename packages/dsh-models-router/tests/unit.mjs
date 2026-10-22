@@ -36,6 +36,7 @@ import { SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
 import { defaultSwitchOn, parseRetryInput, validate, BREAKER_CODE_PRESETS } from '../src/client/validate.ts'
 import { deepEqual, saveShortcutKeyKey } from '../src/client/format.ts'
 import { routeNames } from '../src/client/naming.ts'
+import { checkForUpdate, compareVersions } from '../src/update.ts'
 import { en, zh } from '../src/client/locales.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
@@ -1936,6 +1937,98 @@ test('a route key is built and split in exactly one place', () => {
   assert.deepEqual(found, [], `route keys must go through routes.ts, found ${found.length}:\n${found.join('\n')}`)
 })
 
+// 检查更新：版本以 registry 为准，失败分成"查不到版本"与"读到版本但读不到说明"。
+// 这两种失败不是一回事：前者让"是不是最新"这个问题悬空，后者不影响版本答案。
+const jsonResponse = (body, ok = true, status = 200) => async () => ({ ok, status, json: async () => body })
+
+test('compareVersions orders releases, and refuses what is not a version', () => {
+  assert.equal(compareVersions('0.3.3', '0.3.2') > 0, true)
+  assert.equal(compareVersions('0.3.3', '0.3.3'), 0)
+  assert.equal(compareVersions('0.3.2', '0.3.3') < 0, true)
+  assert.equal(compareVersions('1.0.0', '0.9.9') > 0, true)
+  // 预发布版比它自己的正式版旧（npm 的规则）。
+  assert.equal(compareVersions('0.3.3-rc.1', '0.3.3') < 0, true)
+  assert.equal(compareVersions('0.3.3-rc.2', '0.3.3-rc.10') < 0, true, 'rc.2 < rc.10（数字段按数值比，不是按字符串）')
+  // 不是版本的东西不能被当成版本比较：那会让"latest"这种值参与比较。
+  assert.equal(compareVersions('latest', '0.3.3'), null)
+  assert.equal(compareVersions('0.3', '0.3.3'), null)
+  assert.equal(compareVersions('', '0.3.3'), null)
+})
+
+test('the update check answers with the newest published version and its notes', async () => {
+  const requested = []
+  const result = await checkForUpdate('0.3.3', {
+    fetchImpl: async (url) => {
+      requested.push(url)
+      if (url.includes('/latest')) return jsonResponse({ version: '0.3.4' })()
+      return jsonResponse({ body: '## 修复\n\n- 新东西', published_at: '2026-10-25T08:00:00Z' })()
+    },
+  })
+  assert.equal(result.current, '0.3.3')
+  assert.equal(result.latest, '0.3.4')
+  assert.equal(result.newer, true)
+  assert.equal(result.notes, '## 修复\n\n- 新东西')
+  assert.equal(result.publishedAt, '2026-10-25T08:00:00Z')
+  assert.equal(result.error, null)
+  assert.equal(result.notesError, null)
+  // 版本以 registry 为准：说明取的是那个版本的 release。
+  assert.ok(requested[0].includes('/dsh-models-router/latest'), 'the version comes from the registry')
+  assert.ok(requested[1].includes('/releases/tags/v0.3.4'), 'the notes come from that version\'s release')
+})
+
+test('an up-to-date artifact does not spend a request on release notes', async () => {
+  const requested = []
+  const result = await checkForUpdate('0.3.3', {
+    fetchImpl: async (url) => {
+      requested.push(url)
+      return jsonResponse({ version: '0.3.3' })()
+    },
+  })
+  assert.equal(result.latest, '0.3.3')
+  assert.equal(result.newer, false)
+  assert.equal(result.notes, null)
+  assert.equal(requested.length, 1, '已是最新时不读用不上的说明')
+})
+
+test('a registry that cannot be reached leaves the version question open, not answered', async () => {
+  const result = await checkForUpdate('0.3.3', {
+    fetchImpl: async () => { throw new Error('getaddrinfo ENOTFOUND registry.npmjs.org') },
+  })
+  assert.equal(result.latest, null)
+  assert.equal(result.newer, false)
+  assert.match(result.error, /ENOTFOUND/, 'the reason must reach the user')
+  // 关键：查不到不等于"已是最新"——latest 为 null 就是"不知道"。
+  assert.equal(result.latest, null)
+})
+
+test('a registry that answers with a non-version is a failure, not a version', async () => {
+  const result = await checkForUpdate('0.3.3', {
+    fetchImpl: async () => jsonResponse({ version: 'latest' })(),
+  })
+  assert.equal(result.latest, null)
+  assert.match(result.error, /version/)
+})
+
+test('a release whose notes cannot be read keeps the version answer', async () => {
+  const result = await checkForUpdate('0.3.3', {
+    fetchImpl: async (url) => {
+      if (url.includes('/latest')) return jsonResponse({ version: '0.4.0' })()
+      throw new Error('HTTP 404 reading release notes')
+    },
+  })
+  assert.equal(result.latest, '0.4.0', '版本答案不受说明失败影响')
+  assert.equal(result.newer, true)
+  assert.equal(result.notes, null)
+  assert.match(result.notesError, /404/)
+  assert.equal(result.error, null, '版本查到了，检查就不算失败')
+})
+
+test('the update check names the package and the repository it reads', async () => {
+  // 换了包名或仓库名，这里会立刻转红——那两处是"最新版本"与"说明"的来源。
+  const source = readFileSync(fileURLToPath(new URL('../src/update.ts', import.meta.url)), 'utf8')
+  assert.match(source, /REGISTRY_PACKAGE = 'dsh-models-router'/)
+  assert.match(source, /REPO = 'Imzl-zl\/dsh-models-router'/)
+})
 // 显示名只有一处解析：DSH 的模型目录（用户在「模型」页映射的名字）。这一组的形状
 // 全部取自用户现场那份配置——provider `cherry` 下模型 id 是 `<uuid>:<model>`、name
 // 是映射名，正是"一行行看过去分不出谁是谁"的那种。
