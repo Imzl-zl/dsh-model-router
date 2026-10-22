@@ -9,12 +9,13 @@
  * Note: 分区/行/弹窗的布局契约与原生出处 —— 见 docs/design/ui-layout-redesign.md
  */
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button, Checkbox, Input, Modal, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import { h } from './dom.ts'
 import { fill, routeStatus } from './format.ts'
+import { routeNames } from './naming.ts'
 import { Icon, ICON_BOLT, ICON_DOWN, ICON_GRIP, ICON_MINUS, ICON_PLUS, ICON_TRASH, ICON_UP } from './icons.ts'
-import { routeKeyOf } from '../routes.ts'
+import { routeKeyOf, routeParts } from '../routes.ts'
 import { DEFAULT_FIRST_HOP_MAX_RETRIES, MAX_RETRIES, STRATEGIES, SWITCH_ON_CODES } from '../defaults.ts'
 
 /** The status text one route's health tag carries. */
@@ -169,6 +170,7 @@ function CandidateRow(props) {
   var t = props.t
   var candidate = props.candidate
   var index = props.index
+  var names = props.names
   var route = routeKeyOf(candidate.provider, candidate.model)
   var status = routeStatus(props.passive, props.discover, props.probe, route)
   var needs = candidate.needs
@@ -207,9 +209,13 @@ function CandidateRow(props) {
         h(Icon, { d: ICON_GRIP, size: 12 })),
       h('span', { className: 'dsh-router-order' }, String(index + 1)),
       h('div', { className: 'dsh-router-row-main' },
-        h('div', { className: 'dsh-router-row-title' },
-          h('span', { className: 'dsh-router-provider' }, candidate.provider),
-          h('span', { className: 'dsh-router-row-meta' }, candidate.model)),
+        // 标题用目录里的显示名（用户在「模型」页映射的名字），原始 `provider/model`
+        // 留在 title 里——名字要好看，但排查时必须还能读到真实渠道。
+        // Note: 为何显示名来自目录、缺名回落原始 id —— 见
+        // .agents/notes/implemented/2026-10-22-catalog-names-on-every-surface.md
+        h('div', { className: 'dsh-router-row-title', title: route },
+          h('span', { className: 'dsh-router-provider' }, names.provider(candidate.provider)),
+          h('span', { className: 'dsh-router-row-meta' }, names.model(candidate.provider, candidate.model))),
         h('div', { className: 'dsh-router-row-sub' },
           h('button', {
             type: 'button',
@@ -300,6 +306,8 @@ export function CandidatesSection(props) {
   var t = props.t
   var [openIndex, setOpenIndex] = useState(-1)
   var [dragSource, setDragSource] = useState(null)
+  // 目录可能有几百个模型：一次渲染查一次表，不按行重建。
+  var names = useMemo(function () { return routeNames(props.catalog) }, [props.catalog])
   var candidates = props.candidates
   var imageIndex = -1
   candidates.forEach(function (candidate, index) {
@@ -337,6 +345,7 @@ export function CandidatesSection(props) {
               key: routeKeyOf(candidate.provider, candidate.model) + ':' + index,
               t: t,
               candidate: candidate,
+              names: names,
               index: index,
               total: candidates.length,
               strategy: props.strategy,
@@ -470,6 +479,9 @@ export function FailoverHistoryModal(props) {
   var t = props.t
   var ui = props.state.ui
   var rows = ui.drawerRows
+  // 账本里存的是 `provider/model` 原始键（lineage.ts）。显示名来自目录，缺名回落
+  // 到键本身——历史里出现一条已经不在目录里的路由时，仍然要读得出它是哪条。
+  var names = useMemo(function () { return routeNames(ui.catalog) }, [ui.catalog])
   var body
   if (ui.drawerLoading) body = h('p', { className: 'dsh-router-muted' }, t('failoverHistoryLoading'))
   else if (ui.drawerError) {
@@ -487,11 +499,11 @@ export function FailoverHistoryModal(props) {
             row.entries.map(function (entry, index) {
               return h('li', { key: 'e' + index, className: 'dsh-router-history-row' },
                 h('span', { className: 'dsh-router-history-time' }, new Date(entry.time).toLocaleString()),
-                h('span', { className: 'dsh-router-history-text' },
+                h('span', { className: 'dsh-router-history-text', title: entry.from + ' → ' + entry.to },
                   fill(t('failoverEntryLine'), {
-                    from: entry.from,
+                    from: names.route(routeParts(entry.from).provider, routeParts(entry.from).model),
                     code: codeLabel(t, entry.code),
-                    to: entry.to,
+                    to: names.route(routeParts(entry.to).provider, routeParts(entry.to).model),
                   })),
                 h(Tag, { tone: entry.settled ? 'success' : 'warning' },
                   entry.settled ? t('failoverEntrySettled') : t('failoverEntryUnsettled')))

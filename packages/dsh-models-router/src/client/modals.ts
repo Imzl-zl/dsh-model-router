@@ -11,10 +11,11 @@
  * Note: 弹窗尺寸、滚动链与"无第二层子弹窗"的依据 —— 见 docs/design/ui-layout-redesign.md
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Checkbox, Input, MarkdownText, Modal, SegmentedControl, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { h } from './dom.ts'
 import { fill, formatWindowHours } from './format.ts'
+import { routeNames } from './naming.ts'
 import { Icon, ICON_TRASH } from './icons.ts'
 import { routeKeyOf, routeParts } from '../routes.ts'
 import { BREAKER_CODE_PRESETS } from './validate.ts'
@@ -71,6 +72,9 @@ function NumberInput(props) {
 
 export function HealthSettingsModal(props) {
   var t = props.t
+  // 下拉里显示目录中的名字，`value` 仍是原始 `provider/model` 键——写进配置的
+  // 必须是真键，名字只是给人看的。
+  var names = useMemo(function () { return routeNames(props.catalog) }, [props.catalog])
   var health = props.health || {}
   var discover = health.discover || {}
   var probe = health.probe || {}
@@ -102,6 +106,10 @@ export function HealthSettingsModal(props) {
   var routeChoices = (props.routes ?? []).filter(function (route) {
     return !promptOverrides.some(function (entry) { return entry.route === route })
   })
+  function routeLabelOf(route) {
+    var parts = routeParts(route)
+    return names.route(parts.provider, parts.model)
+  }
   // 一条两个字段都空白的规则永远命中不了任何东西。不静默过滤：弹窗替用户删规则，
   // 就会和页面级 validate() 对同一份数据说出两种结论。禁掉确认，把问题摆在旁边。
   var hasEmptyRule = rules.some(function (rule) { return !rule.code && !rule.message })
@@ -198,9 +206,9 @@ export function HealthSettingsModal(props) {
         disabled: props.disabled,
         onChange: function (event) { patchOverride(index, { route: event.target.value }) },
       },
-        h('option', { value: entry.route }, entry.route || t('healthProbeRoutePlaceholder')),
+        h('option', { value: entry.route }, entry.route === '' ? t('healthProbeRoutePlaceholder') : routeLabelOf(entry.route)),
         routeChoices.map(function (route) {
-          return h('option', { key: route, value: route }, route)
+          return h('option', { key: route, value: route }, routeLabelOf(route))
         })),
       h(Input, {
         type: 'text',

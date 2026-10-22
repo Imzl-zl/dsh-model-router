@@ -36,6 +36,7 @@ import { effectiveChains } from '../chain.ts'
 import { MAX_SESSION_RETRIES } from '../defaults.ts'
 import { parseRetryInput } from './validate.ts'
 import { routeKeyOf } from '../routes.ts'
+import { routeNames } from './naming.ts'
 import { CONFIG_NS } from './locales.ts'
 
 /** Popover row id for "follow the default chain": the stored binding is `chain: null` then. */
@@ -56,6 +57,11 @@ function freshChipView() {
     defaultChainId: '',
     /** 正在输入、还没提交的重试次数，按路由键控（空串 = 用户清空了这一行）。 */
     retryDraft: {},
+    /**
+     * 重试行上那几条路由的显示名（目录未读到/不含这条路由时就是原始 id）。
+     * 目录在一次激活里不会变，所以它随第一次读到落进视图，之后的 set 都带着它。
+     */
+    names: routeNames(null),
   }
 }
 
@@ -104,6 +110,33 @@ export function createSessionChip(ctx, t) {
   function health() {
     var remote = ctx.remote && ctx.remote.routerHealth
     return remote !== undefined && typeof remote.sessionBinding === 'function' ? remote : undefined
+  }
+
+  /**
+   * The catalog read behind the retry rows' display names.
+   *
+   * Same read口 as the add-candidate dialog (`session/modelCatalog`), but the
+   * chip is a different surface with its own lifetime, so it keeps its own
+   * promise: read once per activation, and a refused/failed read is `null` —
+   * the rows then show the raw route keys rather than names nobody confirmed.
+   */
+  var catalogPromise = null
+  var names = routeNames(null)
+  function loadNames() {
+    if (catalogPromise === null) {
+      catalogPromise = Promise.resolve(ctx.remote.session.modelCatalog()).then(
+        // Remote 调用回来的是 `{ ok, value }` 信封（与 controller.ensureCatalog 同一个
+        // 读口、同一个判据）：被拒或抛错都当"没有目录"，行上显示原始键。
+        function (result) { return result !== null && result !== undefined && result.ok === true ? result.value : null },
+        function () { return null },
+      )
+      catalogPromise.then(function (catalog) {
+        names = routeNames(catalog)
+        // 每一行都跟着变：会话 id 由视图自己带着，这里只把新名字发给当前打开的视图。
+        views.forEach(function (_current, key) { set(key, { names: names }) })
+      })
+    }
+    return catalogPromise
   }
 
   function unwrap(result) {
@@ -185,7 +218,9 @@ export function createSessionChip(ctx, t) {
      */
     load: function (sessionId) {
       var config = chainsNow()
-      set(sessionId, { chains: config.chains, defaultChainId: config.defaultChainId })
+      set(sessionId, { chains: config.chains, defaultChainId: config.defaultChainId, names: names })
+      // 目录只读一次，读到之前行上是原始键——不假装知道名字。
+      loadNames()
       var remote = health()
       if (remote === undefined) {
         // 读口不在（宿主正在卸载）时不要卡在 loading：那与"没有绑定"长得一样，
@@ -392,16 +427,17 @@ export function SessionChainChip(props) {
   })[0]
   var retryRows = activeChain === undefined ? [] : activeChain.candidates.map(function (candidate) {
     var route = routeKeyOf(candidate.provider, candidate.model)
+    var label = view.names.route(candidate.provider, candidate.model)
     var typed = Object.hasOwn(view.retryDraft, route)
       ? view.retryDraft[route]
       : Object.hasOwn(view.retries, route) ? String(view.retries[route]) : ''
     return h('div', { key: route, className: 'dsh-router-session-chip-retry' },
-      h('span', { className: 'dsh-router-session-chip-route', title: route }, route),
+      h('span', { className: 'dsh-router-session-chip-route', title: route }, label),
       h('input', {
         type: 'text',
         inputMode: 'numeric',
         className: 'dsh-router-session-chip-retry-input',
-        'aria-label': fill(t('sessionRetryRowLabel'), { route: route }),
+        'aria-label': fill(t('sessionRetryRowLabel'), { route: label }),
         title: fill(t('sessionRetryFollowsChain'), { retries: candidate.maxRetries }),
         placeholder: t('sessionRetryFollow'),
         disabled: view.saving === true,

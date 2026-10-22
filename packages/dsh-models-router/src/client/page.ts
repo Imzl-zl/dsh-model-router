@@ -71,8 +71,11 @@ export function RouterPage(props) {
   }, [draft.chain.candidates, state.ui.passive, state.ui.discover])
 
   // The save command's gate: this page is mounted while the workbench is.
+  // 同一次挂载里要目录：候选行/健康行/弹窗里的下拉都拿它换显示名（用户在「模型」
+  // 页映射的名字）。不加载的话行上只剩原始 id——那正是用户看不出区别的原因。
   useEffect(function () {
     props.retainSurface()
+    props.onLoadCatalog()
     return function () { props.releaseSurface() }
   }, [])
 
@@ -166,6 +169,7 @@ export function RouterPage(props) {
               ? h(GlobalHealthWorkspace, {
                   t: t,
                   draft: draft,
+                  catalog: state.ui.catalog,
                   passive: state.ui.passive,
                   discover: state.ui.discover,
                   checking: state.ui.checking,
@@ -219,6 +223,7 @@ export function RouterPage(props) {
     modal !== null && modal.kind === 'health' ? h(HealthSettingsModal, {
       t: t,
       health: draft.health,
+      catalog: state.ui.catalog,
       routes: configuredRouteList(draft),
       disabled: disabled,
       onClose: props.onCloseModal,

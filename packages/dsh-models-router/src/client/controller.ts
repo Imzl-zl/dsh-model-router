@@ -211,7 +211,14 @@ export function createController(ctx, scope, t, initialNotesOpen = notesForCurre
     if (seconds > 0) discoverTimer = setInterval(function () { controller.checkAll() }, seconds * 1000)
   }
 
-  /** Load the model catalog on first use; the modals render the loading state. */
+  /**
+   * Load the model catalog once per activation.
+   *
+   * It is no longer only the add-candidate dialog's data source: every row that
+   * names a route reads the user's display names from it, so the workbench asks
+   * for it when the page mounts. Read once — the catalog does not change under a
+   * running host generation, and a second read would only re-ask the Host.
+   */
   function ensureCatalog() {
     if (ui.catalog !== null || ui.catalogLoading) return
     ui.catalogLoading = true
@@ -603,12 +610,16 @@ export function createController(ctx, scope, t, initialNotesOpen = notesForCurre
       if (edited(draft).candidates[index] !== undefined) edited(draft).candidates[index].weight = clamped
       publish()
     },
+    /**
+     * The workbench's rows name routes from the catalog, so the page asks for it
+     * on mount (`onLoadCatalog`); the dialog would otherwise be the only entry.
+     */
+    loadCatalog: function () { ensureCatalog() },
     openModal: function (modal) {
       ui.modal = modal
       ui.riskAck = false
-      // The catalog is loaded lazily: at apply time the host may still be
-      // registering adapters, and an early read caches an empty catalog
-      // forever.
+      // 打开添加候选时再确认一次：目录可能在上一次读失败后被重建（宿主重启），
+      // 而这一层是幂等的——读到过就直接返回。
       if (modal.kind === 'add-candidate') ensureCatalog()
       publish()
     },

@@ -122,6 +122,8 @@ export function ChainView(props) {
     h(CandidatesSection, {
       t: t,
       candidates: chain.candidates,
+      // 行上的名字来自 DSH 的模型目录（用户在「模型」页映射的名字），不是配置里的 id。
+      catalog: props.catalog,
       strategy: chain.strategy,
       disabled: props.disabled,
       passive: props.passive,

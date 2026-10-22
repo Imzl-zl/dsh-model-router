@@ -323,6 +323,17 @@ async function mount({ value, writable = true, mutate, remote, firstFrame, seenV
   let capturedChip = null
   /** What the Host would have stored, per session: the chip tests drive this. */
   const bindings = new Map()
+  // `session` 是按字段合并的一份面：用例覆盖自己关心的那一两个读口（list /
+  // projections）时不该顺手把别的读口拆掉——真宿主上它们是同一个面的方法，拆掉只会
+  // 得到 "modelCatalog is not a function" 这种夹具自己的错。
+  const sessionFace = Object.assign({
+    list: () => Promise.resolve({ ok: false }),
+    projections: () => Promise.resolve({ ok: false }),
+    // 行上的显示名来自这份目录（真实宿主是 session-controller 的
+    // `session/modelCatalog`）。默认给一份空目录：名字回落到原始键，与"宿主还没答
+    // 上来"同一个结果——需要映射名的用例自己给一份带名字的目录。
+    modelCatalog: () => Promise.resolve({ ok: true, value: { groups: [] } }),
+  }, remote?.session)
   const ctx = {
     locale: { bind: () => (key) => key, register: () => () => {} },
     effect: (fn) => {
@@ -353,11 +364,11 @@ async function mount({ value, writable = true, mutate, remote, firstFrame, seenV
         return () => {}
       },
     },
+    // `session` 单独按字段合并：用例覆盖自己关心的那一两个读口（list / projections）
+    // 时不该顺手把别的读口拆掉——真宿主上它们是同一个面的方法，拆掉只会得到
+    // "modelCatalog is not a function" 这种夹具自己的错。
     remote: Object.assign({
-      session: {
-        list: () => Promise.resolve({ ok: false }),
-        projections: () => Promise.resolve({ ok: false }),
-      },
+      session: sessionFace,
       llm: {},
       settings: {},
       // The plugin's own probe Remote, which the browser half's apply mounts
@@ -389,7 +400,7 @@ async function mount({ value, writable = true, mutate, remote, firstFrame, seenV
       // The browser half's apply mounts the generated ./remote contribution
       // before registering the UI.
       $mount: () => Promise.resolve(() => Promise.resolve()),
-    }, remote),
+    }, remote, { session: sessionFace }),
     // The browser half mounts its own Remote and then registers the UI in a
     // child fiber carrying it; the harness runs the callback against a child
     // that carries the same stubs.
@@ -956,6 +967,129 @@ const propsFor = (h) => Object.assign({}, h.actions, {
 // dictionary-driven failover tag/notice, not just the form.
 const twoCandidates = () => config({
   chain: chainValue([cand('deepseek', 'm'), cand('deepseek', 'm2')]),
+})
+
+// ---- 显示名：行上画目录里的名字，原始 id 只留在 tooltip 里 ----
+// 判据取自用户现场的形状：provider `cherry` 下模型 id 是 `<uuid>:<model>`、name 是
+// 映射名。用户映射名字就是为了让这些行分得出来，所以"画出来的文字"里不能再有 id。
+
+/** 只收真正画出来的文字：`title` 是 tooltip，不算"这一行写了什么"。 */
+function paintedText(node, out = []) {
+  if (node === null || node === undefined || node === false || node === true) return out
+  if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+  if (Array.isArray(node)) {
+    for (const child of node) paintedText(child, out)
+    return out
+  }
+  if (typeof node !== 'object') return out
+  paintedText(node.props?.children, out)
+  paintedText(node.children, out)
+  return out
+}
+
+const MAPPED_ROUTE = 'cherry/c518aa0a-1e0e-46bd-a8b4-e94cd22ddd93:deepseek-4.1-flash'
+const MAPPED_MODEL = 'c518aa0a-1e0e-46bd-a8b4-e94cd22ddd93:deepseek-4.1-flash'
+const mappedCatalog = {
+  ok: true,
+  value: {
+    groups: [{
+      id: 'cherry',
+      name: 'Cherry',
+      models: [
+        { id: MAPPED_MODEL, name: 'LunaRoute:deepseek-4.1-flash' },
+        { id: '9c8f709a-d6e6-42a7-b4de-fc17c3bc3a08:deepseek-v4.1-flash', name: 'RelayFor-L:deepseek-v4.1-flash' },
+      ],
+    }],
+  },
+}
+const mappedConfig = (over = {}) => config({
+  chain: chainValue([
+    cand('cherry', MAPPED_MODEL),
+    cand('cherry', '9c8f709a-d6e6-42a7-b4de-fc17c3bc3a08:deepseek-v4.1-flash'),
+  ]),
+  ...over,
+})
+/** Mount against the mapped catalog; the remote override replaces the whole session face. */
+const mountMapped = (value = mappedConfig(), catalog = mappedCatalog) => mount({
+  value,
+  remote: {
+    session: {
+      list: () => Promise.resolve({ ok: true, value: { items: [] } }),
+      projections: () => Promise.resolve({ ok: true, value: { values: {} } }),
+      modelCatalog: () => Promise.resolve(catalog),
+    },
+  },
+})
+/** Load the catalog the way the page's mount effect does, and let it land. */
+const loadCatalog = async (h) => { h.actions.onLoadCatalog(); await flush() }
+
+test('candidate rows paint the catalog names and keep the raw route in the tooltip', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mountMapped()
+  await loadCatalog(h)
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  const painted = paintedText(tree).join(' ')
+  assert.ok(painted.includes('LunaRoute:deepseek-4.1-flash'), '候选行写的是映射名')
+  assert.ok(painted.includes('RelayFor-L:deepseek-v4.1-flash'), '每一行写自己的名字')
+  assert.ok(painted.includes('Cherry'), 'provider 那一半也写映射名')
+  assert.equal(painted.includes(MAPPED_MODEL), false, '画出来的文字里不该再有原始模型 id')
+  assert.ok(find(tree, (node) => node.props?.title === MAPPED_ROUTE),
+    '原始路由键仍在 title 里，排查时读得到')
+})
+
+test('health rows paint the catalog names too', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mountMapped()
+  await loadCatalog(h)
+  h.actions.onActive('__health__')
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  const painted = paintedText(tree).join(' ')
+  assert.ok(painted.includes('LunaRoute:deepseek-4.1-flash'), '健康页与链路页同一套名字')
+  assert.ok(painted.includes('RelayFor-L:deepseek-v4.1-flash'))
+  assert.equal(painted.includes(MAPPED_MODEL), false)
+})
+
+test('the probe-override dropdown lists the names but keeps the raw route as its value', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mountMapped(mappedConfig({
+    health: {
+      passive: true,
+      probe: {
+        enabled: true, intervalSeconds: 0, prompt: '1', timeoutSeconds: 8,
+        prompts: [{ route: MAPPED_ROUTE, prompt: '1' }],
+      },
+    },
+  }))
+  await loadCatalog(h)
+  h.actions.onOpenHealthModal()
+  pendingEffects.length = 0
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  for (const effect of pendingEffects) effect()
+  const options = []
+  const collect = (node) => {
+    if (node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const child of node) collect(child); return }
+    if (node.type === 'option') options.push(node)
+    collect(node.children)
+  }
+  collect(tree)
+  const chosen = options.find((option) => option.props.value === MAPPED_ROUTE)
+  assert.ok(chosen, '选项的 value 仍是原始路由键——写进配置的必须是真键')
+  assert.equal(chosen.props.children, 'Cherry · LunaRoute:deepseek-4.1-flash', '下拉里给人看的是映射名')
+})
+
+test('the chip retry rows paint the catalog names', async () => {
+  const h = await mountMapped()
+  await h.chip.model.open('s1')
+  await flush()
+  const painted = paintedText(renderChip(h)).join(' ')
+  assert.ok(painted.includes('LunaRoute:deepseek-4.1-flash'), '重试行写映射名')
+  assert.ok(painted.includes('RelayFor-L:deepseek-v4.1-flash'))
+  assert.equal(painted.includes(MAPPED_MODEL), false)
 })
 
 // C3：DSH 的 SettingsForm 在 namespace 未就绪时不渲染 children

@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, Input, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import { h } from './dom.ts'
 import { routeKeyOf, routeParts } from '../routes.ts'
-import { fill, formatLatency, formatWindowHours, healthToneStyle, routeStatus, shortModelName } from './format.ts'
+import { fill, formatLatency, formatWindowHours, healthToneStyle, routeStatus } from './format.ts'
+import { routeNames } from './naming.ts'
 import { ChannelMetricsDashboard } from './health-ui.ts'
 import { bucketTimeline, windowSuccessRate } from '../timeline.ts'
 import { Icon, ICON_BOLT, ICON_CHART, ICON_CLOCK, ICON_GEAR, ICON_SEARCH, ICON_SPINNER } from './icons.ts'
@@ -86,6 +87,7 @@ export function GlobalHealthWorkspace(props) {
   // The jump target is an object, so clicking the same route twice re-arms
   // the scroll; entering through the tab clears it (null).
   var focusRouteKey = props.focusRoute ? props.focusRoute.route : null
+  var names = useMemo(function () { return routeNames(props.catalog) }, [props.catalog])
 
   var filterState = useState('all')
   var filter = filterState[0]
@@ -290,9 +292,11 @@ export function GlobalHealthWorkspace(props) {
               h('div', { className: 'dsh-router-row-line' },
                 h('span', { className: 'dsh-router-dot', style: healthToneStyle(status) }),
                 h('div', { className: 'dsh-router-row-main' },
-                  h('div', { className: 'dsh-router-row-title' },
-                    h('span', { className: 'dsh-router-provider' }, channel.provider),
-                    h('span', { className: 'dsh-router-row-meta', title: channel.model }, shortModelName(channel.model)),
+                  // 与候选行同一条规则：名字来自目录，原始 `provider/model` 进 title。
+                  // 观测到的历史路由可能已经不在目录里，那时显示的仍是键本身。
+                  h('div', { className: 'dsh-router-row-title', title: channel.route },
+                    h('span', { className: 'dsh-router-provider' }, names.provider(channel.provider)),
+                    h('span', { className: 'dsh-router-row-meta' }, names.model(channel.provider, channel.model)),
                     h(Tag, { tone: statusTone(status) },
                       statusLabel(t, status) + (availRate === null ? '' : ' · ' + t('availabilityRate') + ' ' + availRate + '%')),
                     isProbingThis

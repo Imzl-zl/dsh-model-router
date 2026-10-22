@@ -134,7 +134,7 @@ last_updated: "2026-10-19"
 | 4 | **时间轴 24 格固定 + 桶长可配（默认 10 分钟）** | 旧口径"最近 24 次观测、一格一次调用"没有时间含义：一天调两次与一分钟调两次画出同一张图。新口径柱高=该桶成功率（healthy 1 / degraded 0.5 / unhealthy 0），颜色 ≥99% 绿 / ≥90% 黄 / <90% 红，空桶=无数据。观测点按时间戳保留 24h + 600 条，改桶长不丢历史 | `src/timeline.ts` 重写；`health.ts` 裁剪规则；`health-ui.ts` 仪表盘；`health.timelineBucketSeconds` |
 | 5 | **探测与被动指标分开表述，吞吐只在有真实输出时出现** | 探测只测首字（`probe.ts` 首字节即 abort），不产生输出也就没有吞吐；被动的 `usage.outputTokens ÷ 本步耗时`含首字等待，是端到端输出速率不是解码速率。混印在同一行会被当成同一次测量 | `HealthSignalDot`、`ChannelMetricsDashboard`、三条 hint 字典 |
 | 6 | **整卡可拖，交互控件除外** | `draggable` 原本只挂在 20px 握把上。HTML5 拖放自建指针方案的替代被否（要重做拖影/放置/自动滚动）；触屏仍不可用，上下按钮保留 | `pipeline.ts` 的 `dragstart` 守卫 + 注入 CSS |
-| 7 | **模型名统一可压缩 + title + 中间省略** | 网关模型 ID 常是一整段 UUID，末尾截断后同一网关下一堆模型共用前缀、截出来全都一样。完整标识仍在下方 `provider/model` 路径与 title | `format.ts` 的 `shortModelName`；候选卡/健康工作台/侧栏 |
+| 7 | **行名用 DSH 模型目录里的显示名，原始 `provider/model` 进 title** | 网关模型的 id 常是 `<uuid>:<model>`（可读的是用户在「模型」页映射的 `name`），末尾截断后同一网关下一堆模型共用前缀。显示名取 `session/modelCatalog` 的 `group.name` / `model.name`，缺名回落该半的 id，两半都缺则印原始键；长名由行内换行兜住，不做截断 | `src/client/naming.ts`；候选行/健康工作台/探测覆盖下拉/chip 重试行/失败历史 |
 
 取舍、被否方案（含每案最强理由）与代价见
 `.agents/notes/implemented/2026-10-19-takeover-switch-primary-sync-and-timeline-buckets.md`。

@@ -35,6 +35,7 @@ import { structuralViolations } from '../src/rules.ts'
 import { SWITCH_ON_CODES, switchOnKeyOf } from '../src/defaults.ts'
 import { defaultSwitchOn, parseRetryInput, validate, BREAKER_CODE_PRESETS } from '../src/client/validate.ts'
 import { deepEqual, saveShortcutKeyKey } from '../src/client/format.ts'
+import { routeNames } from '../src/client/naming.ts'
 import { en, zh } from '../src/client/locales.ts'
 import { emptyConditions, RouterState } from '../src/state.ts'
 import { probePromptFor, probeRoute } from '../src/probe.ts'
@@ -1933,6 +1934,74 @@ test('a route key is built and split in exactly one place', () => {
     }
   }
   assert.deepEqual(found, [], `route keys must go through routes.ts, found ${found.length}:\n${found.join('\n')}`)
+})
+
+// 显示名只有一处解析：DSH 的模型目录（用户在「模型」页映射的名字）。这一组的形状
+// 全部取自用户现场那份配置——provider `cherry` 下模型 id 是 `<uuid>:<model>`、name
+// 是映射名，正是"一行行看过去分不出谁是谁"的那种。
+test('routeNames reads the catalog names for both halves of a route', () => {
+  const names = routeNames({
+    groups: [{
+      id: 'cherry',
+      name: 'Cherry',
+      models: [{ id: 'c518aa0a-1e0e-46bd-a8b4-e94cd22ddd93:deepseek-4.1-flash', name: 'LunaRoute:deepseek-4.1-flash' }],
+    }],
+  })
+  assert.equal(names.provider('cherry'), 'Cherry')
+  assert.equal(names.model('cherry', 'c518aa0a-1e0e-46bd-a8b4-e94cd22ddd93:deepseek-4.1-flash'),
+    'LunaRoute:deepseek-4.1-flash')
+  assert.equal(names.route('cherry', 'c518aa0a-1e0e-46bd-a8b4-e94cd22ddd93:deepseek-4.1-flash'),
+    'Cherry · LunaRoute:deepseek-4.1-flash')
+})
+
+test('routeNames falls back to the raw half, never to a neighbouring name', () => {
+  const names = routeNames({ groups: [{ id: 'cherry', name: 'Cherry', models: [{ id: 'a', name: 'A' }] }] })
+  // 目录里没有这条路由（模型被删了）：回落的是它自己的 id，不许拿同 provider 下
+  // 别的名字顶上——那会把两条不同的渠道说成同一条。
+  assert.equal(names.model('cherry', 'gone'), 'gone')
+  assert.equal(names.provider('not-in-catalog'), 'not-in-catalog')
+  // 两半都没有名字时印原始键：与日志/配置/宿主 notice 里同一条字符串，认得出。
+  assert.equal(names.route('not-in-catalog', 'gone'), 'not-in-catalog/gone')
+  // 只有一半有名字时按名字拼。
+  assert.equal(names.route('cherry', 'gone'), 'Cherry · gone')
+})
+
+test('routeNames reads an unanswered or malformed catalog as "no names"', () => {
+  // 还没答上来 / 答的是垃圾：与"这条路由不在目录里"必须是同一个结果（原始 id），
+  // 否则加载期会闪出一批不存在的名字。
+  for (const value of [null, undefined, {}, { groups: null }, { groups: 'nope' }, { groups: [null] }, 42]) {
+    const names = routeNames(value)
+    assert.equal(names.provider('cherry'), 'cherry')
+    assert.equal(names.model('cherry', 'm'), 'm')
+  }
+  // 名字是空串不算名字：空白的行比 id 更难认。
+  const blank = routeNames({ groups: [{ id: 'cherry', name: '', models: [{ id: 'm', name: '' }] }] })
+  assert.equal(blank.provider('cherry'), 'cherry')
+  assert.equal(blank.model('cherry', 'm'), 'm')
+})
+
+test('a half route prints its provider half without a dangling separator', () => {
+  // routeParts 对坏记录给出 model: ''（见上一条守卫），那半条路由不能印成 "cherry · "。
+  assert.equal(routeNames(null).route('cherry', ''), 'cherry')
+})
+
+// 显示名与路由键是同一类事实：一处解析、所有面共用。哪个面自己拼名字（把
+// `candidate.provider` 直接上屏），用户就又会看到 id——而他映射名字正是为了不看 id。
+test('every surface that names a route paints it through the naming module', () => {
+  const srcDir = fileURLToPath(new URL('../src/', import.meta.url))
+  const surfaces = ['client/pipeline.ts', 'client/workspace.ts', 'client/chip.ts', 'client/modals.ts']
+  for (const name of surfaces) {
+    const code = readFileSync(join(srcDir, name), 'utf8')
+    assert.match(code, /from '\.\/naming\.ts'/, `${name} must take route display names from naming.ts`)
+  }
+  // provider 那一半在行标题里的画法只有一种：类名后面接 names.provider(...)。
+  for (const name of ['client/pipeline.ts', 'client/workspace.ts']) {
+    const code = readFileSync(join(srcDir, name), 'utf8')
+    const spans = code.match(/'dsh-router-provider'/g) ?? []
+    const named = code.match(/'dsh-router-provider'\s*\}\s*,\s*names\.provider\(/g) ?? []
+    assert.ok(spans.length > 0, `${name} must still render the provider half of a route`)
+    assert.equal(named.length, spans.length, `${name} must render the provider name, not the raw provider id`)
+  }
 })
 
 import {

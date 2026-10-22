@@ -176,6 +176,7 @@ function registerUi(ctx: Context, t: (key: string) => string, initialNotesOpen: 
     onStrategy: function (value) { controller.setStrategy(value) },
     onFirstHopMaxRetries: function (value) { controller.setFirstHopMaxRetries(value) },
     onWeight: function (index, value) { controller.setWeight(index, value) },
+    onLoadCatalog: function () { controller.loadCatalog() },
     onOpenAddCandidate: function () { controller.openModal({ kind: 'add-candidate' }) },
     onCloseModal: function () { controller.closeModal() },
     onAddCandidates: function (entries) { controller.addCandidates(entries) },
