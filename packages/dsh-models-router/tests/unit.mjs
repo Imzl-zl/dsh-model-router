@@ -2364,9 +2364,10 @@ test('an empty retry box means "follow the chain", zero means "do not retry"', (
   assert.deepEqual(parseRetryInput('   '), { kind: 'follow' })
   assert.deepEqual(parseRetryInput(undefined), { kind: 'follow' })
   assert.deepEqual(parseRetryInput('0'), { kind: 'set', value: 0 })
-  assert.deepEqual(parseRetryInput('9'), { kind: 'set', value: 9 })
+  assert.deepEqual(parseRetryInput('10'), { kind: 'set', value: 10 })
+  assert.deepEqual(parseRetryInput('99'), { kind: 'set', value: 99 })
   // 越界与小数都不夹、不猜：调用方把上限显示出来，让用户自己改。
-  for (const raw of ['10', '-1', '1.5', 'abc']) {
+  for (const raw of ['100', '-1', '1.5', 'abc']) {
     assert.deepEqual(parseRetryInput(raw), { kind: 'invalid' }, raw)
   }
 })
@@ -2482,10 +2483,10 @@ test('a domain that cannot open falls back to memory and says so', async () => {
   assert.match(errors[0], /model_router_sessions/)
 })
 
-test('a binding outside 0..9 or keyed by a non-route is rejected, not clamped', async () => {
+test('a binding outside 0..99 or keyed by a non-route is rejected, not clamped', async () => {
   const bindings = new SessionBindings(fakeContext(undefined))
-  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 10 } }), /integer in 0\.\.9/)
-  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 1.5 } }), /integer in 0\.\.9/)
+  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 100 } }), /integer in 0\.\.99/)
+  await assert.rejects(() => bindings.write('s1', { chain: null, retries: { 'p/m': 1.5 } }), /integer in 0\.\.99/)
   await assert.rejects(() => bindings.write('s1', { chain: null, retries: { pm: 1 } }), /provider\/model/)
   assert.equal(bindings.read('s1'), undefined)
 })
@@ -2497,7 +2498,7 @@ test('the session binding domain declares the shape the routing path reads', () 
   assert.equal(sessionBindingsDomain.version, 1)
   assert.deepEqual(sessionBindingsDomain.tables.bindings.valueSchema.parse({ chain: null, retries: { 'p/m': 0 } }),
     { chain: null, retries: { 'p/m': 0 } })
-  assert.throws(() => sessionBindingsDomain.tables.bindings.valueSchema.parse({ chain: null, retries: { 'p/m': 10 } }))
+  assert.throws(() => sessionBindingsDomain.tables.bindings.valueSchema.parse({ chain: null, retries: { 'p/m': 100 } }))
   // 0 与"没填"在存储层也是两件事：前者是键存在、值为 0。
   assert.deepEqual(emptyBinding(), { chain: null, retries: {} })
 })

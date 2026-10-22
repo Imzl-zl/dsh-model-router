@@ -338,8 +338,10 @@ export var ROUTER_CSS = [
   '  line-height: 18px;',
   '}',
   '.dsh-router-session-chip-note { margin: 2px 7px 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }',
-  // 弹层比内容宽一点：路由名（real-a/step-5-preview）与输入框挤在 190px 里会顶到一起。
-  '.dsh-router-session-chip-menu { min-width: 232px; }',
+  // 固定宽度：路由名长短不一时弹层不再跟着变宽，长路由在行内省略（title 里有全名）。
+  '.dsh-router-session-chip-menu { width: 280px; max-width: calc(100vw - 24px); }',
+  // Menu 的数据标签没有 className 钩子；卡片的 [role=presentation] 视口里第一个孩子就是标题行。
+  '.dsh-router-session-chip-menu > div[role="presentation"] > div:first-child { color: var(--dsw-alias-label-primary); font-size: 11px; line-height: 16px; font-weight: 600; }',
   // 链行：Menu 原语不画子菜单箭头，这里自己排「链 | 名字 | ›」，让它看起来可点。
   '.dsh-router-session-chip-chain { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; }',
   '.dsh-router-session-chip-chain-key { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }',
@@ -349,7 +351,7 @@ export var ROUTER_CSS = [
   '.dsh-router-session-chip-retries { display: flex; flex-direction: column; gap: 2px; margin: 4px 7px 0; padding-top: 5px; border-top: 0.5px solid var(--dsw-alias-border-l1); }',
   // 标题与提示用更小的字号：和路由行拉开层级，不再一行行都是 12px。
   '.dsh-router-session-chip-retry-note { margin: 0 0 4px; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }',
-  '.dsh-router-session-chip-retry-note-title { color: var(--dsw-alias-label-secondary); font-weight: 500; }',
+  '.dsh-router-session-chip-retry-note-title { color: var(--dsw-alias-label-primary); font-size: 11px; font-weight: 600; }',
   '.dsh-router-session-chip-retry { display: flex; align-items: center; gap: 8px; min-height: 30px; }',
   '.dsh-router-session-chip-route { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }',
   '.dsh-router-session-chip-retry-input { flex: none; width: 48px; height: 26px; padding: 0 6px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; text-align: center; box-sizing: border-box; }',
@@ -360,9 +362,11 @@ export var ROUTER_CSS = [
   '.dsh-router-chain-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }',
   '/* 编辑中的那条用强调色描边，与健康页的焦点行同一套做法（色只进边，不进文字）。 */',
   '.dsh-router-chain-row.is-editing { border-color: var(--dsh-router-accent); }',
-  '.dsh-router-chain-pick { flex: none; min-width: 56px; height: 24px; padding: 0 8px; border: none; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; cursor: pointer; }',
+  '.dsh-router-chain-pick { flex: none; width: 68px; height: 24px; padding: 0; border: none; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; text-align: center; cursor: pointer; box-sizing: border-box; }',
   '.dsh-router-chain-pick[aria-pressed="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }',
   '.dsh-router-chain-name { flex: 1 1 auto; min-width: 120px; }',
+  // 「默认」徽标与「设为默认」按钮占同一个固定槽位，所有链的改名输入框才会等长。
+  '.dsh-router-chain-default-slot { flex: none; width: 92px; display: flex; justify-content: center; }',
   '.dsh-router-chain-default { flex: none; padding: 2px 8px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }',
   '/* The composer row is the size container (InputBar .row declares container-type:',
   '   inline-size), so this is the same anonymous @container query PermissionSelect uses,',

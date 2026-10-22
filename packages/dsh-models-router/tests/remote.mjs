@@ -232,7 +232,7 @@ test('the generated strict codec refuses a malformed probe request', async () =>
 })
 
 test('the generated strict codec refuses a malformed session-binding write', async () => {
-  // 写入的线形状：sessionId + chain（null 或 id）+ retries（对象）。0..9 不在线
+  // 写入的线形状：sessionId + chain（null 或 id）+ retries（对象）。0..99 不在线
   // 形状里——那是宿主的业务边界（bindings.ts），所以这里只钉"形状不对"。
   const client = await import(pathToFileURL(`${PKG}/lib/typert.remote-client.js`).href)
   const descriptor = Object.values(client.default.descriptors)
@@ -276,13 +276,13 @@ test('a zero override is stored as zero, not as "unset"', async () => {
   assert.equal(Object.hasOwn(readBack.retries, 'stub-primary/stub-model'), true)
 })
 
-test('setSessionBinding refuses an out-of-range count instead of clamping it', async () => {
-  // 静默夹到 9 会让用户以为他写的 10 生效了。原样拒绝。
+test('setSessionBinding refuses a count above the sanity bound instead of clamping it', async () => {
+  // 静默夹到 99 会让用户以为他写的 100 生效了。原样拒绝。
   await assert.rejects(
     () => invoke('setSessionBinding', {
-      request: { sessionId: 'session-remote-bad', chain: null, retries: { 'stub-primary/stub-model': 10 } },
+      request: { sessionId: 'session-remote-bad', chain: null, retries: { 'stub-primary/stub-model': 100 } },
     }),
-    /0\.\.9/,
+    /0\.\.99/,
   )
   assert.equal((await invoke('sessionBinding', { sessionId: 'session-remote-bad' })).retries['stub-primary/stub-model'], undefined)
 })

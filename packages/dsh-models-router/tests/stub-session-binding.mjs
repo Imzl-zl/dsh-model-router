@@ -16,7 +16,7 @@
  * Config (from the overlay row):
  *
  *   chain: string | null            — the binding's chain field
- *   retries: { 'provider/model': n } — per-route retries (0..9)
+ *   retries: { 'provider/model': n } — per-route retries (0..99)
  *   observe: '<abs path>'           — where to write what was observed
  */
 

@@ -13,6 +13,7 @@
 
 import { h } from './dom.ts'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Icon, ICON_PLUS } from './icons.ts'
 import { CandidatesSection, FirstHopSection, RetrySection, StrategySection, SwitchOnSection } from './pipeline.ts'
 
 /**
@@ -67,9 +68,18 @@ export function ChainsSection(props) {
       onClick: function () { props.onCopyChain(chain.id) },
     }, t('chainCopy'))
     return h('div', { key: chain.id, className: 'dsh-router-chain-row' + (editing ? ' is-editing' : '') },
-      pick, name, defaultMark, copy, remove)
+      pick, name,
+      h('div', { className: 'dsh-router-chain-default-slot' }, defaultMark),
+      copy, remove)
   })
-  var add = h(Button, { size: 'sm', disabled: props.disabled, onClick: props.onAddChain }, t('chainAdd'))
+  // 明确的按钮外观：纯文字看起来像标签，用户会以为不能点。
+  var add = h(Button, {
+    variant: 'outline',
+    size: 'sm',
+    icon: h(Icon, { d: ICON_PLUS, size: 12 }),
+    disabled: props.disabled,
+    onClick: props.onAddChain,
+  }, t('chainAdd'))
   return h('section', { className: 'dsh-router-section' },
     h('div', { className: 'dsh-router-section-head' },
       h('h2', { className: 'dsh-router-section-title' }, t('chainsSectionTitle')),

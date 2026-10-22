@@ -18,7 +18,7 @@ Status: implemented
 ## Decision
 
 1. **一个域，一张表**：`model_router_sessions`（version 1，单表 `bindings`），记录
-   `{ chain: string | null, retries: Record<route, 0..9> }`。`chain = null` 表示跟随默认链；
+   `{ chain: string | null, retries: Record<route, 0..99> }`。`chain = null` 表示跟随默认链；
    `retries[route]` 表示"失败后重试几次"，0 与"没有这个键"是两件事。
 2. **域用 `defineDomain` 声明，不手抄**：名字/版本/表名的加载期校验归 DSH 那一个入口，
    插件不写第二份。
@@ -28,8 +28,8 @@ Status: implemented
 4. **写入先落盘再进内存**：`table.put` 失败原样抛给调用方，内存不先写。`setSessionBinding`
    只有在 `put` 兑现后才返回落库后的视图——"看起来保存成功"是这里最不能有的兜底。
 5. **两个 Remote**：`sessionBinding(sessionId)` 读（没有绑定返回默认值，不是错误）、
-   `setSessionBinding({ sessionId, chain, retries })` 写。0..9 与 `provider/model` 键形状
-   在宿主校验（wire 严格编解码只管形状），越界**原样拒绝**而不是夹到 9。
+   `setSessionBinding({ sessionId, chain, retries })` 写。0..99 与 `provider/model` 键形状
+   在宿主校验（wire 严格编解码只管形状），越界**原样拒绝**而不是夹到 99。
 6. **覆盖值只在一处成为次数**：`resolveChain(resolved, chain, retries)` 里的
    `attemptBudget()` 用 `overrides[route] ?? configRetries` 再 `+1`。决策层（`planFire`、
    `decideBeforeInner/AfterInner`）仍然只数调用次数，不知道"会话覆盖"这个概念存在。

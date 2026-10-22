@@ -1115,6 +1115,29 @@ test('the workbench is one page with top view tabs, not an internal sidebar', as
     'the selected tab names the panel that is rendered')
 })
 
+test('chain rows reserve one default slot so their name inputs end on the same column', async () => {
+  const { RouterPage } = loadClient()
+  const h = await mount({ value: twoCandidates() })
+  const tree = render(createEl(RouterPage, propsFor(h)))
+  const row = find(tree, (node) => String(node.props?.className ?? '').startsWith('dsh-router-chain-row'))
+  assert.ok(row, 'a chain row renders')
+  assert.ok(find(row, (node) => node.props?.className === 'dsh-router-chain-default-slot'),
+    'the default badge/button occupies its own fixed slot')
+})
+
+test('the chip popover and chain rows keep one aligned column', () => {
+  // 用户截图里的两处“长短不一”：弹层随长路由变宽、链行的默认徽标/按钮宽度不同
+  // 把改名输入框挤成不同长度。这里锁住两个容器级修复，而不是逐像素调。
+  const css = sourceOf('styles.ts')
+  assert.match(css, /\.dsh-router-session-chip-menu \{ width: 280px; max-width: calc\(100vw - 24px\); \}/)
+  assert.match(css, /\.dsh-router-session-chip-menu > div\[role="presentation"\] > div:first-child \{[^}]*font-weight: 600;/,
+    'the popover title must read as a heading')
+  assert.match(css, /\.dsh-router-session-chip-retry-note-title \{[^}]*font-weight: 600;/,
+    'the retry group title must read as a heading')
+  assert.match(css, /\.dsh-router-chain-pick \{[^}]*width: 68px;/, 'the edit/editing control has one width')
+  assert.match(css, /\.dsh-router-chain-default-slot \{[^}]*width: 92px;/, 'the default slot has one width')
+})
+
 // ---- modal bounds (a settings dialog must never escape the viewport) ----
 
 test('every plugin dialog is capped to the viewport and scrolls inside itself', async () => {
@@ -1913,14 +1936,20 @@ test('a retry override is written per route, and an empty box removes it again',
   assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: {} })
 })
 
-test('an out-of-range retry is refused without a write, and the typed value stays', async () => {
+test('a retry above the sanity bound is refused without a write, and the typed value stays', async () => {
   const h = await mount({ value: chipConfig() })
   await h.chip.model.open('s1')
+  // 10 是合法的：会话覆盖与链预算共用 0..99 的 sanity bound，不再另设 9。
   h.chip.model.setRetryText('s1', 'b/m', '10')
   await h.chip.model.commitRetry('s1', 'b/m')
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: { 'b/m': 10 } })
+  // 超过 99：不写、上屏错误，已存的值保持原样。
+  h.chip.model.setRetryText('s1', 'b/m', '100')
+  await h.chip.model.commitRetry('s1', 'b/m')
   assert.match(h.chip.model.view('s1').error, /sessionRetryInvalid/)
-  assert.equal(h.chip.bindings.get('s1'), undefined, '10 must not be clamped to 9 and saved')
-  assert.equal(h.chip.model.view('s1').retryDraft['b/m'], '10', 'the user can fix what he typed')
+  assert.deepEqual(h.chip.bindings.get('s1'), { chain: null, retries: { 'b/m': 10 } },
+    '100 must not be clamped to 99 and saved')
+  assert.equal(h.chip.model.view('s1').retryDraft['b/m'], '100', 'the user can fix what he typed')
   // 0 是合法值：这条路由不重试。
   h.chip.model.setRetryText('s1', 'b/m', '0')
   await h.chip.model.commitRetry('s1', 'b/m')
